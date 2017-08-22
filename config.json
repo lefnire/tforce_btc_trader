@@ -1,13 +1,15 @@
 {
     "data": {
         "db_in": "postgres://lefnire:lefnire@localhost:5432/coins2",
+        "y_predict_column": "norm_coinbaseusd_ask",
+        "y_predict_column": "gdax_btcusd_last",
         "filename_clean": "data/clean_data.h5",
         "batch_size": 100,
         "train_test_split": 0.8,
         "sklearn_normalize": true,
         "x_window_size": 150,
         "y_window_size": 1,
-        "y_predict_column": "c_ask"
+        "use_ta_indicators": false
     },
     "model": {
         "epochs": 2,

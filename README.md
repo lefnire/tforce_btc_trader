@@ -1,8 +1,13 @@
 # sl-quant
-Companion code for the "Self Learning Quant" medium post, read the entire post here: https://medium.com/@danielzakrisson/the-self-learning-quant-d3329fcc9915#.3b4ghaoa7
+https://medium.com/@danielzakrisson/the-self-learning-quant-d3329fcc9915#.3b4ghaoa7
+
+Requirements:
+TA-Lib, instructions at https://mrjbq7.github.io/ta-lib/install.html
+backtest.py from the TWP library. Download backtest.py and put in the same folder
 
 # Multidimensional LSTM BitCoin Time Series
+http://www.jakob-aungiers.com/articles/a/Multidimensional-LSTM-Networks-to-Predict-Bitcoin-Price
 
-Using multidimensional LSTM neural networks to create a forecast for Bitcoin price.
+# handson-ml
+https://github.com/ageron/handson-ml/blob/master/16_reinforcement_learning.ipynb
 
-For notes around this code and a general explenation for the theory please see my original article 	[HERE](http://www.jakob-aungiers.com/articles/a/Multidimensional-LSTM-Networks-to-Predict-Bitcoin-Price)
