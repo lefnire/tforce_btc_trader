@@ -1,8 +1,8 @@
 import os, time, h5py, sys
 import gdax
 import numpy as np
-from btc import config
-from btc.lstm import lstm, etl, plotting
+from data import config
+from lstm import lstm, etl, plotting
 
 tstart = time.time()
 dl = etl.ETL()

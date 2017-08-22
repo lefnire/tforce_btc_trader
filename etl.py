@@ -1,8 +1,8 @@
 import h5py, requests, time
 import numpy as np
 import pandas as pd
-from btc import config, conn, conn_btc
-from btc.data import query as btc_data
+import data as btc_data
+from data import config, conn, conn_btc
 
 
 class ETL:

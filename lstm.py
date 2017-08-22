@@ -3,7 +3,7 @@ from keras.layers.core import Dense, Activation, Dropout
 from keras.layers.recurrent import LSTM
 from keras.models import Sequential
 from keras.models import load_model
-from btc import config
+from data import config
 
 warnings.filterwarnings("ignore")  # Hide messy Numpy warnings
 

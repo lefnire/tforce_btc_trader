@@ -1,5 +1,5 @@
 import requests, time
-from btc import conn, config
+from data import conn, config
 
 SLEEP = 6
 

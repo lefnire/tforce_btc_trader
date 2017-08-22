@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from collections import namedtuple
-from btc import config
+from data import config
 
 # If a plot exists, we'll update it
 Existing = namedtuple('Existing', ['li_true', 'li_pred', 'fig'])

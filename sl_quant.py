@@ -1,8 +1,7 @@
 import os
 import numpy as np
 
-from btc.data import query
-from btc import config, conn, conn_btc
+from data import config, conn, conn_btc, db_to_dataframe
 
 np.random.seed(1335)  # for reproducibility
 np.set_printoptions(precision=5, suppress=True, linewidth=150)
@@ -13,8 +12,6 @@ from matplotlib import pyplot as plt
 from sklearn import metrics, preprocessing
 from talib.abstract import SMA, RSI, ATR
 from sklearn.externals import joblib
-
-import quandl
 
 '''
 Name:        The Self Learning Quant, Example 3
@@ -41,29 +38,19 @@ if not os.path.exists('./data'): os.makedirs('./data')
 
 
 # Load data
-def read_convert_data(symbol='XBTEUR'):
-    if symbol == 'XBTEUR':
-        prices = quandl.get("BCHARTS/KRAKENEUR")
-        prices.to_pickle('data/XBTEUR_1day.pkl')
-    if symbol == 'EURUSD_1day':
-        # prices = quandl.get("ECB/EURUSD")
-        prices = pd.read_csv('data/EURUSD_1day.csv', sep=",", skiprows=0, header=0, index_col=0, parse_dates=True,
-                             names=['ticker', 'date', 'time', 'open', 'low', 'high', 'close'])
-        prices.to_pickle('data/EURUSD_1day.pkl')
-    print(prices)
+def read_convert_data():
+    prices = db_to_dataframe()
+    prices.to_pickle('data/db_to_dataframe.pkl')
     return
 
 
 def load_data(test=False):
-    # prices = pd.read_pickle('data/OILWTI_1day.pkl')
-    # prices = pd.read_pickle('data/EURUSD_1day.pkl')
-    # prices.rename(columns={'Value': 'close'}, inplace=True)
-    prices = pd.read_pickle('data/XBTEUR_1day.pkl')
-    prices.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume (BTC)': 'volume'},
-                  inplace=True)
-    print(prices)
-    x_train = prices.iloc[-2000:-300, ]
-    x_test = prices.iloc[-2000:, ]
+    prices = pd.read_pickle('data/db_to_dataframe.pkl')
+    # prices.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume (BTC)': 'volume'},
+    #               inplace=True)
+    split = int(len(prices)/8)
+    x_train = prices.iloc[:split, ]
+    x_test = prices.iloc[split:, ]
     if test:
         return x_test
     else:
@@ -216,7 +203,7 @@ import random, timeit
 
 start_time = timeit.default_timer()
 
-read_convert_data(symbol='XBTEUR')  # run once to read indata, resample and convert to pickle
+read_convert_data()  # run once to read indata, resample and convert to pickle
 indata = load_data()
 test_data = load_data(test=True)
 epochs = 100
