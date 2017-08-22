@@ -1,0 +1,8 @@
+tmp/
+__pycache__
+.idea
+
+sl_quant/data/
+sl_quant/plt/
+
+lstm/data

@@ -1,0 +1,6 @@
+-- RESTORE
+pg_restore -v -j5 -Fc -d btc -O btc_*.db
+
+
+-- DUMP
+pg_dump -U dbo_btc --format=c --file=btc_20170726_history.db btc
