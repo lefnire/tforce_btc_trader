@@ -1,6 +1,5 @@
 import json, os.path
 import pandas as pd
-from sklearn import preprocessing
 from sqlalchemy import create_engine
 from box import Box
 
@@ -19,7 +18,7 @@ columns = ['last', 'high', 'low', 'volume']
 ts_col = 'ts' if source == 'coins' else 'trade_timestamp'
 
 
-def db_to_dataframe(limit=None):
+def db_to_dataframe(limit=None, scaler=None, scaler_args={}):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
     # TODO cols we should use: high, low, volume(check) OPEN, CLOSE
 
@@ -48,8 +47,8 @@ def db_to_dataframe(limit=None):
 
     # print(query)
     df = pd.read_sql_query(query, conn).iloc[::-1]  # order by date DESC (for limit to cut right), then reverse again (so LTR)
-    if config.data.sklearn_normalize:
-        scaler = preprocessing.MinMaxScaler()  # StandardScaler(copy=True, with_mean=True, with_std=True)
+    if scaler:
+        scaler = scaler(**scaler_args)  # StandardScaler(copy=True, with_mean=True, with_std=True)
         scaled = pd.DataFrame(scaler.fit_transform(df))
         scaled.columns = df.columns.values
         return scaled

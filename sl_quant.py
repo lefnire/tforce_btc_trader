@@ -24,7 +24,7 @@ if not os.path.exists('./data'): os.makedirs('./data')
 
 # Load data
 def read_convert_data():
-    prices = data.db_to_dataframe(limit=6000) # FIXME need to implement streaming! Maxing out GPU
+    prices = data.db_to_dataframe(limit=1000) # FIXME need to implement streaming! Maxing out GPU
     prices.to_pickle('data/db_to_dataframe.pkl')
     return
 
@@ -124,17 +124,17 @@ def get_reward(new_state, time_step, action, xdata, signal, terminal_state, eval
     if not eval:
         bt = Backtest(
             pd.Series(
-                data=[x for x in xdata[time_step - 2:time_step]],
-                index=signal[time_step - 2:time_step].index.values
+                data=[x for x in xdata[time_step - 1:time_step]],
+                index=signal[time_step - 1:time_step].index.values
             ),
-            signal[time_step - 2:time_step],
-            signalType='shares'
+            signal[time_step - 1:time_step],
+            signalType='capital'
         )
-        reward = ((bt.data['price'].iloc[-1] - bt.data['price'].iloc[-2]) * bt.data['shares'].iloc[-1])
+        reward = bt.data.cash.values[0]
 
     if eval and terminal_state == 1:
         # save a figure of the test set
-        bt = Backtest(pd.Series(data=[x for x in xdata], index=signal.index.values), signal, signalType='shares')
+        bt = Backtest(pd.Series(data=[x for x in xdata], index=signal.index.values), signal, signalType='capital')
         reward = bt.pnl.iloc[-1]
         plt.figure(figsize=(3, 4))
         bt.plotTrades()
@@ -257,8 +257,9 @@ for i in range(epochs):
             else:
                 h = 0
             replay[h] = (state, action, reward, new_state)
-            # randomly sample our experience replay memory
-            minibatch = random.sample(replay, batchSize)
+            # randomly sample our experience replay memory. Randomly sample a contiguous block, since order counts
+            rand_start = random.randint(0, len(replay) - batchSize - 1)
+            minibatch = replay[rand_start : rand_start + batchSize]
             X_train = []
             y_train = []
             for memory in minibatch:
@@ -295,8 +296,8 @@ for i in range(epochs):
 elapsed = np.round(timeit.default_timer() - start_time, decimals=2)
 print("Completed in {}".format(elapsed))
 
-bt = Backtest(pd.Series(data=[x[0, 0] for x in xdata]), signal, signalType='shares')
-bt.data['delta'] = bt.data['shares'].diff().fillna(0)
+bt = Backtest(pd.Series(data=[x[0, 0] for x in xdata]), signal, signalType='capital')
+bt.data['delta'] = bt.data['cash'].diff().fillna(0)
 
 print(bt.data)
 unique, counts = np.unique(filter(lambda v: v == v, signal.values), return_counts=True)
