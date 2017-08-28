@@ -19,19 +19,21 @@ class BitcoinEnv(Environment):
     ACTION_SELL = 1
     ACTION_HOLD = 2
 
-    def __init__(self, use_indicators=False, limit=1000):
+    def __init__(self, use_indicators=False, limit=1000, agent_type='DQNAgent'):
         """Initializes a minimal test environment."""
-        df = helpers.db_to_dataframe(scaler=preprocessing.MinMaxScaler)
+
+        # limit here is > self.limit since we want bit window (helpers.limit) to random-choose (self.limit)
+        df = helpers.db_to_dataframe(scaler=preprocessing.MinMaxScaler, limit=limit*2)
 
         # We're going to fetch all rows from the database and store them. We'll take random slices (based on limit)
         # on each reset, setting self.x_train self.y_train etc to those slices. Alternatively we could fetch the random
         # block from the database (limit,start) each reset()
         self.x_all, self.y_all = self._xform_data(df, use_indicators)
         self.y_all_diff = pd.Series(self.y_all).pct_change()\
-            .replace([np.inf, -np.inf, np.nan], np.nan).ffill()  # TODO is this the right thinking?
-            # .replace([np.inf, -np.inf, np.nan], [0.9, -0.9, 0.])
+            .replace([np.inf, -np.inf, np.nan], [0.9, -0.9, 0.])
         self.num_features = (7 if use_indicators else 4) * len(helpers.tables)
         self.limit = limit
+        self.agent_type = agent_type
 
     def _xform_data(self, indata, use_indicators):
         columns = []
@@ -75,7 +77,7 @@ class BitcoinEnv(Environment):
     def reset(self):
         self.cash = 100; self.value = 100
 
-        block_start = random.randint(0, len(self.y_all) - self.limit)
+        block_start = 0  # random.randint(0, len(self.y_all) - self.limit)
         block_end = block_start + self.limit
         self.x_train = self.x_all[block_start:block_end]
         self.y_train = self.y_all[block_start:block_end]
@@ -87,9 +89,17 @@ class BitcoinEnv(Environment):
         return self.x_train[start_timestep]
 
     def execute(self, action):
-        signal = 5 if action == self.ACTION_BUY\
-            else -40 if action == self.ACTION_SELL\
-            else 0
+        if self.agent_type in ['DQNAgent']:
+            signal = 5 if action == self.ACTION_BUY\
+                else -40 if action == self.ACTION_SELL\
+                else 0
+        elif self.agent_type in ['PPOAgent']:
+            signal = 0 if -40 < action < 5 else action
+        elif self.agent_type in ['NAFAgent']:
+            signal = action
+            # doesn't do min_value max_value! Knock it down to our min, let it learn to stabilize middle|max
+            signal -= 100
+
         self.signals.append(signal)
 
         ## Attempt 1
@@ -113,9 +123,8 @@ class BitcoinEnv(Environment):
         # #     print('reward=nan')
 
         ## Attempt 3
-        b4_cash, b4_val = self.cash, self.value
         abs_sig = abs(signal)
-        fee = 0.0025 # TODO verify https://www.gdax.com/fees/BTC-USD
+        fee = 0.0025  # TODO verify https://www.gdax.com/fees/BTC-USD
         if signal > 0:
             self.value += abs_sig - abs_sig*fee
             self.cash -= abs_sig
@@ -125,18 +134,16 @@ class BitcoinEnv(Environment):
 
         pct_change = self.y_diff.iloc[self.timestep + 1] # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
-        # reward = (self.value + self.cash) - (b4_cash + b4_val)
         reward = self.value + self.cash
-        if self.value <= 0 or self.cash <= 0:
-            # we can't go negative in real life, so _extra_ punishment
-            reward -= 100
+        # we can't go negative in real life, so _extra_ punishment
+        if self.value <= 0 or self.cash <= 0: reward -= 100
 
         self.timestep += 1
         next_state = self.x_train[self.timestep]
         terminal = int(self.timestep+1 >= len(self.x_train))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
-        if self.value <= 0 or self.cash <= 0: terminal = 1
+        # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal
 
     @property
@@ -145,15 +152,17 @@ class BitcoinEnv(Environment):
 
     @property
     def actions(self):
-        return dict(continuous=False, num_actions=3) # BUY SELL HOLD
-        # return dict(continuous=True, num_actions=(), min_value=-100, max_value=100) # BUY SELL HOLD
+        if self.agent_type == 'DQNAgent':
+            return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
+        elif self.agent_type in ['PPOAgent', 'NAFAgent']:
+            return dict(continuous=True, shape=(), min_value=-100, max_value=100)
 
-    def plotTrades(self, episode, reward):
+    def plotTrades(self, episode, reward, title='Results'):
         if hasattr(self, 'fig'):
             fig = self.fig
             plt.cla()
         else:
-            fig = plt.figure(figsize=(12, 10))
+            fig = plt.figure(figsize=(25, 4))
         bt = Backtest(
             pd.Series(self.y_train),
             pd.Series(self.signals),
@@ -161,10 +170,11 @@ class BitcoinEnv(Environment):
         )
         pnl = bt.pnl.iloc[-1]
         bt.plotTrades()
-        plt.suptitle('Episode=%i PNL=$%2f "Reward"=%2f' % (episode, pnl, reward))
+        plt.suptitle('Ep:{} PNL:{} Reward:{}'.format(episode, round(pnl,1), round(reward,1)))
         if hasattr(self, 'fig'):
             fig.canvas.draw()
         else:
             block = bool(episode >= self.limit) # freeze on the last frame
+            fig.canvas.set_window_title(title)
             plt.show(block=block)
             self.fig = fig

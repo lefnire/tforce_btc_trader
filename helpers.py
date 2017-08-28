@@ -17,7 +17,6 @@ tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd'] if source == '
 columns = ['last', 'high', 'low', 'volume']
 ts_col = 'ts' if source == 'coins' else 'trade_timestamp'
 
-
 def db_to_dataframe(limit=None, scaler=None, scaler_args={}):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
     # TODO cols we should use: high, low, volume(check) OPEN, CLOSE
