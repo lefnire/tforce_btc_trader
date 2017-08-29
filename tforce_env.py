@@ -1,5 +1,4 @@
-import random
-import math
+import random, time, math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,15 +14,16 @@ from helpers import config
 
 
 class BitcoinEnv(Environment):
-    ACTION_BUY = 0
-    ACTION_SELL = 1
-    ACTION_HOLD = 2
+    ACTION_BUY1 = 0
+    ACTION_BUY2 = 1
+    ACTION_SELL = 2
+    ACTION_HOLD = 3
 
     def __init__(self, use_indicators=False, limit=1000, agent_type='DQNAgent'):
         """Initializes a minimal test environment."""
 
         # limit here is > self.limit since we want bit window (helpers.limit) to random-choose (self.limit)
-        df = helpers.db_to_dataframe(scaler=preprocessing.StandardScaler, limit=limit*2)
+        df = helpers.db_to_dataframe(scaler=None, limit=limit*2)
 
         # We're going to fetch all rows from the database and store them. We'll take random slices (based on limit)
         # on each reset, setting self.x_train self.y_train etc to those slices. Alternatively we could fetch the random
@@ -34,6 +34,8 @@ class BitcoinEnv(Environment):
         self.num_features = (7 if use_indicators else 4) * len(helpers.tables) +2 # for cash/value
         self.limit = limit
         self.agent_type = agent_type
+        self.episode_cashs = []; self.episode_values = []
+        self.name = None
 
     def _xform_data(self, indata, use_indicators):
         columns = []
@@ -75,6 +77,7 @@ class BitcoinEnv(Environment):
         pass
 
     def reset(self):
+        self.time = time.time()
         self.cash = 100; self.value = 100
 
         block_start = random.randint(0, len(self.y_all) - self.limit)
@@ -90,12 +93,12 @@ class BitcoinEnv(Environment):
 
     def execute(self, action):
         if self.agent_type in ['DQNAgent']:
-            signal = 5 if action == self.ACTION_BUY\
+            signal = 5 if action == self.ACTION_BUY1\
+                else 40 if action == self.ACTION_BUY2\
                 else -40 if action == self.ACTION_SELL\
                 else 0
         elif self.agent_type in ['PPOAgent']:
-            # signal = 0 if -40 < action < 5 else action
-            signal = action
+            signal = 0 if -40 < action < 5 else action
         elif self.agent_type in ['NAFAgent']:
             # doesn't do min_value max_value!
             # if action < 0 or action > 1: print(action)
@@ -105,32 +108,35 @@ class BitcoinEnv(Environment):
 
         # (see prior commits for rewards using backtesting - pnl, cash, value)
         abs_sig = abs(signal)
-        fee = 0.0025  # TODO verify https://www.gdax.com/fees/BTC-USD
-        reward = None
+        fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
+        reward = 0
+        cashb4, valueb4 = self.cash, self.value
         if signal > 0:
             if self.cash < abs_sig:
                 reward = -1000
-            else:
-                self.value += abs_sig - abs_sig*fee
-                self.cash -= abs_sig
+            self.value += abs_sig - abs_sig*fee
+            self.cash -= abs_sig
         elif signal < 0:
             if self.value < abs_sig:
                 reward = -1000
-            else:
-                self.cash += abs_sig - abs_sig*fee
-                self.value -= abs_sig
+            self.cash += abs_sig - abs_sig*fee
+            self.value -= abs_sig
 
         pct_change = self.y_diff.iloc[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
-        reward = reward if reward else self.value + self.cash
-        # we can't go negative in real life, so _extra_ punishment
-        # if self.value <= 0 or self.cash <= 0: reward -= 100
+        if 'absolute' in self.name:
+            reward += self.value + self.cash
+        else:
+            reward += (self.value + self.cash) - (cashb4 + valueb4)
 
         self.timestep += 1
         next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
         terminal = int(self.timestep+1 >= len(self.x_train))
         if terminal:
+            self.time = round(time.time() - self.time)
             self.signals.append(0)  # Add one last signal (to match length)
+            self.episode_cashs.append(self.cash)
+            self.episode_values.append(self.value)
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal
 
@@ -141,7 +147,7 @@ class BitcoinEnv(Environment):
     @property
     def actions(self):
         if self.agent_type == 'DQNAgent':
-            return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
+            return dict(continuous=False, num_actions=4)  # BUY1 BUY2 SELL HOLD
         elif self.agent_type in ['PPOAgent', 'NAFAgent']:
             return dict(continuous=True, shape=(), min_value=-100, max_value=100)
 

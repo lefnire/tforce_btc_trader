@@ -44,12 +44,11 @@ def db_to_dataframe(limit=None, scaler=None, scaler_args={}):
     if limit:
         query += ' limit {}'.format(limit)
 
-    # print(query)
-    df = pd.read_sql_query(query, conn).iloc[::-1]  # order by date DESC (for limit to cut right), then reverse again (so LTR)
+    # order by date DESC (for limit to cut right), then reverse again (so old->new)
+    df = pd.read_sql_query(query, conn).iloc[::-1].ffill()
     if scaler:
         scaler = scaler(**scaler_args)  # StandardScaler(copy=True, with_mean=True, with_std=True)
         scaled = pd.DataFrame(scaler.fit_transform(df))
         scaled.columns = df.columns.values
-        return scaled
-    else:
-        return df
+        df = scaled
+    return df
