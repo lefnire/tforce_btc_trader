@@ -1,4 +1,4 @@
-import copy, random
+import copy, random, time
 import numpy as np
 from pprint import pprint
 
@@ -10,25 +10,29 @@ from tensorforce.execution import Runner
 
 from tforce_env import BitcoinEnv
 
-EPISODES = 10000  # 100000
+EPISODES = 50000  # 100000
 STEPS = 10000  # 10000
-# AGENT = 'DQNAgent'
+AGENT = 'DQNAgent'
 # AGENT = 'PPOAgent'
-AGENT = 'NAFAgent'
+# AGENT = 'NAFAgent'
 
 
 env = BitcoinEnv(use_indicators=False, limit=STEPS, agent_type=AGENT)
 
+t = time.time()
 # Callback function printing episode statistics
 def episode_finished(r):
+    global t
     # if r.episode % int(EPISODES/100) != 0: return True
-    # if r.episode % 10 != 0: return True
+    # if r.episode % 5 != 0: return True
     r.environment.plotTrades(r.episode, r.episode_rewards[-1], AGENT)
-    print("Ep {}) avg[-20:] steps:{} reward:{}".format(
+    print("Ep.{} steps:{} reward:{} time:{}s".format(
         r.episode,
         int(np.mean(r.episode_lengths[-20:])),
-        int(np.mean(r.episode_rewards[-20:]))
+        int(np.mean(r.episode_rewards[-20:])),
+        round(time.time() - t)
     ))
+    t = time.time()
     return True
 
 # TODO implement custom LSTM multi-layer w/ dropout
@@ -41,6 +45,7 @@ mem_agent_conf = dict(
     update_frequency=100,
     discount=.97,
 )
+blank_grid = dict(batch_size=[150])
 
 agents = dict(
     common=dict(
@@ -48,7 +53,7 @@ agents = dict(
             dict(type='lstm', size=64),
             dict(type='lstm', size=64)
         ]),
-        batch_size=256,
+        batch_size=150,
         states=env.states,
         actions=env.actions,
         exploration=dict(
@@ -61,9 +66,7 @@ agents = dict(
     ),
     PPOAgent=dict(
         agent=PPOAgent,
-        grid=dict(
-            batch_size=[4096]
-        ),
+        grid=blank_grid,
         config=dict(
             random_sampling=False
         )
@@ -71,15 +74,16 @@ agents = dict(
     DQNAgent=dict(
         agent=DQNAgent,
         grid=dict(
-            batch_size=[256]
+            network=[layered_network_builder([
+                dict(type='lstm', size=150),
+                dict(type='lstm', size=150)
+            ])],
         ),
         config=mem_agent_conf
     ),
     NAFAgent=dict(
         agent=NAFAgent,
-        grid=dict(
-            batch_size=[256]
-        ),
+        grid=blank_grid,
         config=mem_agent_conf
     )
 )
