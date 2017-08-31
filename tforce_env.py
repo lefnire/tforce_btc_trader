@@ -39,7 +39,7 @@ class BitcoinEnv(Environment):
 
     def _xform_data(self, indata, use_indicators):
         columns = []
-        y_predict = indata[config.data.y_predict_column].values
+        y_predict = indata[config.y_predict_column].values
         for k in helpers.tables:
             curr_indata = indata.rename(columns={
                 k + '_last': 'close',

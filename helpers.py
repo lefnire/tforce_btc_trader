@@ -8,10 +8,10 @@ configpath = os.path.abspath(os.path.join(basepath, "config.json"))
 config = Box(json.loads(open(configpath).read()))
 
 
-engine = create_engine(config.data.db_in)
+engine = create_engine(config.db)
 conn = engine.connect()
 
-source = 'btc' if config.data.db_in.endswith('btc') else 'coins'
+source = 'btc' if config.db.endswith('btc') else 'coins'
 tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd'] if source == 'btc'\
     else ['okcoin_btccny', 'bitstamp_btcusd', 'gdax_btcusd']
 columns = ['last', 'high', 'low', 'volume']
