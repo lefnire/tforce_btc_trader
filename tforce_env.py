@@ -12,14 +12,13 @@ from tensorforce.environments import Environment
 import helpers
 from helpers import config
 
-
 class BitcoinEnv(Environment):
     ACTION_BUY1 = 0
     ACTION_BUY2 = 1
     ACTION_SELL = 2
     ACTION_HOLD = 3
 
-    def __init__(self, use_indicators=False, limit=1000, agent_type='DQNAgent'):
+    def __init__(self, use_indicators=False, limit=1000, agent_type='DQNAgent', agent_name=None):
         """Initializes a minimal test environment."""
 
         # limit here is > self.limit since we want bit window (helpers.limit) to random-choose (self.limit)
@@ -35,7 +34,7 @@ class BitcoinEnv(Environment):
         self.limit = limit
         self.agent_type = agent_type
         self.episode_cashs = []; self.episode_values = []
-        self.name = None
+        self.name = agent_name
 
     def _xform_data(self, indata, use_indicators):
         columns = []
