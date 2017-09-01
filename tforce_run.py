@@ -13,27 +13,50 @@ from tensorforce.execution import Runner
 from tforce_env import BitcoinEnv
 from helpers import conn
 
-EPISODES = 10000  # 100000
+EPISODES = 100000  # 100000
 STEPS = 10000  # 10000
 
-AGENT_NAME = 'DQNAgent;tmp'
+AGENT_NAME = 'DQNAgent;priority'
 overrides = dict(
-    tf_session_config=tf.ConfigProto(device_count={'GPU': 0})
-    # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))  # .284 .44
+    # tf_session_config=tf.ConfigProto(device_count={'GPU': 0})
+    tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4)) # .284 .44
 )
-# Current: layers/neurons, PPO, (this weekend: prioritized_replay)
-# After: raw/standardize, discount, batch_size, agent(VPG, VRPO, NAF)
 
-# Winners: delta, dbl-dqn
-# Losers: 2dense64n, absolute
-# Unclear (try later): use_indicators, dropout, 2lstm150n, clip
+""" Hypterparameter tuning
+Current 
+- prioritized_replay
+
+Next
+- start with more cash/value to play with
+- layers/neurons: try some more combos. 256-128-64 was a dud, try 64-64 again? (LSTM is proven the way)
+- raw/standardize: according to goo.gl/8Z4or9 StandardScaler doesn't help much, and clip_loss mitigates. But try again 
+- PPO: need to tweak parameters, poor perfomance with defaults
+- discount, batch_size, agent(VPG, VRPO, NAF)
+
+Winners 
+- delta-score
+- dbl-dqn
+- lstm150-150 (current best)
+- no-fee (FIXME)
+
+Losers 
+- dense64-64/150-150: dense always performs worse
+- lstm256-128-64
+- absolute-score
+
+Unclear (try again later)
+- use_indicators (seems winning)
+- dropout
+- clip
+- learning_rate
+"""
 
 agent_type = AGENT_NAME.split(';')[0]  # (DQNAgent|PPOAgent|NAFAgent)
-env = BitcoinEnv(use_indicators=False, limit=STEPS, agent_type=agent_type, agent_name=AGENT_NAME)
+env = BitcoinEnv(use_indicators=True, limit=STEPS, agent_type=agent_type, agent_name=AGENT_NAME)
 
 mem_agent_conf = dict(
-    # memory='prioritized_replay',
-    # memory_capacity=STEPS,
+    memory='prioritized_replay',
+    memory_capacity=STEPS,
     # first_update=int(STEPS/10),
     # update_frequency=500,
     clip_loss=.1,
@@ -43,9 +66,8 @@ mem_agent_conf = dict(
 
 common_conf = dict(
     network=layered_network_builder([
-        dict(type='lstm', size=256, dropout=.2),
-        dict(type='lstm', size=128, dropout=.2),
-        dict(type='lstm', size=64, dropout=.2),
+        dict(type='lstm', size=150, dropout=.2),
+        dict(type='lstm', size=150, dropout=.2),
     ]),
     batch_size=150,
     states=env.states,
@@ -54,7 +76,7 @@ common_conf = dict(
         type="epsilon_decay",
         epsilon=1.0,
         epsilon_final=0.1,
-        epsilon_timesteps=int(STEPS * 100)  # 1e6
+        epsilon_timesteps=int(STEPS * 400)  # 1e6
     ),
     optimizer={
         "type": "rmsprop",
@@ -92,8 +114,8 @@ def episode_finished(r):
     avg_reward = int(np.median(r.episode_rewards[-20:]))
     avg_cash = round(np.median(r.environment.episode_cashs[-20:]), 1)
     avg_value = round(np.median(r.environment.episode_values[-20:]), 1)
-    print("Ep.{} time:{}, reward:{} cash_val:{}".format(
-        r.episode, r.environment.time, avg_reward, round(avg_cash + avg_value, 2)
+    print("Ep.{} time:{}, reward:{} cash_val:{}, actions:{}".format(
+        r.episode, r.environment.time, avg_reward, round(avg_cash + avg_value, 2), r.environment.action_counter
     ))
 
     # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from talib.abstract import SMA, RSI, ATR
 from sklearn import preprocessing
 from tradingWithPython.lib.backtest import Backtest
+from collections import Counter
 
 from tensorforce import util, TensorForceError
 from tensorforce.environments import Environment
@@ -56,7 +57,8 @@ class BitcoinEnv(Environment):
                 sma60 = SMA(curr_indata, timeperiod=60)
                 rsi = RSI(curr_indata, timeperiod=14)
                 atr = ATR(curr_indata, timeperiod=14)
-                columns += [close, diff, sma15, close - sma15, sma15 - sma60, rsi, atr]
+                #columns += [close, diff, sma15, close - sma15, sma15 - sma60, rsi, atr]
+                columns += [close, diff, sma15, sma60, rsi, atr, curr_indata['volume'].values]
             else:
                 columns += [
                     curr_indata['close'].values,
@@ -107,7 +109,7 @@ class BitcoinEnv(Environment):
 
         # (see prior commits for rewards using backtesting - pnl, cash, value)
         abs_sig = abs(signal)
-        fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
+        fee = 0  # 0.0025  # https://www.gdax.com/fees/BTC-USD
         reward = 0
         cashb4, valueb4 = self.cash, self.value
         if signal > 0:
@@ -136,6 +138,7 @@ class BitcoinEnv(Environment):
             self.signals.append(0)  # Add one last signal (to match length)
             self.episode_cashs.append(self.cash)
             self.episode_values.append(self.value)
+            self.action_counter = Counter(self.signals)
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal
 

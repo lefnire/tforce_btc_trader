@@ -1,0 +1,24 @@
+<html>
+<head>
+    <style>
+        body {
+            margin: 0px; padding: 0px;
+        }
+        #chart-container {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+
+</head>
+<body>
+<div id="chart-container"></div>
+<script type="text/javascript" src="https://static.cryptowat.ch/assets/scripts/embed.bundle.js"></script>
+<script>var chart = new cryptowatch.Embed('bitfinex', 'btcusd', {
+  timePeriod: '1d',
+  width: 800,
+  height: 600
+});
+chart.mount('#chart-container');</script>
+</body>
+</html>

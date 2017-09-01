@@ -13,7 +13,8 @@ conn = engine.connect()
 
 source = 'btc' if config.db.endswith('btc') else 'coins'
 tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd'] if source == 'btc'\
-    else ['okcoin_btccny', 'bitstamp_btcusd', 'gdax_btcusd']
+    else ['okcoin_btccny', 'gdax_btcusd']
+    # else ['okcoin_btccny', 'bitstamp_btcusd', 'gdax_btcusd']
 columns = ['last', 'high', 'low', 'volume']
 ts_col = 'ts' if source == 'coins' else 'trade_timestamp'
 
