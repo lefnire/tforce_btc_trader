@@ -19,25 +19,25 @@ class BitcoinEnv(Environment):
     ACTION_SELL = 2
     ACTION_HOLD = 3
 
-    def __init__(self, use_indicators=False, limit=1000, agent_type='DQNAgent', agent_name=None):
+    START_CAP = 300
+    USE_INDICATORS = True
+
+    def __init__(self, limit=1000, agent_type='DQNAgent', agent_name=None):
         """Initializes a minimal test environment."""
-
-        # limit here is > self.limit since we want bit window (helpers.limit) to random-choose (self.limit)
-        df = helpers.db_to_dataframe(scaler=None, limit=limit*2)
-
-        # We're going to fetch all rows from the database and store them. We'll take random slices (based on limit)
-        # on each reset, setting self.x_train self.y_train etc to those slices. Alternatively we could fetch the random
-        # block from the database (limit,start) each reset()
-        self.x_all, self.y_all = self._xform_data(df, use_indicators)
-        self.y_all_diff = pd.Series(self.y_all).pct_change()\
-            .replace([np.inf, -np.inf, np.nan], [0.9, -0.9, 0.])
-        self.num_features = (7 if use_indicators else 4) * len(helpers.tables) +2 # for cash/value
         self.limit = limit
         self.agent_type = agent_type
-        self.episode_cashs = []; self.episode_values = []
         self.name = agent_name
+        self.episode_cashs = []
+        self.episode_values = []
 
-    def _xform_data(self, indata, use_indicators):
+    @staticmethod
+    def num_features():
+        num = 7 if BitcoinEnv.USE_INDICATORS else 4  # see xform_data for which features in either case
+        num *= len(helpers.tables)  # That many features per table
+        num += 2  # [self.cash, self.value]
+        return num
+
+    def _xform_data(self, indata):
         columns = []
         y_predict = indata[config.y_predict_column].values
         for k in helpers.tables:
@@ -48,7 +48,7 @@ class BitcoinEnv(Environment):
                 k + '_volume': 'volume'
             })
 
-            if use_indicators:
+            if BitcoinEnv.USE_INDICATORS:
                 # Aren't these features besides close "feature engineering", which the neural-net should do away with?
                 close = curr_indata['close'].values
                 diff = np.diff(close)
@@ -79,17 +79,23 @@ class BitcoinEnv(Environment):
 
     def reset(self):
         self.time = time.time()
-        self.cash = 100; self.value = 100
-
-        block_start = random.randint(0, len(self.y_all) - self.limit)
-        block_end = block_start + self.limit
-        self.x_train = self.x_all[block_start:block_end]
-        self.y_train = self.y_all[block_start:block_end]
-        self.y_diff = self.y_all_diff[block_start:block_end]
-
-        start_timestep = 2 # advance some steps just for cushion, various operations compare back a couple steps
+        self.cash = self.START_CAP
+        self.value = self.START_CAP
+        self.high_score = self.cash + self.value  # each score-breaker above initial capital = reward++
+        start_timestep = 2  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
+
+        # Fetch all rows from the database and & take random slice (based on limit).
+        # TODO count(*) and fetch-random in SQL
+        df = helpers.db_to_dataframe(scaler=None, limit=self.limit * 2)
+        block_start = random.randint(0, len(df) - self.limit)
+        block_end = block_start + self.limit
+        df = df[block_start:block_end]
+        self.x_train, self.y_train = self._xform_data(df)
+        self.y_diff = pd.Series(self.y_train).pct_change() \
+            .replace([np.inf, -np.inf, np.nan], [0.9, -0.9, 0.])
+
         return np.append(self.x_train[start_timestep], [self.cash, self.value])
 
     def execute(self, action):
@@ -98,7 +104,7 @@ class BitcoinEnv(Environment):
                 else 40 if action == self.ACTION_BUY2\
                 else -40 if action == self.ACTION_SELL\
                 else 0
-        elif self.agent_type in ['PPOAgent']:
+        elif self.agent_type in ['PPOAgent', 'TRPOAgent']:
             signal = 0 if -40 < action < 5 else action
         elif self.agent_type in ['NAFAgent']:
             # doesn't do min_value max_value!
@@ -111,24 +117,30 @@ class BitcoinEnv(Environment):
         abs_sig = abs(signal)
         fee = 0  # 0.0025  # https://www.gdax.com/fees/BTC-USD
         reward = 0
-        cashb4, valueb4 = self.cash, self.value
+        combo_before = self.cash + self.value
         if signal > 0:
             if self.cash < abs_sig:
-                reward = -1000
+                reward = -100
             self.value += abs_sig - abs_sig*fee
             self.cash -= abs_sig
         elif signal < 0:
             if self.value < abs_sig:
-                reward = -1000
+                reward = -100
             self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
         pct_change = self.y_diff.iloc[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
+        combo = self.value + self.cash
         if 'absolute' in self.name:
-            reward += self.value + self.cash
+            reward += combo
         else:
-            reward += (self.value + self.cash) - (cashb4 + valueb4)
+            reward += combo - combo_before
+
+        # Each time it sets a new high-score, extra reward
+        if combo > self.high_score:
+            reward += self.high_score
+            self.high_score = combo
 
         self.timestep += 1
         next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
@@ -144,13 +156,13 @@ class BitcoinEnv(Environment):
 
     @property
     def states(self):
-        return dict(shape=(self.num_features,), type='float')
+        return dict(shape=(self.num_features(),), type='float')
 
     @property
     def actions(self):
         if self.agent_type == 'DQNAgent':
             return dict(continuous=False, num_actions=4)  # BUY1 BUY2 SELL HOLD
-        elif self.agent_type in ['PPOAgent', 'NAFAgent']:
+        elif self.agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent']:
             return dict(continuous=True, shape=(), min_value=-100, max_value=100)
 
     def plotTrades(self, episode, reward, title='Results'):
