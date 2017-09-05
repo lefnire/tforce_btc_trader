@@ -14,19 +14,19 @@ from tforce_env import BitcoinEnv
 from helpers import conn
 
 EPISODES = 50000
-STEPS = 20000
+STEPS = 10000
 
-AGENT_NAME = 'DQNAgent;priority;150-150'
+AGENT_NAME = 'DQNAgent;2x128'
 overrides = dict(
     # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
     tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4)),  # .284 .44
     # tf_session_config=None,
 
-    memory='prioritized_replay',
-    network=layered_network_builder([
-        dict(type='lstm', size=150, dropout=.2),
-        dict(type='lstm', size=150, dropout=.2),
-    ]),
+    # memory='prioritized_replay',
+    # network=layered_network_builder([
+    #     dict(type='lstm', size=64, dropout=.2),
+    #     dict(type='lstm', size=64, dropout=.2),
+    # ]),
 )
 
 BATCH = 16
@@ -51,33 +51,35 @@ overrides.update(**dict(
         target_update_frequency=10000
     ),
     none=dict()
-)['custom'])
+)['none'])
 
 """ Hyper-parameter tuning
 Current 
-- batch_size: >8 important! (16 seems only one working; want 32+)
+- raw/standardize: according to goo.gl/8Z4or9 StandardScaler doesn't help much, and clip_loss mitigates. But try again
+- remove prioritized_replay since it samples randomly, bad for LSTM
 
 Next
-- raw/standardize: according to goo.gl/8Z4or9 StandardScaler doesn't help much, and clip_loss mitigates. But try again
+- batch_size: >8 important! (16 seems only one working; want 32+ try lets_make_dqn example)
 - TRPO
-- A3C (distributed=True, cluster_spec=?). https://www.tensorflow.org/deploy/distributed, openai_gym_async.py
 - discount
+- lstm w/ peephole (& other flags)
 - NAF, VPG
 - PPO: need to tweak parameters, poor perfomance with defaults
 
 Winners 
 - delta-score
 - dbl-dqn
-- lstm150-150. Want to try larger/smaller nets later
 - no-fee (FIXME)
 - rmsprop
 
 Losers 
 - dense64-64/150-150: dense always performs worse
-- lstm256-128-64
+- lstm256-128-64, 64-64
 - absolute-score
 
 Unclear (try again later)
+- A3C (distributed=True, cluster_spec=?). https://www.tensorflow.org/deploy/distributed, openai_gym_async.py. Or lets_make_dqn CartPole-A3C.py
+- Architectures. lstm150-150 seems winning, try again after normalization
 - prioritized_replay (goo.gl/8Z4or9): True seems winning, but doesn't progress past first 10 episodes & doesn't avg>start
 - use_indicators: True seems winning
 - dropout
@@ -99,8 +101,8 @@ mem_agent_conf = dict(
 
 common_conf = dict(
     network=layered_network_builder([
-        dict(type='lstm', size=150, dropout=.2),
-        dict(type='lstm', size=150, dropout=.2),
+        dict(type='lstm', size=128, dropout=.2),
+        dict(type='lstm', size=128, dropout=.2),
     ]),
     batch_size=150,
     states=env.states,
@@ -109,7 +111,7 @@ common_conf = dict(
         type="epsilon_decay",
         epsilon=1.0,
         epsilon_final=0.1,
-        epsilon_timesteps=5*STEPS #int(STEPS * 400)  # 1e6
+        epsilon_timesteps=STEPS * 50  # int(STEPS * 400)  # 1e6
     ),
     optimizer={
         "type": "rmsprop",
@@ -145,13 +147,15 @@ def episode_finished(r):
     agent_name = r.environment.name
     # r.environment.plotTrades(r.episode, r.episode_rewards[-1], agent_name)
 
-    period = 5  # avg last 5 times
-    avg_len = int(np.median(r.episode_lengths[-period:]))
-    avg_reward = int(np.median(r.episode_rewards[-period:]))
-    avg_cash = round(np.median(r.environment.episode_cashs[-period:]), 1)
-    avg_value = round(np.median(r.environment.episode_values[-period:]), 1)
-    print("Ep.{} time:{}, reward:{} cash_val:{}, actions:{}".format(
-        r.episode, r.environment.time, avg_reward, round(avg_cash + avg_value, 2), r.environment.action_counter
+    reward = r.episode_rewards[-1]
+    cash = r.environment.cash
+    value = r.environment.value
+    print("{}) time:{}, reward:{} totals:{}, actions:{}".format(
+        r.episode,
+        r.environment.time,
+        round(reward),
+        round(cash + value),
+        r.environment.action_counter
     ))
 
     # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
@@ -168,9 +172,9 @@ def episode_finished(r):
     """)
     conn.execute(q,
                  episode=r.episode,
-                 reward=r.episode_rewards[-1],
-                 cash=r.environment.cash,
-                 value=r.environment.value,
+                 reward=reward,
+                 cash=cash,
+                 value=value,
                  agent_name=agent_name,
                  steps=r.episode_lengths[-1],
                  y=y,

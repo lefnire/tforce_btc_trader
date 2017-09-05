@@ -14,13 +14,12 @@ import helpers
 from helpers import config
 
 class BitcoinEnv(Environment):
-    ACTION_BUY1 = 0
-    ACTION_BUY2 = 1
-    ACTION_SELL = 2
-    ACTION_HOLD = 3
+    ACTION_BUY = 0
+    ACTION_SELL = 1
+    ACTION_HOLD = 2
 
-    START_CAP = 300
-    USE_INDICATORS = True
+    START_CAP = 1000
+    USE_INDICATORS = False
 
     def __init__(self, limit=1000, agent_type='DQNAgent', agent_name=None):
         """Initializes a minimal test environment."""
@@ -34,8 +33,12 @@ class BitcoinEnv(Environment):
     def num_features():
         num = 7 if BitcoinEnv.USE_INDICATORS else 4  # see xform_data for which features in either case
         num *= len(helpers.tables)  # That many features per table
-        num += 2  # [self.cash, self.value]
+        num += 4  # [cash-delta, value-delta, cash<=0, value<=0]
         return num
+
+    @staticmethod
+    def pct_change(arr):
+        return pd.Series(arr).pct_change().replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
 
     def _xform_data(self, indata):
         columns = []
@@ -61,11 +64,17 @@ class BitcoinEnv(Environment):
                 columns += [close, diff, sma15, sma60, rsi, atr, curr_indata['volume'].values]
             else:
                 columns += [
-                    curr_indata['close'].values,
-                    curr_indata['high'].values,
-                    curr_indata['low'].values,
-                    curr_indata['volume'].values
+                    self.pct_change(curr_indata['close']),
+                    self.pct_change(curr_indata['high']),
+                    self.pct_change(curr_indata['low']),
+                    self.pct_change(curr_indata['volume']),
                 ]
+                # columns += [
+                #     curr_indata['close'].values,
+                #     curr_indata['high'].values,
+                #     curr_indata['low'].values,
+                #     curr_indata['volume'].values
+                # ]
 
         # --- Preprocess data
         xdata = np.nan_to_num(np.column_stack(columns))
@@ -82,7 +91,7 @@ class BitcoinEnv(Environment):
         self.cash = self.START_CAP
         self.value = self.START_CAP
         self.high_score = self.cash + self.value  # each score-breaker above initial capital = reward++
-        start_timestep = 2  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
 
@@ -93,15 +102,13 @@ class BitcoinEnv(Environment):
         block_end = block_start + self.limit
         df = df[block_start:block_end]
         self.x_train, self.y_train = self._xform_data(df)
-        self.y_diff = pd.Series(self.y_train).pct_change() \
-            .replace([np.inf, -np.inf, np.nan], [0.9, -0.9, 0.])
+        self.y_diff = self.pct_change(self.y_train)
 
-        return np.append(self.x_train[start_timestep], [self.cash, self.value])
+        return np.append(self.x_train[start_timestep], [0., 0., 0, 0])
 
     def execute(self, action):
-        if self.agent_type in ['DQNAgent']:
-            signal = 5 if action == self.ACTION_BUY1\
-                else 40 if action == self.ACTION_BUY2\
+        if self.agent_type in ['DQNAgent', 'A3CAgent']:
+            signal = 40 if action == self.ACTION_BUY\
                 else -40 if action == self.ACTION_SELL\
                 else 0
         elif self.agent_type in ['PPOAgent', 'TRPOAgent']:
@@ -115,36 +122,45 @@ class BitcoinEnv(Environment):
 
         # (see prior commits for rewards using backtesting - pnl, cash, value)
         abs_sig = abs(signal)
-        fee = 0  # 0.0025  # https://www.gdax.com/fees/BTC-USD
+        fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
         reward = 0
-        combo_before = self.cash + self.value
+        before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
         if signal > 0:
             if self.cash < abs_sig:
                 reward = -100
-            self.value += abs_sig - abs_sig*fee
-            self.cash -= abs_sig
+            else:
+                self.value += abs_sig - abs_sig*fee
+                self.cash -= abs_sig
         elif signal < 0:
             if self.value < abs_sig:
                 reward = -100
-            self.cash += abs_sig - abs_sig*fee
-            self.value -= abs_sig
+            else:
+                self.cash += abs_sig - abs_sig*fee
+                self.value -= abs_sig
 
-        pct_change = self.y_diff.iloc[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        pct_change = self.y_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
-        combo = self.value + self.cash
+        total = self.value + self.cash
         if 'absolute' in self.name:
-            reward += combo
+            reward += total
         else:
-            reward += combo - combo_before
+            reward += total - before['total']
 
         # Each time it sets a new high-score, extra reward
-        if combo > self.high_score:
-            reward += self.high_score
-            self.high_score = combo
+        if total > self.high_score:
+            reward += total
+            self.high_score = total
 
         self.timestep += 1
-        next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
-        terminal = int(self.timestep+1 >= len(self.x_train))
+        # next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
+        next_state = np.append(self.x_train[self.timestep], [
+            0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
+            0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
+            int(self.cash <= 0),
+            int(self.value <= 0)
+        ])
+
+        terminal = int(self.timestep + 1 >= len(self.x_train))
         if terminal:
             self.time = round(time.time() - self.time)
             self.signals.append(0)  # Add one last signal (to match length)
@@ -160,10 +176,14 @@ class BitcoinEnv(Environment):
 
     @property
     def actions(self):
-        if self.agent_type == 'DQNAgent':
-            return dict(continuous=False, num_actions=4)  # BUY1 BUY2 SELL HOLD
+        if self.agent_type in ['DQNAgent', 'A3CAgent']:
+            return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
         elif self.agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent']:
             return dict(continuous=True, shape=(), min_value=-100, max_value=100)
+
+    def render(self): pass
+    def seed(self, num): pass
+    step = execute  # alias execute as step, called step by some frameworks
 
     def plotTrades(self, episode, reward, title='Results'):
         if hasattr(self, 'fig'):
