@@ -7,6 +7,7 @@ from sklearn import preprocessing
 from tradingWithPython.lib.backtest import Backtest
 from collections import Counter
 
+import tensorflow as tf
 from tensorforce import util, TensorForceError
 from tensorforce.environments import Environment
 
@@ -21,24 +22,33 @@ class BitcoinEnv(Environment):
     START_CAP = 1000
     USE_INDICATORS = False
 
-    def __init__(self, limit=1000, agent_type='DQNAgent', agent_name=None):
+    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None):
         """Initializes a minimal test environment."""
+        self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent'])
         self.limit = limit
         self.agent_type = agent_type
         self.name = agent_name
         self.episode_cashs = []
         self.episode_values = []
 
+
     @staticmethod
     def num_features():
         num = 7 if BitcoinEnv.USE_INDICATORS else 4  # see xform_data for which features in either case
         num *= len(helpers.tables)  # That many features per table
-        num += 4  # [cash-delta, value-delta, cash<=0, value<=0]
+        num += 2  # [self.cash, self.value]
         return num
 
     @staticmethod
     def pct_change(arr):
-        return pd.Series(arr).pct_change().replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
+        return pd.Series(arr).pct_change()\
+            .replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
+
+    @staticmethod
+    def diff(arr):
+        return pd.DataFrame(arr).diff()\
+            .replace([np.inf, -np.inf], np.nan).ffill()\
+            .fillna(0).values
 
     def _xform_data(self, indata):
         columns = []
@@ -64,17 +74,11 @@ class BitcoinEnv(Environment):
                 columns += [close, diff, sma15, sma60, rsi, atr, curr_indata['volume'].values]
             else:
                 columns += [
-                    self.pct_change(curr_indata['close']),
-                    self.pct_change(curr_indata['high']),
-                    self.pct_change(curr_indata['low']),
-                    self.pct_change(curr_indata['volume']),
+                    self.diff(curr_indata['close']),
+                    self.diff(curr_indata['high']),
+                    self.diff(curr_indata['low']),
+                    self.diff(curr_indata['volume']),
                 ]
-                # columns += [
-                #     curr_indata['close'].values,
-                #     curr_indata['high'].values,
-                #     curr_indata['low'].values,
-                #     curr_indata['volume'].values
-                # ]
 
         # --- Preprocess data
         xdata = np.nan_to_num(np.column_stack(columns))
@@ -104,36 +108,35 @@ class BitcoinEnv(Environment):
         self.x_train, self.y_train = self._xform_data(df)
         self.y_diff = self.pct_change(self.y_train)
 
-        return np.append(self.x_train[start_timestep], [0., 0., 0, 0])
+        return np.append(self.x_train[start_timestep], [0., 0.])
 
     def execute(self, action):
-        if self.agent_type in ['DQNAgent', 'A3CAgent']:
-            signal = 40 if action == self.ACTION_BUY\
-                else -40 if action == self.ACTION_SELL\
+        if self.continuous_actions:
+            # signal = 0 if -40 < action < 5 else action
+            signal = 0 if -5 < action < 5 else action
+        else:
+            signal = 5 if action == self.ACTION_BUY\
+                else -5 if action == self.ACTION_SELL\
                 else 0
-        elif self.agent_type in ['PPOAgent', 'TRPOAgent']:
-            signal = 0 if -40 < action < 5 else action
-        elif self.agent_type in ['NAFAgent']:
-            # doesn't do min_value max_value!
-            # if action < 0 or action > 1: print(action)
-            signal = (action - .5) * 200
 
         self.signals.append(signal)
 
         # (see prior commits for rewards using backtesting - pnl, cash, value)
         abs_sig = abs(signal)
-        fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
+        fee = 0  # 0.0025  # https://www.gdax.com/fees/BTC-USD
         reward = 0
         before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
         if signal > 0:
             if self.cash < abs_sig:
-                reward = -100
+                pass
+                # reward = -100
             else:
                 self.value += abs_sig - abs_sig*fee
                 self.cash -= abs_sig
         elif signal < 0:
             if self.value < abs_sig:
-                reward = -100
+                pass
+                # reward = -100
             else:
                 self.cash += abs_sig - abs_sig*fee
                 self.value -= abs_sig
@@ -154,10 +157,8 @@ class BitcoinEnv(Environment):
         self.timestep += 1
         # next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
         next_state = np.append(self.x_train[self.timestep], [
-            0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
-            0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
-            int(self.cash <= 0),
-            int(self.value <= 0)
+            self.cash,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
+            self.value  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
         ])
 
         terminal = int(self.timestep + 1 >= len(self.x_train))
@@ -166,7 +167,7 @@ class BitcoinEnv(Environment):
             self.signals.append(0)  # Add one last signal (to match length)
             self.episode_cashs.append(self.cash)
             self.episode_values.append(self.value)
-            self.action_counter = Counter(self.signals)
+            self.action_counter = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal
 
@@ -176,13 +177,20 @@ class BitcoinEnv(Environment):
 
     @property
     def actions(self):
-        if self.agent_type in ['DQNAgent', 'A3CAgent']:
-            return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
-        elif self.agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent']:
+        if self.continuous_actions:
             return dict(continuous=True, shape=(), min_value=-100, max_value=100)
+        else:
+            return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
 
     def render(self): pass
-    def seed(self, num): pass
+
+    def seed(self, num):
+        # TODO is all this correct/necessary?
+        random.seed(num)
+        np.random.seed(num)
+        tf.set_random_seed(num)
+
+
     step = execute  # alias execute as step, called step by some frameworks
 
     def plotTrades(self, episode, reward, title='Results'):

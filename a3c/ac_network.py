@@ -6,6 +6,7 @@ import tensorflow.contrib.slim as slim
 CLIP_NORM = 40.0
 # Cell units
 CELL_UNITS = 128
+NUM_LAYERS = 2
 
 #Used to initialize weights for policy and value output layers
 def normalized_columns_initializer(std=1.0):
@@ -22,7 +23,7 @@ class AC_Network():
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
 
             # Recurrent network for temporal dependencies
-            lstm_cell = tf.contrib.rnn.BasicLSTMCell(CELL_UNITS, state_is_tuple=True)
+            lstm_cell = tf.nn.rnn_cell.LSTMCell(CELL_UNITS, state_is_tuple=True)
             c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
             h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
             self.state_init = [c_init, h_init]

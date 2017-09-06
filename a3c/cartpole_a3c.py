@@ -18,8 +18,8 @@ import numpy as np
 import tensorflow as tf
 
 from tforce_env import BitcoinEnv
-from A3C_LSTM.worker import Worker
-from A3C_LSTM.ac_network import AC_Network
+from a3c.worker import Worker
+from a3c.ac_network import AC_Network
 
 # ===========================
 #   Gym Utility Parameters
@@ -81,7 +81,8 @@ def main(_):
             env = workers[0].get_env()
             #env.monitor.start(MONITOR_DIR, video_callable=False, force=True)
 
-    with tf.Session() as sess:
+    tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2))
+    with tf.Session(config=tf_session_config) as sess:
         coord = tf.train.Coordinator()
         if LOAD_MODEL or TEST_MODEL:
             print('Loading Model...')

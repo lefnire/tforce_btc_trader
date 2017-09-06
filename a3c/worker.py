@@ -2,7 +2,7 @@ import tensorflow as tf
 import scipy.signal
 import numpy as np
 import gym
-from A3C_LSTM.ac_network import AC_Network
+from a3c.ac_network import AC_Network
 from tforce_env import BitcoinEnv
 
 # Size of mini batches to run training on

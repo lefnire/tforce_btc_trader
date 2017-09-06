@@ -16,11 +16,11 @@ from helpers import conn
 EPISODES = 50000
 STEPS = 10000
 
-AGENT_NAME = 'DQNAgent;2x128'
+AGENT_NAME = 'PPOAgent'
 overrides = dict(
+    # tf_session_config=None
     # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
-    tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4)),  # .284 .44
-    # tf_session_config=None,
+    tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),  # .284 .44
 
     # memory='prioritized_replay',
     # network=layered_network_builder([
@@ -133,8 +133,7 @@ agents = dict(
     PPOAgent=dict(
         agent=PPOAgent,
         config=dict(
-            max_timesteps=STEPS,
-            learning_rate=.001
+            max_timesteps=STEPS
         )
     )
 
