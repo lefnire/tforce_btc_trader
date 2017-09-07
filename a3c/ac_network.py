@@ -5,7 +5,7 @@ import tensorflow.contrib.slim as slim
 # Clipping ratio for gradients
 CLIP_NORM = 40.0
 # Cell units
-CELL_UNITS = 128
+CELL_UNITS = 150
 NUM_LAYERS = 2
 
 #Used to initialize weights for policy and value output layers
@@ -22,6 +22,13 @@ class AC_Network():
             # Input
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
 
+            # Original: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2
+            # TODO Multi-layer: https://medium.com/@erikhallstrm/using-the-tensorflow-multilayered-lstm-api-f6e7da7bbe40
+            # Currently trying FC
+
+            net = slim.fully_connected(self.inputs, CELL_UNITS, activation_fn=tf.nn.elu)
+            net = slim.dropout(net, .1)
+
             # Recurrent network for temporal dependencies
             lstm_cell = tf.nn.rnn_cell.LSTMCell(CELL_UNITS, state_is_tuple=True)
             c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
@@ -30,7 +37,7 @@ class AC_Network():
             c_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.c])
             h_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.h])
             self.state_in = [c_in, h_in]
-            rnn_in = tf.expand_dims(self.inputs, [0])
+            rnn_in = tf.expand_dims(net, [0])
             state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
                 lstm_cell, rnn_in,

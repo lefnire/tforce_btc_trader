@@ -16,17 +16,18 @@ from helpers import conn
 EPISODES = 50000
 STEPS = 10000
 
-AGENT_NAME = 'PPOAgent'
+AGENT_NAME = 'DQNAgent;stacked128.256.512'
 overrides = dict(
     # tf_session_config=None
     # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
     tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),  # .284 .44
 
-    # memory='prioritized_replay',
-    # network=layered_network_builder([
-    #     dict(type='lstm', size=64, dropout=.2),
-    #     dict(type='lstm', size=64, dropout=.2),
-    # ]),
+    memory='prioritized_replay',
+    network=layered_network_builder([
+        dict(type='dense', size=128),
+        dict(type='dense', size=256),
+        dict(type='dense', size=512),
+    ]),
 )
 
 BATCH = 16
@@ -51,7 +52,7 @@ overrides.update(**dict(
         target_update_frequency=10000
     ),
     none=dict()
-)['none'])
+)['tforce'])
 
 """ Hyper-parameter tuning
 Current 
@@ -74,7 +75,7 @@ Winners
 
 Losers 
 - dense64-64/150-150: dense always performs worse
-- lstm256-128-64, 64-64
+- lstm256-128-64, 64-64, stacked;256-256
 - absolute-score
 
 Unclear (try again later)
