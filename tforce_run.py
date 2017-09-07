@@ -16,7 +16,7 @@ from helpers import conn
 EPISODES = 50000
 STEPS = 10000
 
-AGENT_NAME = 'DQNAgent;lstm150-150dense512'
+AGENT_NAME = 'DQNAgent;2xlstm'
 overrides = dict(
     # tf_session_config=None
     # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
@@ -25,8 +25,7 @@ overrides = dict(
     memory='prioritized_replay',
     network=layered_network_builder([
         dict(type='lstm', size=150),
-        dict(type='lstm', size=150),
-        dict(type='dense', size=512),
+        dict(type='lstm', size=150)
     ]),
 )
 
@@ -137,49 +136,11 @@ agents = dict(
             max_timesteps=STEPS
         )
     )
-
 )
 
 def episode_finished(r):
     """ Callback function printing episode statistics"""
-    # if r.episode % int(EPISODES/100) != 0: return True
-    # if r.episode % 5 != 0: return True
-    agent_name = r.environment.name
-    # r.environment.plotTrades(r.episode, r.episode_rewards[-1], agent_name)
-
-    reward = r.episode_rewards[-1]
-    cash = r.environment.cash
-    value = r.environment.value
-    print("{}) time:{}, reward:{} totals:{}, actions:{}".format(
-        r.episode,
-        r.environment.time,
-        round(reward),
-        round(cash + value),
-        r.environment.action_counter
-    ))
-
-    # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
-    if r.episode % 200 == 0:
-        y = list(r.environment.y_train)
-        signals = list(r.environment.signals)
-    else:
-        y = None
-        signals = None
-
-    q = text("""
-        insert into episodes (episode, reward, cash, value, agent_name, steps, y, signals) 
-        values (:episode, :reward, :cash, :value, :agent_name, :steps, :y, :signals)
-    """)
-    conn.execute(q,
-                 episode=r.episode,
-                 reward=reward,
-                 cash=cash,
-                 value=value,
-                 agent_name=agent_name,
-                 steps=r.episode_lengths[-1],
-                 y=y,
-                 signals=signals
-    )
+    # Logging is done in BitcoinEnv
     return True
 
 config = {}
