@@ -16,7 +16,7 @@ from helpers import conn
 EPISODES = 50000
 STEPS = 10000
 
-AGENT_NAME = 'DQNAgent;stacked128.256.512'
+AGENT_NAME = 'DQNAgent;lstm150-150dense512'
 overrides = dict(
     # tf_session_config=None
     # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
@@ -24,8 +24,8 @@ overrides = dict(
 
     memory='prioritized_replay',
     network=layered_network_builder([
-        dict(type='dense', size=128),
-        dict(type='dense', size=256),
+        dict(type='lstm', size=150),
+        dict(type='lstm', size=150),
         dict(type='dense', size=512),
     ]),
 )

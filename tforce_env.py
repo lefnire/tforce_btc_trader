@@ -37,7 +37,6 @@ class BitcoinEnv(Environment):
     def num_features():
         num = 7 if BitcoinEnv.USE_INDICATORS else 4  # see xform_data for which features in either case
         num *= len(helpers.tables)  # That many features per table
-        num *= 150  # 150 prior timesteps stacked
         num += 2  # [self.cash, self.value]
         return num
 
@@ -97,7 +96,7 @@ class BitcoinEnv(Environment):
         self.cash = self.START_CAP
         self.value = self.START_CAP
         self.high_score = self.cash + self.value  # each score-breaker above initial capital = reward++
-        start_timestep = self.WINDOW_SIZE  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
 
@@ -110,10 +109,7 @@ class BitcoinEnv(Environment):
         self.x_train, self.y_train = self._xform_data(df)
         self.y_diff = self.pct_change(self.y_train)
 
-        reshaped = np.append(
-            np.reshape(self.x_train[:start_timestep], -1),
-            [0., 0.]
-        )
+        reshaped = np.append(self.x_train[start_timestep], [0., 0.])
         return reshaped
 
     def execute(self, action):
@@ -148,8 +144,7 @@ class BitcoinEnv(Environment):
                 self.cash += abs_sig - abs_sig*fee
                 self.value -= abs_sig
 
-        # acts as +1 since slices (next_state) end on -1 [start:exclude]
-        pct_change = self.y_diff[self.timestep]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        pct_change = self.y_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
         if 'absolute' in self.name:
@@ -164,13 +159,10 @@ class BitcoinEnv(Environment):
 
         self.timestep += 1
         # next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
-        next_state = np.append(
-            np.reshape(self.x_train[self.timestep-self.WINDOW_SIZE:self.timestep], -1),
-            [
-                self.cash,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
-                self.value  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
-            ]
-        )
+        next_state = np.append(self.x_train[self.timestep],[
+            self.cash,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
+            self.value  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
+        ])
 
         terminal = int(self.timestep + 1 >= len(self.x_train))
         if terminal:
