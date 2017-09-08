@@ -4,15 +4,20 @@ import tensorflow as tf
 from six.moves import xrange, shlex_quote
 
 from tensorforce import Configuration, TensorForceError
-from tensorforce.agents import agents, DQNAgent, VPGAgent
-from tensorforce.core.networks import from_json, layered_network_builder
+from tensorforce.agents import VPGAgent
+from tensorforce.core.networks import layered_network_builder
 from tensorforce.execution import Runner
 from tensorforce.util import log_levels
 
 from tforce_env import BitcoinEnv
 from helpers import conn
+
 STEPS = 10000
-AGENT_NAME = 'A3C;indicators'
+AGENT_NAME = 'A3C|VPG|L150L150'
+## Try:
+# - architectures (dense/lstm, 1-3x, 64-512). dropout, peepholes/etc
+# - raw/standardize, batch_size, discount, clip
+# - NAF, N-stepDQN
 
 def main():
     parser = argparse.ArgumentParser()
@@ -110,27 +115,16 @@ def main():
         # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
         tf_session_config=None,
 
-        # Prio
-        # memory='prioritized_replay',
-        # batch_size=8,
-        # memory_capacity=50,
-        # first_update=20,
-        # target_update_frequency=10,
-
-        # DQN
-        # clip_loss=.1,
-        # double_dqn=True,
-
         # VPG
         batch_size=4000,
         baseline={
             "type": "mlp",
-            "sizes": [128, 128],
+            "sizes": [128, 128],  # losers: 2x256, winners: 2x128
             "epochs": 5,
             "update_batch_size": 128
         },
-        gae_rewards=False,
-        normalize_rewards=True,
+        gae_rewards=True,  # winner
+        normalize_rewards=True,  # winner
 
         # Main
         discount=.99,
@@ -138,16 +132,16 @@ def main():
             type="epsilon_decay",
             epsilon=1.0,
             epsilon_final=0.1,
-            epsilon_timesteps=STEPS * 10  # 1e6
+            epsilon_timesteps=STEPS * 20  # 1e6
         ),
-        optimizer={
-            "type": "rmsprop",
-            "momentum": 0.95,
-            "epsilon": 0.01
-        },
-        learning_rate=0.00025,
+        # optimizer=dict(type="rmsprop", momentum=.95, epsilon=0.01)
+        # learning_rate=0.00025,
+        optimizer="adam",  # winner
+        learning_rate=.001,  # revisit, usually .01
         states=environment.states,
         actions=environment.actions,
+
+        # Losers: lstm3x150, Winners: lstm2x150
         network=layered_network_builder([
             dict(type='lstm', size=150, dropout=.2),
             dict(type='lstm', size=150, dropout=.2),

@@ -43,7 +43,7 @@ class BitcoinEnv(Environment):
 
     @staticmethod
     def num_features():
-        num = 8  # num features from self._xform_data
+        num = 4  # num features from self._xform_data
         num *= len(helpers.tables)  # That many features per table
         num += 2  # [self.cash, self.value]
         return num
@@ -83,23 +83,26 @@ class BitcoinEnv(Environment):
                 k + '_volume': 'volume'
             })
 
+            # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
+            # are absolute values, causing number-range instability
             columns += [
                 self.diff(curr_indata['close']),
                 self.diff(curr_indata['high']),
                 self.diff(curr_indata['low']),
                 self.diff(curr_indata['volume']),
 
-                SMA(curr_indata, timeperiod=15),
-                SMA(curr_indata, timeperiod=60),
-                RSI(curr_indata, timeperiod=14),
-                ATR(curr_indata, timeperiod=14),
+                ## Original indicators from boilerplate
+                # SMA(curr_indata, timeperiod=15),
+                # SMA(curr_indata, timeperiod=60),
+                # RSI(curr_indata, timeperiod=14),
+                # ATR(curr_indata, timeperiod=14),
 
-                ## From "How to Day Trade For a Living" (try these)
+                ## Indicators from "How to Day Trade For a Living" (try these)
                 ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
                 # EMA(curr_indata, timeperiod=9),
                 # EMA(curr_indata, timeperiod=20),
                 # SMA(curr_indata, timeperiod=50),
-                # SMA(curr_indata, timeperiod=200),
+                #SMA(curr_indata, timeperiod=200),
             ]
 
         # --- Preprocess data
@@ -163,10 +166,7 @@ class BitcoinEnv(Environment):
         pct_change = self.y_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        if 'absolute' in self.agent_name:
-            reward += total
-        else:
-            reward += total - before['total']
+        reward += total - before['total']
 
         # Each time it sets a new high-score, extra reward
         if total > self.high_score:
@@ -203,7 +203,8 @@ class BitcoinEnv(Environment):
             episode, self.time, round(reward), round(cash + value), self.action_counter))
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
-        if episode % 200 == 0:
+        # (10k array, so % something)
+        if episode % 100 == 0:
             y = list(self.y_train)
             signals = list(self.signals)
         else:
