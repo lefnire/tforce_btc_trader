@@ -203,8 +203,7 @@ class BitcoinEnv(Environment):
             episode, self.time, round(reward), round(cash + value), self.action_counter))
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
-        # (10k array, so % something)
-        if episode % 100 == 0:
+        if reward + value > BitcoinEnv.START_CAP * 2:
             y = list(self.y_train)
             signals = list(self.signals)
         else:
