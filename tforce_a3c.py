@@ -4,7 +4,7 @@ import tensorflow as tf
 from six.moves import xrange, shlex_quote
 
 from tensorforce import Configuration, TensorForceError
-from tensorforce.agents import VPGAgent, PPOAgent
+from tensorforce.agents import VPGAgent, PPOAgent, TRPOAgent
 from tensorforce.core.networks import layered_network_builder
 from tensorforce.execution import Runner
 from tensorforce.util import log_levels
@@ -13,11 +13,8 @@ from tforce_env import BitcoinEnv
 from helpers import conn
 
 STEPS = 10000
-AGENT_NAME = 'A3C|PPO|D150L150L150'
-## Try:
-# - architectures (dense/lstm, 1-3x, 64-512). dropout, peepholes/etc
-# - raw/standardize, batch_size, discount, clip
-# - NAF, N-stepDQN
+AGENT_NAME = 'PPOAgent'
+agent_type = AGENT_NAME.split('|')[0]
 
 def main():
     parser = argparse.ArgumentParser()
@@ -111,40 +108,41 @@ def main():
 
     environment = BitcoinEnv(limit=STEPS, agent_type='VPGAgent', agent_name=AGENT_NAME)
 
-    agent_config = Configuration(
+    neurons = 64  # TODO experiment (32, 64, 128 all seem good - lower/better?)
+    agent_config = dict(
         # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
 
-        # VPG
-        batch_size=4000,
-        baseline={
-            "type": "mlp",
-            "sizes": [128, 128],  # losers: 2x256, winners: 2x128
-            "epochs": 5,
-            "update_batch_size": 128
-        },
+        # PolicyGradientModel
+        batch_size=2048,  # TODO experiment
         gae_rewards=True,  # winner
-        normalize_rewards=True,  # winner
         keep_last=True,
+        baseline=dict(
+            type="mlp",
+            sizes=[neurons, neurons],  # losers: 2x256, winners: 2x128
+            epochs=5,
+            update_batch_size=128,
+            learning_rate=.01
+        ),
+
+        # Network (Losers: L3x150, Winners: D150L2x150, L2x150)
+        network=layered_network_builder([
+            dict(type='dense', size=neurons, l2_regularization=.001),  # TODO experiment: activation='tanh'
+            dict(type='lstm', size=neurons, dropout=.2),  # TODO experiment: LSTM params (peepholes, dropout)
+            dict(type='lstm', size=neurons, dropout=.2),
+        ]),
 
         # Main
-        discount=.99,
+        discount=.99,  # TODO experiment
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
-            epsilon_final=0.05,
+            epsilon_final=0.1,
             epsilon_timesteps=STEPS * 100  # 1e6
         ),
         optimizer="adam",  # winner
-        learning_rate=.01,  # revisit, usually .01
+        learning_rate=.01,  # winner
         states=environment.states,
         actions=environment.actions,
-
-        # Losers: L3x150, Winners: D150L150L150, L150L150
-        network=layered_network_builder([
-            dict(type='dense', size=150, l2_regularization=.001),
-            dict(type='lstm', size=150, dropout=.2),
-            dict(type='lstm', size=150, dropout=.2),
-        ]),
 
         # Async
         distributed=True,
@@ -157,10 +155,26 @@ def main():
         preprocessing=None
     )
 
+    if agent_type == 'VPGAgent':
+        agent_class = VPGAgent
+        agent_config.update(dict(
+            normalize_rewards=True  # winner
+        ))
+    elif agent_type == 'PPOAgent':
+        agent_class = PPOAgent
+        agent_config.update(dict(
+            epochs=5,
+            optimizer_batch_size=512,
+            # random_sampling=False,
+            normalize_rewards=False  # winner
+        ))
+
+    agent_config = Configuration(**agent_config)
+
     logger = logging.getLogger(__name__)
     logger.setLevel(log_levels[agent_config.log_level])
 
-    agent = PPOAgent(config=agent_config)
+    agent = agent_class(config=agent_config)
 
     logger.info("Starting distributed agent for OpenAI Gym '{gym_id}'".format(gym_id=args.gym_id))
     logger.info("Config:")
