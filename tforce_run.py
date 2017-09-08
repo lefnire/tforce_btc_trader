@@ -16,17 +16,19 @@ from helpers import conn
 EPISODES = 50000
 STEPS = 10000
 
-AGENT_NAME = 'DQNAgent;2xlstm'
+AGENT_NAME = 'PPOAgent'
 overrides = dict(
-    # tf_session_config=None
+    tf_session_config=None,
     # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
-    tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),  # .284 .44
+    # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),  # .284 .44
 
-    memory='prioritized_replay',
+    # memory='prioritized_replay',
     network=layered_network_builder([
-        dict(type='lstm', size=150),
-        dict(type='lstm', size=150)
+        dict(type='dense', size=150, l2_regularization=.001),
+        dict(type='lstm', size=150, dropout=.2),
+        dict(type='lstm', size=150, dropout=.2)
     ]),
+
 )
 
 BATCH = 16
@@ -51,7 +53,7 @@ overrides.update(**dict(
         target_update_frequency=10000
     ),
     none=dict()
-)['tforce'])
+)['none'])
 
 """ Hyper-parameter tuning
 Current 
@@ -96,7 +98,25 @@ mem_agent_conf = dict(
     # update_frequency=500,
     clip_loss=.1,
     double_dqn=True,
-    discount=.99
+    optimizer=dict(type="rmsprop", momentum=.95, epsilon=0.01),
+    learning_rate=0.00025
+)
+
+policy_conf = dict(
+    keep_last=True,
+    max_timesteps=-1,
+    random_sampling=False,
+    gae_rewards=True,
+    normalize_rewards=True,
+    batch_size=2000,
+    baseline={
+        "type": "mlp",
+        "sizes": [128, 128],
+        "epochs": 5,
+        "update_batch_size": 128
+    },
+    optimizer="adam",
+    learning_rate=.01
 )
 
 common_conf = dict(
@@ -104,21 +124,16 @@ common_conf = dict(
         dict(type='lstm', size=128, dropout=.2),
         dict(type='lstm', size=128, dropout=.2),
     ]),
+    discount=.99,
     batch_size=150,
     states=env.states,
     actions=env.actions,
     exploration=dict(
         type="epsilon_decay",
         epsilon=1.0,
-        epsilon_final=0.1,
-        epsilon_timesteps=STEPS * 50  # int(STEPS * 400)  # 1e6
-    ),
-    optimizer={
-        "type": "rmsprop",
-        "momentum": 0.95,
-        "epsilon": 0.01
-    },
-    learning_rate=0.00025
+        epsilon_final=0.05,
+        epsilon_timesteps=STEPS * 100  # 1e6
+    )
 )
 
 agents = dict(
@@ -132,9 +147,7 @@ agents = dict(
     ),
     PPOAgent=dict(
         agent=PPOAgent,
-        config=dict(
-            max_timesteps=STEPS
-        )
+        config=policy_conf
     )
 )
 

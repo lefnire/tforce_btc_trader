@@ -4,7 +4,7 @@ import tensorflow as tf
 from six.moves import xrange, shlex_quote
 
 from tensorforce import Configuration, TensorForceError
-from tensorforce.agents import VPGAgent
+from tensorforce.agents import VPGAgent, PPOAgent
 from tensorforce.core.networks import layered_network_builder
 from tensorforce.execution import Runner
 from tensorforce.util import log_levels
@@ -13,7 +13,7 @@ from tforce_env import BitcoinEnv
 from helpers import conn
 
 STEPS = 10000
-AGENT_NAME = 'A3C|VPG|L150L150'
+AGENT_NAME = 'A3C|PPO|D150L150L150'
 ## Try:
 # - architectures (dense/lstm, 1-3x, 64-512). dropout, peepholes/etc
 # - raw/standardize, batch_size, discount, clip
@@ -113,7 +113,6 @@ def main():
 
     agent_config = Configuration(
         # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
-        tf_session_config=None,
 
         # VPG
         batch_size=4000,
@@ -125,24 +124,24 @@ def main():
         },
         gae_rewards=True,  # winner
         normalize_rewards=True,  # winner
+        keep_last=True,
 
         # Main
         discount=.99,
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
-            epsilon_final=0.1,
-            epsilon_timesteps=STEPS * 20  # 1e6
+            epsilon_final=0.05,
+            epsilon_timesteps=STEPS * 100  # 1e6
         ),
-        # optimizer=dict(type="rmsprop", momentum=.95, epsilon=0.01)
-        # learning_rate=0.00025,
         optimizer="adam",  # winner
-        learning_rate=.001,  # revisit, usually .01
+        learning_rate=.01,  # revisit, usually .01
         states=environment.states,
         actions=environment.actions,
 
-        # Losers: lstm3x150, Winners: lstm2x150
+        # Losers: L3x150, Winners: D150L150L150, L150L150
         network=layered_network_builder([
+            dict(type='dense', size=150, l2_regularization=.001),
             dict(type='lstm', size=150, dropout=.2),
             dict(type='lstm', size=150, dropout=.2),
         ]),
@@ -161,7 +160,7 @@ def main():
     logger = logging.getLogger(__name__)
     logger.setLevel(log_levels[agent_config.log_level])
 
-    agent = VPGAgent(config=agent_config)
+    agent = PPOAgent(config=agent_config)
 
     logger.info("Starting distributed agent for OpenAI Gym '{gym_id}'".format(gym_id=args.gym_id))
     logger.info("Config:")

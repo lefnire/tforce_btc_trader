@@ -119,12 +119,9 @@ class BitcoinEnv(Environment):
         self.signals = [0] * start_timestep
         self.total_reward = 0
 
-        # Fetch all rows from the database and & take random slice (based on limit).
-        # TODO count(*) and fetch-random in SQL
-        df = helpers.db_to_dataframe(scaler=None, limit=self.limit * 2)
-        block_start = random.randint(0, len(df) - self.limit)
-        block_end = block_start + self.limit
-        df = df[block_start:block_end]
+        # Fetch random slice of rows from the database (based on limit)
+        offset = random.randint(0, helpers.count_rows() - self.limit)
+        df = helpers.db_to_dataframe(scaler=None, limit=self.limit, offset=offset)
         self.x_train, self.y_train = self._xform_data(df)
         self.y_diff = self.pct_change(self.y_train)
 
@@ -146,27 +143,19 @@ class BitcoinEnv(Environment):
         # (see prior commits for rewards using backtesting - pnl, cash, value)
         abs_sig = abs(signal)
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
-        reward = 0
         before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
-        if signal > 0:
-            if self.cash < abs_sig:
-                pass
-                # reward = -100
-            else:
-                self.value += abs_sig - abs_sig*fee
-                self.cash -= abs_sig
-        elif signal < 0:
-            if self.value < abs_sig:
-                pass
-                # reward = -100
-            else:
-                self.cash += abs_sig - abs_sig*fee
-                self.value -= abs_sig
+        if signal > 0 and self.cash >= abs_sig:
+            self.value += abs_sig - abs_sig*fee
+            self.cash -= abs_sig
+        elif signal < 0 and self.value >= abs_sig:
+            self.cash += abs_sig - abs_sig*fee
+            self.value -= abs_sig
 
         pct_change = self.y_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        reward += total - before['total']
+        reward = total - before['total']  # Relative reward (seems to work better)
+        # reward = total # Absolute reward
 
         # Each time it sets a new high-score, extra reward
         if total > self.high_score:
@@ -203,7 +192,7 @@ class BitcoinEnv(Environment):
             episode, self.time, round(reward), round(cash + value), self.action_counter))
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
-        if reward + value > BitcoinEnv.START_CAP * 2:
+        if cash + value > BitcoinEnv.START_CAP * 2:
             y = list(self.y_train)
             signals = list(self.signals)
         else:
@@ -219,31 +208,3 @@ class BitcoinEnv(Environment):
             """)
         conn.execute(q, episode=episode, reward=reward, cash=cash, value=value, agent_name=self.agent_name,
                      steps=self.timestep, y=y, signals=signals)
-
-    def plotTrades(self, episode, reward, title='Results'):
-        if hasattr(self, 'fig'):
-            fig = self.fig
-            plt.cla()
-        else:
-            fig = plt.figure(figsize=(25, 4))
-        bt = Backtest(
-            pd.Series(self.y_train),
-            pd.Series(self.signals),
-            signalType='capital'
-        )
-        pnl = bt.pnl.iloc[-1]
-        bt.plotTrades()
-        plt.suptitle('Ep:{} PNL:{} Cash:{} Value:{} Reward:{} '.format(
-            episode,
-            round(pnl, 1),
-            round(self.cash, 1),
-            round(self.value, 1),
-            round(reward, 1))
-        )
-        if hasattr(self, 'fig'):
-            fig.canvas.draw()
-        else:
-            block = bool(episode >= self.limit) # freeze on the last frame
-            fig.canvas.set_window_title(title)
-            plt.show(block=block)
-            self.fig = fig

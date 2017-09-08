@@ -18,7 +18,12 @@ tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd'] if source == '
 columns = ['last', 'high', 'low', 'volume']
 ts_col = 'ts' if source == 'coins' else 'trade_timestamp'
 
-def db_to_dataframe(limit=None, scaler=None, scaler_args={}):
+def count_rows():
+    # FIXME! when using data other than Tyler's, need to use count based on db_to_dataframe query, which will count
+    # the inner-joined (many rows will disappear and this query won't work)
+    return conn.execute('select count(*) from {}'.format(tables[0])).fetchone()[0]
+
+def db_to_dataframe(limit='ALL', offset=0, scaler=None, scaler_args={}):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
     # TODO cols we should use: high, low, volume(check) OPEN, CLOSE
 
@@ -41,9 +46,7 @@ def db_to_dataframe(limit=None, scaler=None, scaler_args={}):
         if i != 0:
             query += 'on {a}.ts={b}.ts'.format(a=table, b=tables[i-1])
 
-    query += " order by {t}.ts desc".format(t=tables[0])
-    if limit:
-        query += ' limit {}'.format(limit)
+    query += " order by {}.ts desc limit {} offset {}".format(tables[0], limit, offset)
 
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
     df = pd.read_sql_query(query, conn).iloc[::-1].ffill()
