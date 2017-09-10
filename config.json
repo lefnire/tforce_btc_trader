@@ -1,4 +1,0 @@
-{
-    "db": "postgres://lefnire:lefnire@localhost:5432/coins",
-    "y_predict_column": "gdax_btcusd_last"
-}

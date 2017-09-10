@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from talib.abstract import SMA, RSI, ATR, EMA
 from sklearn import preprocessing
+from sklearn.externals import joblib
 from tradingWithPython.lib.backtest import Backtest
 from collections import Counter
 from sqlalchemy.sql import text
@@ -14,20 +15,26 @@ from tensorforce.environments import Environment
 import helpers
 from helpers import config, conn
 
+scaler = joblib.load('data/scaler.pkl')
+
 class BitcoinEnv(Environment):
     ACTION_BUY = 0
     ACTION_SELL = 1
     ACTION_HOLD = 2
 
     START_CAP = 1000
-    WINDOW_SIZE = 150
 
-    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None):
+    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=True,
+                 punish_overdraft=True, absolute_reward=False):
         """Initializes a minimal test environment."""
-        self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent'])
         self.limit = limit
         self.agent_type = agent_type
         self.agent_name = agent_name
+        self.scale_features = scale_features
+        self.punish_overdraft = punish_overdraft
+        self.absolute_reward = absolute_reward
+
+        self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent'])
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
     @property
@@ -55,10 +62,27 @@ class BitcoinEnv(Environment):
     def render(self): pass
 
     def seed(self, num):
+        return
         # TODO is all this correct/necessary?
         random.seed(num)
         np.random.seed(num)
         tf.set_random_seed(num)
+
+    def scale_features_and_save(self):
+        """
+        When using scaling on features (TODO experiment) then call this method once after changing
+        any way we're using features before training
+        """
+        all_data, _ = self._xform_data(helpers.db_to_dataframe())
+        # Add a rough estimate min/max of cash & value
+        for i in range(2):
+            all_data = np.hstack((
+                all_data,
+                np.random.uniform(-500000, 1500, (all_data.shape[0], 1))
+            ))
+        scaler = preprocessing.StandardScaler()
+        scaler.fit(all_data)
+        joblib.dump(scaler, 'data/scaler.pkl')
 
     @staticmethod
     def pct_change(arr):
@@ -71,12 +95,11 @@ class BitcoinEnv(Environment):
             .replace([np.inf, -np.inf], np.nan).ffill()\
             .fillna(0).values
 
-    def _xform_data(self, indata):
+    def _xform_data(self, df):
         columns = []
-        y_predict = indata[config.y_predict_column].values
         for k in helpers.tables:
             # TA-Lib requires specifically-named columns (#TODO need to get our hands on "open")
-            curr_indata = indata.rename(columns={
+            xchange_df = df.rename(columns={
                 k + '_last': 'close',
                 k + '_high': 'high',
                 k + '_low': 'low',
@@ -86,34 +109,34 @@ class BitcoinEnv(Environment):
             # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
             # are absolute values, causing number-range instability
             columns += [
-                self.diff(curr_indata['close']),
-                self.diff(curr_indata['high']),
-                self.diff(curr_indata['low']),
-                self.diff(curr_indata['volume']),
+                self.diff(xchange_df['close']),
+                self.diff(xchange_df['high']),
+                self.diff(xchange_df['low']),
+                self.diff(xchange_df['volume']),
 
                 ## Original indicators from boilerplate
-                # SMA(curr_indata, timeperiod=15),
-                # SMA(curr_indata, timeperiod=60),
-                # RSI(curr_indata, timeperiod=14),
-                # ATR(curr_indata, timeperiod=14),
+                # SMA(xchange_df, timeperiod=15),
+                # SMA(xchange_df, timeperiod=60),
+                # RSI(xchange_df, timeperiod=14),
+                # ATR(xchange_df, timeperiod=14),
 
                 ## Indicators from "How to Day Trade For a Living" (try these)
                 ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
-                # EMA(curr_indata, timeperiod=9),
-                # EMA(curr_indata, timeperiod=20),
-                # SMA(curr_indata, timeperiod=50),
-                #SMA(curr_indata, timeperiod=200),
+                # EMA(xchange_df, timeperiod=9),
+                # EMA(xchange_df, timeperiod=20),
+                # SMA(xchange_df, timeperiod=50),
+                #SMA(xchange_df, timeperiod=200),
             ]
 
-        # --- Preprocess data
-        xdata = np.nan_to_num(np.column_stack(columns))
-        return xdata, y_predict
+        states = np.nan_to_num(np.column_stack(columns))
+        prices = df['gdax_btcusd_last'].values
+        # Note: don't scale/normalize here, since we'll normalize w/ self.price/self.cash after each action
+        return states, prices
 
     def reset(self):
         self.time = time.time()
         self.cash = self.START_CAP
         self.value = self.START_CAP
-        self.high_score = self.cash + self.value  # each score-breaker above initial capital = reward++
         start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
@@ -122,17 +145,18 @@ class BitcoinEnv(Environment):
         # Fetch random slice of rows from the database (based on limit)
         offset = random.randint(0, helpers.count_rows() - self.limit)
         df = helpers.db_to_dataframe(scaler=None, limit=self.limit, offset=offset)
-        self.x_train, self.y_train = self._xform_data(df)
-        self.y_diff = self.pct_change(self.y_train)
+        self.observations, self.prices = self._xform_data(df)
+        self.prices_diff = self.pct_change(self.prices)
 
-        reshaped = np.append(self.x_train[start_timestep], [0., 0.])
-        return reshaped
+        first_state = np.append(self.observations[start_timestep], [0., 0.])
+        if self.scale_features:
+            first_state = scaler.transform([first_state])[0]
+        return first_state
 
     def execute(self, action):
         if self.continuous_actions:
             # signal = 0 if -40 < action < 5 else action
-            # signal = 0 if -5 < action < 5 else action
-            signal = action
+            signal = 0 if -1 < action < 1 else action
         else:
             signal = 5 if action == self.ACTION_BUY\
                 else -5 if action == self.ACTION_SELL\
@@ -140,38 +164,37 @@ class BitcoinEnv(Environment):
 
         self.signals.append(signal)
 
-        # (see prior commits for rewards using backtesting - pnl, cash, value)
         abs_sig = abs(signal)
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
         before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
-        if signal > 0 and self.cash >= abs_sig:
-            self.value += abs_sig - abs_sig*fee
+        if signal > 0:
+            if self.cash >= abs_sig:
+                self.value += abs_sig - abs_sig*fee
             self.cash -= abs_sig
-        elif signal < 0 and self.value >= abs_sig:
-            self.cash += abs_sig - abs_sig*fee
+        elif signal < 0:
+            if self.value >= abs_sig:
+                self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
-        pct_change = self.y_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        pct_change = self.prices_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        reward = total - before['total']  # Relative reward (seems to work better)
-        # reward = total # Absolute reward
-
-        # Each time it sets a new high-score, extra reward
-        if total > self.high_score:
-            reward += total
-            self.high_score = total
+        if self.absolute_reward:
+            reward = total - self.START_CAP*2  # Absolute reward
+        else:
+            reward = total - before['total']  # Relative reward (seems to work better)
 
         self.timestep += 1
-        # next_state = np.append(self.x_train[self.timestep], [self.cash, self.value])
-        next_state = np.append(self.x_train[self.timestep],[
+        next_state = np.append(self.observations[self.timestep], [
             self.cash,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
             self.value  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
         ])
+        if self.scale_features:
+            next_state = scaler.transform([next_state])[0]
 
         self.total_reward += reward
 
-        terminal = int(self.timestep + 1 >= len(self.x_train))
+        terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.time = round(time.time() - self.time)
             self.signals.append(0)  # Add one last signal (to match length)
@@ -193,7 +216,7 @@ class BitcoinEnv(Environment):
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
         if cash + value > BitcoinEnv.START_CAP * 2:
-            y = list(self.y_train)
+            y = list(self.prices)
             signals = list(self.signals)
         else:
             y = None

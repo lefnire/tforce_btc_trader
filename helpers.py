@@ -8,7 +8,7 @@ configpath = os.path.abspath(os.path.join(basepath, "config.json"))
 config = Box(json.loads(open(configpath).read()))
 
 
-engine = create_engine(config.db)
+engine = create_engine("postgres://lefnire:lefnire@localhost:5432/coins")
 conn = engine.connect()
 
 source = 'btc' if config.db.endswith('btc') else 'coins'
@@ -18,10 +18,12 @@ tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd'] if source == '
 columns = ['last', 'high', 'low', 'volume']
 ts_col = 'ts' if source == 'coins' else 'trade_timestamp'
 
+
 def count_rows():
     # FIXME! when using data other than Tyler's, need to use count based on db_to_dataframe query, which will count
     # the inner-joined (many rows will disappear and this query won't work)
     return conn.execute('select count(*) from {}'.format(tables[0])).fetchone()[0]
+
 
 def db_to_dataframe(limit='ALL', offset=0, scaler=None, scaler_args={}):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
