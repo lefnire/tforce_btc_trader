@@ -1,17 +1,12 @@
-import json, os.path
 import pandas as pd
 from sqlalchemy import create_engine
-from box import Box
 
-basepath = os.path.dirname(__file__)
-configpath = os.path.abspath(os.path.join(basepath, "config.json"))
-config = Box(json.loads(open(configpath).read()))
+DB = "coins"
 
-
-engine = create_engine("postgres://lefnire:lefnire@localhost:5432/coins")
+engine = create_engine("postgres://lefnire:lefnire@localhost:5432/{}".format(DB))
 conn = engine.connect()
 
-source = 'btc' if config.db.endswith('btc') else 'coins'
+source = 'btc' if DB.endswith('btc') else 'coins'
 tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd'] if source == 'btc'\
     else ['okcoin_btccny', 'gdax_btcusd']
     # else ['okcoin_btccny', 'bitstamp_btcusd', 'gdax_btcusd']

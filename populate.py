@@ -1,5 +1,5 @@
 import requests, time
-from data import conn, config
+from data import conn
 
 SLEEP = 6
 

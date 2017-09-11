@@ -12,10 +12,12 @@ import tensorflow as tf
 from tensorforce import util, TensorForceError
 from tensorforce.environments import Environment
 
-import helpers
-from helpers import config, conn
+import data
+from data import conn
 
-scaler = joblib.load('data/scaler.pkl')
+try:
+    scaler = joblib.load('data_/scaler.pkl')
+except Exception: pass
 
 class BitcoinEnv(Environment):
     ACTION_BUY = 0
@@ -51,7 +53,7 @@ class BitcoinEnv(Environment):
     @staticmethod
     def num_features():
         num = 4  # num features from self._xform_data
-        num *= len(helpers.tables)  # That many features per table
+        num *= len(data.tables)  # That many features per table
         num += 2  # [self.cash, self.value]
         return num
 
@@ -73,7 +75,7 @@ class BitcoinEnv(Environment):
         When using scaling on features (TODO experiment) then call this method once after changing
         any way we're using features before training
         """
-        all_data, _ = self._xform_data(helpers.db_to_dataframe())
+        all_data, _ = self._xform_data(data.db_to_dataframe())
         # Add a rough estimate min/max of cash & value
         for i in range(2):
             all_data = np.hstack((
@@ -82,7 +84,7 @@ class BitcoinEnv(Environment):
             ))
         scaler = preprocessing.StandardScaler()
         scaler.fit(all_data)
-        joblib.dump(scaler, 'data/scaler.pkl')
+        joblib.dump(scaler, 'data_/scaler.pkl')
 
     @staticmethod
     def pct_change(arr):
@@ -97,7 +99,7 @@ class BitcoinEnv(Environment):
 
     def _xform_data(self, df):
         columns = []
-        for k in helpers.tables:
+        for k in data.tables:
             # TA-Lib requires specifically-named columns (#TODO need to get our hands on "open")
             xchange_df = df.rename(columns={
                 k + '_last': 'close',
@@ -143,8 +145,8 @@ class BitcoinEnv(Environment):
         self.total_reward = 0
 
         # Fetch random slice of rows from the database (based on limit)
-        offset = random.randint(0, helpers.count_rows() - self.limit)
-        df = helpers.db_to_dataframe(scaler=None, limit=self.limit, offset=offset)
+        offset = random.randint(0, data.count_rows() - self.limit)
+        df = data.db_to_dataframe(scaler=None, limit=self.limit, offset=offset)
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self.pct_change(self.prices)
 

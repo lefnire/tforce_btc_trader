@@ -1,15 +1,16 @@
-Install https://github.com/reinforceio/tensorforce
+Install https://github.com/reinforceio/tensorforce, TA-Lib
 
-psql coins lefnire:lefnire
+# Run populate for a few hours
+python populate.py
 
 # Run the script
-python tforce_a3c.py bitcoin -w 7 -D
+python run_a3c.py bitcoin -w 7 -D
 
 # Check on the progress
 tmux a -t bitcoin_async
 
 # Kill the process
-python tforce_a3c.py bitcoin -w 7 -D -K
+python run_a3c.py bitcoin -w 7 -D -K
 
 
 # Check some graphs
