@@ -26,15 +26,13 @@ class BitcoinEnv(Environment):
 
     START_CAP = 1000
 
-    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=True,
-                 punish_overdraft=True, absolute_reward=False):
+    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=False, abs_reward=False):
         """Initializes a minimal test environment."""
         self.limit = limit
         self.agent_type = agent_type
         self.agent_name = agent_name
         self.scale_features = scale_features
-        self.punish_overdraft = punish_overdraft
-        self.absolute_reward = absolute_reward
+        self.abs_reward = abs_reward
 
         self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent'])
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
@@ -181,7 +179,7 @@ class BitcoinEnv(Environment):
         pct_change = self.prices_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        if self.absolute_reward:
+        if self.abs_reward:
             reward = total - self.START_CAP*2  # Absolute reward
         else:
             reward = total - before['total']  # Relative reward (seems to work better)

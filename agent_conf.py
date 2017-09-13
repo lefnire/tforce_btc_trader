@@ -9,35 +9,40 @@ from btc_env import BitcoinEnv
 
 EPISODES = 500000
 STEPS = 10000
-AGENT_NAME = 'PPOAgent'
+AGENT_NAME = 'VPGAgent'
 
 
-def wipe_rows():
-    conn.execute("delete from episodes where agent_name='{}'".format(AGENT_NAME))
+def wipe_rows(name=AGENT_NAME):
+    conn.execute("delete from episodes where agent_name='{}'".format(name))
 
 
 def conf(**kwargs):
     agent_type = AGENT_NAME.split('|')[0]
     env = BitcoinEnv(
         limit=STEPS, agent_type=agent_type, agent_name=AGENT_NAME,
-        scale_features=True,
-        punish_overdraft=True,
-        absolute_reward=False
+        scale_features=False,
+        abs_reward=False
     )
 
-    neurons = 150  # TODO experiment (32, 64, 128 all seem good - lower/better?)
+    neurons = 256
+    dropout = .2
     # Global conf
+    # try-next: diff dropout, dqn, discount
+    # possible winners: no-scale, relative-reward, normalize_rewards=False, 512>256, elu/he_init LSTM
+    # definite winners: dropout, dense2, 256>150 4L, baseline=None (try MLP for DQN), random_sampling=True, nadam
+    # losers: 3x-baseline, dense(original)
+    # unclear: vpg
     conf = dict(
         # tf_session_config=None,
         # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
-        tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),  # .284 .44
+        tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
 
-        # Network (Losers: L3x150, Winners: D150L2x150, L2x150, DLD)
         network=[
-            dict(type='dense2', size=neurons, dropout=.2),  # combine attrs into attr-combos (eg VWAP)
-            dict(type='lstm', size=neurons, dropout=.2),  # merge those w/ history
-            dict(type='lstm', size=neurons, dropout=.2),  # merge those w/ history
-            dict(type='dense2', size=neurons, dropout=.2),  # combine those into indicators (eg SMA)
+            dict(type='dropout', size=neurons, dropout=dropout),
+            dict(type='dense2', size=neurons, dropout=dropout),  # combine attrs into attr-combos (eg VWAP)
+            dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
+            dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
+            dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
         ],
 
         # Main
@@ -48,40 +53,41 @@ def conf(**kwargs):
             epsilon_final=0.1,
             epsilon_timesteps=2e6
         ),
-        # optimizer="adam",  # winner
-        optimizer="nadam",
+        optimizer="nadam", # winner=nadam
         states=env.states,
         actions=env.actions,
     )
 
-    # PolicyGradientModel
-    if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
+    if not env.actions['continuous']:
         conf.update(
-            batch_size=2048,  # TODO experiment
-            gae_rewards=True,  # winner
-            keep_last=True,
-            max_timesteps=-1,
             baseline=dict(
                 type="mlp",
-                sizes=[neurons, neurons],  # losers: 2x256, winners: 2x128
+                sizes=[128, 128],  # losers: 2x256, winners: 2x128
                 epochs=5,
                 update_batch_size=128,
                 learning_rate=.01
             ),
         )
+
+    # PolicyGradientModel
+    if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
+        conf.update(
+            batch_size=4096,  # TODO experiment
+            gae_rewards=True,  # winner
+            keep_last=True,
+            max_timesteps=-1,
+        )
         # VPGAgent
         if agent_type == 'VPGAgent':
             agent_class = VPGAgent
             conf.update(dict(
-                normalize_rewards=True,  # winner
-                learning_rate=.01
+                # normalize_rewards=True,  # winner
+                normalize_rewards=False, random_sampling=True,
+                learning_rate=.001
             ))
         # PPOAgent
         elif agent_type == 'PPOAgent':
             agent_class = PPOAgent
-            # for some reason PPO configs all have activation=tanh, I need to read the paper
-            for layer in conf['network']:
-                if layer['type'] == 'dense': layer['activation'] = 'tanh'
             conf.update(dict(
                 epochs=5,
                 optimizer_batch_size=512,
@@ -97,7 +103,8 @@ def conf(**kwargs):
             # memory_capacity=STEPS
             # first_update=int(STEPS/10),
             # update_frequency=500,
-            # memory='prioritized_replay',
+            baseline=None,
+            memory='replay',
             clip_loss=.1,
             double_dqn=True,
         )

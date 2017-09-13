@@ -26,7 +26,7 @@ def main():
 
     args = parser.parse_args()
 
-    session_name = 'bitcoin_async'
+    session_name = 'btc'
     shell = '/bin/bash'
 
     kill_cmds = [
@@ -108,7 +108,7 @@ def main():
         log_level="info",
         tf_saver=False,
         tf_summary=None,
-        tf_summary_level=None,
+        tf_summary_level=0,
         preprocessing=None
     )
 
