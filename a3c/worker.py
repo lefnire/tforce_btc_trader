@@ -11,7 +11,8 @@ MINI_BATCH = 150  # 30
 REWARD_FACTOR = 0.001
 
 STEPS = 10000
-EPSILON_EPISODES = 60
+EPSILON_EPISODES = 100
+HYPER_SWITCH = 400
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
@@ -46,7 +47,7 @@ def norm(x, upper, lower=0.):
     return (x-lower)/max((upper-lower), 1e-12)
 
 class Worker():
-    def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, env_name, seed, test):
+    def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, env_name, seed, test, hyper):
         self.name = "worker_" + str(name)
         self.number = name
         self.model_path = model_path
@@ -57,17 +58,17 @@ class Worker():
         self.episode_totals = []
         self.episode_lengths = []
         self.episode_mean_values = []
-        self.summary_writer = tf.summary.FileWriter("train_" + str(self.number))
+        self.summary_writer = tf.summary.FileWriter("train_" + hyper)
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
-        self.local_AC = AC_Network(s_size, a_size, self.name, trainer)
+        self.local_AC = AC_Network(s_size, a_size, self.name, trainer, hyper)
         self.update_local_ops = update_target_graph('global', self.name)
 
         # self.env = gym.make(env_name)
-        self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent')
+        self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent|'+hyper)
         self.env.seed(seed)
 
     def get_env(self):
@@ -183,25 +184,28 @@ class Worker():
                 self.episode_lengths.append(episode_step_count)
                 self.episode_mean_values.append(np.mean(episode_values))
 
-                # if episode_count % 10 == 0
-                if episode_count % 1 == 0 and not episode_count % 100 == 0 and not self.is_test:
-                    summary = tf.Summary()
-                    summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
-                    summary.value.add(tag='Perf/Reward', simple_value=float(self.episode_rewards[-1]))
-                    summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
-                    summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
-                    summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
-                    summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
-                    summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))
-                    summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
-                    summary.value.add(tag='Losses/Grad Norm', simple_value=float(g_n))
-                    summary.value.add(tag='Losses/Var Norm', simple_value=float(v_n))
-                    self.summary_writer.add_summary(summary, episode_count)
-                    self.summary_writer.flush()
-
                 if self.name == 'worker_0':
+                    if not self.is_test:
+                        summary = tf.Summary()
+                        summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
+                        summary.value.add(tag='Perf/Reward', simple_value=float(self.episode_rewards[-1]))
+                        summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
+                        summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
+                        summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
+                        summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
+                        summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))
+                        summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
+                        summary.value.add(tag='Losses/Grad Norm', simple_value=float(g_n))
+                        summary.value.add(tag='Losses/Var Norm', simple_value=float(v_n))
+                        self.summary_writer.add_summary(summary, episode_count)
+                        self.summary_writer.flush()
+
                     if episode_count % 100 == 0 and not self.is_test:
-                        saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
+                        pass
+                        #saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
+
+                    if episode_count >= HYPER_SWITCH:
+                        coord.request_stop()
 
                     sess.run(self.increment) # Next global episode
 

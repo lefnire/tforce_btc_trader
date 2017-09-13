@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from talib.abstract import SMA, RSI, ATR, EMA
 from sklearn import preprocessing
 from sklearn.externals import joblib
-from tradingWithPython.lib.backtest import Backtest
 from collections import Counter
 from sqlalchemy.sql import text
 import tensorflow as tf
@@ -125,7 +124,7 @@ class BitcoinEnv(Environment):
                 # EMA(xchange_df, timeperiod=9),
                 # EMA(xchange_df, timeperiod=20),
                 # SMA(xchange_df, timeperiod=50),
-                #SMA(xchange_df, timeperiod=200),
+                # SMA(xchange_df, timeperiod=200),
             ]
 
         states = np.nan_to_num(np.column_stack(columns))

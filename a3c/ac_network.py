@@ -5,7 +5,7 @@ import tensorflow.contrib.slim as slim
 # Clipping ratio for gradients
 CLIP_NORM = 40.0
 # Cell units
-CELL_UNITS = 256
+# CELL_UNITS = 256
 DROPOUT = .2
 
 #Used to initialize weights for policy and value output layers
@@ -17,26 +17,36 @@ def normalized_columns_initializer(std=1.0):
     return _initializer
 
 class AC_Network():
-    def __init__(self, s_size, a_size, scope, trainer):
+    def __init__(self, s_size, a_size, scope, trainer, hyper):
+        hyper_k, hyper_v = hyper.split(':')
+        use_dropout = hyper != 'dropout:off'
+        use_tanh = hyper == 'activation:tanh'
+        CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 256
+
         with tf.variable_scope(scope):
-            # TRY (current winners: elu+512+3L (was a mistake? 512*2L?)
-            # CURRENT: 256
-            # NEXT: 3rd dense, batch normalization, ec2
+            # NEXT: batch normalization, dense last (2L)
             he_init = tf.contrib.layers.variance_scaling_initializer()
 
             # Input
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
-            net = tf.layers.dropout(self.inputs, rate=DROPOUT, training=True)
+            net = self.inputs
+            if use_dropout:
+                net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
             # Layer 1 (Dense)
-            net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
-            net = tf.layers.dropout(net, rate=DROPOUT, training=True)
+            if use_tanh:
+                net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
+            else:
+                net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.tanh)
+            if use_dropout:
+                net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
             # Recurrent network for temporal dependencies
             # Original: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2
             # TODO Multi-layer: https://medium.com/@erikhallstrm/using-the-tensorflow-multilayered-lstm-api-f6e7da7bbe40
             lstm_cell = tf.nn.rnn_cell.LSTMCell(CELL_UNITS, state_is_tuple=True)
-            lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=1-DROPOUT)
+            if use_dropout:
+                lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=1-DROPOUT)
             c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
             h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
             self.state_init = [c_init, h_init]
@@ -54,15 +64,22 @@ class AC_Network():
             rnn_out = tf.reshape(lstm_outputs, [-1, CELL_UNITS])
 
             # Layer 3 (Dense)
-            net = tf.layers.dense(rnn_out, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
-            rnn_out = tf.layers.dropout(net, rate=DROPOUT, training=True)
+            net = rnn_out
+            n_layers = int(hyper_v)-2 if hyper_k == 'layers' else 3
+            for _ in range(n_layers):
+                if use_tanh:
+                    net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.tanh)
+                else:
+                    net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
+                if use_dropout:
+                    net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
             # Output layers for policy and value estimations
-            self.policy = slim.fully_connected(rnn_out, a_size,
+            self.policy = slim.fully_connected(net, a_size,
                                                activation_fn=tf.nn.softmax,
                                                weights_initializer=normalized_columns_initializer(0.01),
                                                biases_initializer=None)
-            self.value = slim.fully_connected(rnn_out, 1,
+            self.value = slim.fully_connected(net, 1,
                                               activation_fn=None,
                                               weights_initializer=normalized_columns_initializer(1.0),
                                               biases_initializer=None)
