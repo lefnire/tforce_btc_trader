@@ -25,13 +25,15 @@ class BitcoinEnv(Environment):
 
     START_CAP = 1000
 
-    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=False, abs_reward=False):
+    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=False, abs_reward=False,
+                 indicators=False):
         """Initializes a minimal test environment."""
         self.limit = limit
         self.agent_type = agent_type
         self.agent_name = agent_name
         self.scale_features = scale_features
         self.abs_reward = abs_reward
+        self.indicators = indicators
 
         self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent'])
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
@@ -47,9 +49,8 @@ class BitcoinEnv(Environment):
         else:
             return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
 
-    @staticmethod
-    def num_features():
-        num = 4  # num features from self._xform_data
+    def num_features(self):
+        num = 8 if self.indicators else 4  # num features from self._xform_data
         num *= len(data.tables)  # That many features per table
         num += 2  # [self.cash, self.value]
         return num
@@ -112,20 +113,22 @@ class BitcoinEnv(Environment):
                 self.diff(xchange_df['high']),
                 self.diff(xchange_df['low']),
                 self.diff(xchange_df['volume']),
-
-                ## Original indicators from boilerplate
-                # SMA(xchange_df, timeperiod=15),
-                # SMA(xchange_df, timeperiod=60),
-                # RSI(xchange_df, timeperiod=14),
-                # ATR(xchange_df, timeperiod=14),
-
-                ## Indicators from "How to Day Trade For a Living" (try these)
-                ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
-                # EMA(xchange_df, timeperiod=9),
-                # EMA(xchange_df, timeperiod=20),
-                # SMA(xchange_df, timeperiod=50),
-                # SMA(xchange_df, timeperiod=200),
             ]
+            if self.indicators:
+                columns += [
+                    ## Original indicators from boilerplate
+                    # SMA(xchange_df, timeperiod=15),
+                    # SMA(xchange_df, timeperiod=60),
+                    # RSI(xchange_df, timeperiod=14),
+                    # ATR(xchange_df, timeperiod=14),
+
+                    ## Indicators from "How to Day Trade For a Living" (try these)
+                    ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
+                    self.diff(EMA(xchange_df, timeperiod=9)),
+                    self.diff(EMA(xchange_df, timeperiod=20)),
+                    self.diff(SMA(xchange_df, timeperiod=50)),
+                    self.diff(SMA(xchange_df, timeperiod=200)),
+                ]
 
         states = np.nan_to_num(np.column_stack(columns))
         prices = df['gdax_btcusd_last'].values

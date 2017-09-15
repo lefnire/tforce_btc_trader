@@ -26,7 +26,7 @@ from a3c.ac_network import AC_Network
 # Gym environment
 
 ENV_NAME = 'BitcoinEnv'
-STATE_DIM = BitcoinEnv.num_features()
+# STATE_DIM = BitcoinEnv.num_features()
 ACTION_DIM = 3
 # Directory for storing gym results
 MONITOR_DIR = './results/' + ENV_NAME
@@ -54,13 +54,20 @@ def main(_):
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
 
-    # Later: indicators, mini_batch_size, reward_factor, ...
-    for hyper in ['neurons:256', 'neurons:512',
-                  'layers:2', 'layers:3', 'layers:4',
-                  'activation:tanh', 'activation:elu',
-                  'dropout:off', 'dropout:on']:
+    # Later: indicators, reward_factor, ...
+    # unclear: indicators, peepholes
+    # definite winners: N256, L1-2, batch150
+    # possible winners: tanh, dropout
+    # for hyper in ['neurons:256', 'neurons:512',
+    #               'layers:2', 'layers:3', 'layers:4',
+    #               'activation:tanh', 'activation:elu',
+    #               'dropout:off', 'dropout:on']:
+    for hyper in ['activation:elu', 'activation:tanh']:
         agent_conf.wipe_rows('A3CAgent|' + hyper)
         tf.reset_default_graph()
+
+        btc_env = BitcoinEnv(agent_name='A3CAgent|'+hyper, indicators=hyper=='indicators:on')
+        STATE_DIM = btc_env.num_features()
 
         # with tf.device("/cpu:0"):
         np.random.seed(RANDOM_SEED)
@@ -88,7 +95,7 @@ def main(_):
             #env.monitor.start(MONITOR_DIR, video_callable=False, force=True)
         # END with tf.device("/cpu:0"):
 
-        # tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2))
+        # tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
         with tf.Session() as sess:
             coord = tf.train.Coordinator()
             if LOAD_MODEL or TEST_MODEL:

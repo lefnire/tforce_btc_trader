@@ -7,12 +7,12 @@ from a3c.ac_network import AC_Network
 from btc_env import BitcoinEnv
 
 # Size of mini batches to run training on
-MINI_BATCH = 150  # 30
+MINI_BATCH = 150  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 10000
-EPSILON_EPISODES = 100
-HYPER_SWITCH = 400
+EPSILON_EPISODES = 60
+HYPER_SWITCH = 200
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
@@ -62,13 +62,15 @@ class Worker():
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
+        self.hyper = hyper
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
         self.local_AC = AC_Network(s_size, a_size, self.name, trainer, hyper)
         self.update_local_ops = update_target_graph('global', self.name)
 
         # self.env = gym.make(env_name)
-        self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent|'+hyper)
+        indicators = hyper == 'indicators:on'
+        self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent|'+hyper, indicators=indicators)
         self.env.seed(seed)
 
     def get_env(self):
@@ -163,6 +165,7 @@ class Worker():
                     episode_values.append(v[0, 0])
 
                     # Train on mini batches from episode
+                    MINI_BATCH = int(self.hyper.split(':')[1]) if self.hyper.startswith('mini_batch') else 150
                     if len(episode_mini_buffer) == MINI_BATCH and not self.is_test:
                         v1 = sess.run([self.local_AC.value],
                                       feed_dict={self.local_AC.inputs: [s],
@@ -190,7 +193,7 @@ class Worker():
                         summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
                         summary.value.add(tag='Perf/Reward', simple_value=float(self.episode_rewards[-1]))
                         summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
-                        summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
+                        # summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
                         summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
                         summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
                         summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))

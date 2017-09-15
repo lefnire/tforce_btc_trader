@@ -24,6 +24,8 @@ class AC_Network():
         CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 256
 
         with tf.variable_scope(scope):
+            # Winners: 2L
+            # Losers: 128N
             # NEXT: batch normalization, dense last (2L)
             he_init = tf.contrib.layers.variance_scaling_initializer()
 
@@ -35,9 +37,9 @@ class AC_Network():
 
             # Layer 1 (Dense)
             if use_tanh:
-                net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
-            else:
                 net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.tanh)
+            else:
+                net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
             if use_dropout:
                 net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
@@ -65,7 +67,7 @@ class AC_Network():
 
             # Layer 3 (Dense)
             net = rnn_out
-            n_layers = int(hyper_v)-2 if hyper_k == 'layers' else 3
+            n_layers = int(hyper_v)-2 if hyper_k == 'layers' else 2
             for _ in range(n_layers):
                 if use_tanh:
                     net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.tanh)
