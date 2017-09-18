@@ -7,7 +7,7 @@ from a3c.ac_network import AC_Network
 from btc_env import BitcoinEnv
 
 # Size of mini batches to run training on
-MINI_BATCH = 150  # winner=150
+MINI_BATCH = 512  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 10000
@@ -100,19 +100,22 @@ class Worker():
         # Update the global network using gradients from loss
         # Generate network statistics to periodically save
         # sess.run(self.local_AC.reset_state_op)
-        rnn_state = self.local_AC.state_init
-        feed_dict = {self.local_AC.target_v: discounted_rewards,
-                     self.local_AC.inputs: np.vstack(states),
-                     self.local_AC.actions: np.vstack(actions),
-                     self.local_AC.advantages: discounted_advantages,
-                     self.local_AC.state_in[0]: rnn_state[0],
-                     self.local_AC.state_in[1]: rnn_state[1]}
-        v_l, p_l, e_l, g_n, v_n, _ = sess.run([self.local_AC.value_loss,
-                                               self.local_AC.policy_loss,
-                                               self.local_AC.entropy,
-                                               self.local_AC.grad_norms,
-                                               self.local_AC.var_norms,
-                                               self.local_AC.apply_grads],
+        net = self.local_AC
+        rnn_state = net.state_init
+        feed_dict = {net.training: True,
+                     net.target_v: discounted_rewards,
+                     net.inputs: np.vstack(states),
+                     net.actions: np.vstack(actions),
+                     net.advantages: discounted_advantages,
+                     net.state_in[0]: rnn_state[0],
+                     net.state_in[1]: rnn_state[1],
+                     }
+        v_l, p_l, e_l, g_n, v_n, _ = sess.run([net.value_loss,
+                                               net.policy_loss,
+                                               net.entropy,
+                                               net.grad_norms,
+                                               net.var_norms,
+                                               net.apply_grads],
                                               feed_dict=feed_dict)
         return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n
 
@@ -122,6 +125,7 @@ class Worker():
         print("Starting worker " + str(self.number))
         with sess.as_default(), sess.graph.as_default():
             while not coord.should_stop():
+                net = self.local_AC
                 sess.run(self.update_local_ops)
                 episode_buffer = []
                 episode_mini_buffer = []
@@ -134,7 +138,7 @@ class Worker():
                 terminal = False
                 s = self.env.reset()
 
-                rnn_state = self.local_AC.state_init
+                rnn_state = net.state_init
 
                 # Run an episode
                 while not terminal:
@@ -143,10 +147,10 @@ class Worker():
                         self.env.render()
 
                     # Get preferred action distribution
-                    a_dist, v, rnn_state = sess.run([self.local_AC.policy, self.local_AC.value, self.local_AC.state_out],
-                                         feed_dict={self.local_AC.inputs: [s],
-                                                    self.local_AC.state_in[0]: rnn_state[0],
-                                                    self.local_AC.state_in[1]: rnn_state[1]})
+                    a_dist, v, rnn_state = sess.run([net.policy, net.value, net.state_out],
+                                         feed_dict={net.inputs: [s],
+                                                    net.state_in[0]: rnn_state[0],
+                                                    net.state_in[1]: rnn_state[1]})
 
                     a0 = weighted_pick(a_dist[0], 1, self.epsilon) # Use stochastic distribution sampling
                     if self.is_test:
@@ -165,12 +169,12 @@ class Worker():
                     episode_values.append(v[0, 0])
 
                     # Train on mini batches from episode
-                    MINI_BATCH = int(self.hyper.split(':')[1]) if self.hyper.startswith('mini_batch') else 150
-                    if len(episode_mini_buffer) == MINI_BATCH and not self.is_test:
-                        v1 = sess.run([self.local_AC.value],
-                                      feed_dict={self.local_AC.inputs: [s],
-                                                    self.local_AC.state_in[0]: rnn_state[0],
-                                                    self.local_AC.state_in[1]: rnn_state[1]})
+                    mini_batch = int(self.hyper.split(':')[1]) if self.hyper.startswith('mini_batch') else MINI_BATCH
+                    if len(episode_mini_buffer) == mini_batch and not self.is_test:
+                        v1 = sess.run([net.value],
+                                      feed_dict={net.inputs: [s],
+                                                 net.state_in[0]: rnn_state[0],
+                                                 net.state_in[1]: rnn_state[1]})
                         v_l, p_l, e_l, g_n, v_n = self.train(episode_mini_buffer, sess, gamma, v1[0][0])
                         episode_mini_buffer = []
 

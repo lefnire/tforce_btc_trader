@@ -58,7 +58,7 @@ def main(_):
     # likely winners: elu, 2L
     # try: batch normalization, indicators, reward_factor, dense last (2L), peepholes
     # for hyper in ['neurons:256', 'neurons:512', 'layers:2', 'layers:3', 'layers:4', 'activation:tanh', 'activation:elu', 'dropout:off', 'dropout:on']:
-    for hyper in ['activation:elu']:
+    for hyper in ['batch:norm']:
         agent_conf.wipe_rows('A3CAgent|' + hyper)
         tf.reset_default_graph()
 
