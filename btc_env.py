@@ -160,8 +160,8 @@ class BitcoinEnv(Environment):
             # signal = 0 if -40 < action < 5 else action
             signal = 0 if -1 < action < 1 else action
         else:
-            signal = 5 if action == self.ACTION_BUY\
-                else -5 if action == self.ACTION_SELL\
+            signal = 40 if action == self.ACTION_BUY\
+                else -40 if action == self.ACTION_SELL\
                 else 0
 
         self.signals.append(signal)

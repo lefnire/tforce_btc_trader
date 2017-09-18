@@ -24,24 +24,19 @@ class AC_Network():
         CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 256
 
         with tf.variable_scope(scope):
-            # Winners: 2L
-            # Losers: 128N
-            # NEXT: batch normalization, dense last (2L)
             he_init = tf.contrib.layers.variance_scaling_initializer()
 
             # Input
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
             net = self.inputs
-            if use_dropout:
-                net = tf.layers.dropout(net, rate=DROPOUT, training=True)
+            net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
             # Layer 1 (Dense)
             if use_tanh:
                 net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.tanh)
             else:
                 net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
-            if use_dropout:
-                net = tf.layers.dropout(net, rate=DROPOUT, training=True)
+            net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
             # Recurrent network for temporal dependencies
             # Original: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2
@@ -67,14 +62,6 @@ class AC_Network():
 
             # Layer 3 (Dense)
             net = rnn_out
-            n_layers = int(hyper_v)-2 if hyper_k == 'layers' else 2
-            for _ in range(n_layers):
-                if use_tanh:
-                    net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.tanh)
-                else:
-                    net = tf.layers.dense(net, CELL_UNITS, activation=tf.nn.elu, kernel_initializer=he_init)
-                if use_dropout:
-                    net = tf.layers.dropout(net, rate=DROPOUT, training=True)
 
             # Output layers for policy and value estimations
             self.policy = slim.fully_connected(net, a_size,

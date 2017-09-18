@@ -11,8 +11,8 @@ MINI_BATCH = 150  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 10000
-EPSILON_EPISODES = 60
-HYPER_SWITCH = 200
+EPSILON_EPISODES = 150
+HYPER_SWITCH = 500
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
