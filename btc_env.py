@@ -50,7 +50,7 @@ class BitcoinEnv(Environment):
             return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
 
     def num_features(self):
-        num = 8 if self.indicators else 4  # num features from self._xform_data
+        num = 8 if self.indicators else 5  # num features from self._xform_data
         num *= len(data.tables)  # That many features per table
         num += 2  # [self.cash, self.value]
         return num
@@ -96,6 +96,29 @@ class BitcoinEnv(Environment):
             .fillna(0).values
 
     def _xform_data(self, df):
+        if data.DB == 'coins2':
+            columns = []
+            for k in data.tables:
+                xchange_df = df.rename(columns={
+                    k + '_open': 'open',
+                    k + '_high': 'high',
+                    k + '_low': 'low',
+                    k + '_close': 'close',
+                    k + '_volume': 'volume'
+                })
+                columns += [
+                    self.diff(xchange_df['open']),
+                    self.diff(xchange_df['high']),
+                    self.diff(xchange_df['low']),
+                    self.diff(xchange_df['close']),
+                    self.diff(xchange_df['volume']),
+                ]
+            states = np.nan_to_num(np.column_stack(columns))
+            prices = df['g_close'].values
+            return states, prices
+
+        ### -----------
+
         columns = []
         for k in data.tables:
             # TA-Lib requires specifically-named columns (#TODO need to get our hands on "open")
@@ -146,7 +169,7 @@ class BitcoinEnv(Environment):
 
         # Fetch random slice of rows from the database (based on limit)
         offset = random.randint(0, data.count_rows() - self.limit)
-        df = data.db_to_dataframe(scaler=None, limit=self.limit, offset=offset)
+        df = data.db_to_dataframe(limit=self.limit, offset=offset)
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self.pct_change(self.prices)
 

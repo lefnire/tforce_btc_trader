@@ -64,7 +64,6 @@ class AC_Network():
             rnn_out = tf.reshape(lstm_outputs, [-1, CELL_UNITS])
 
             net = rnn_out
-            net = tf.layers.batch_normalization(net, training=training, momentum=.9)
 
             # Output layers for policy and value estimations
             self.policy = slim.fully_connected(net, a_size,

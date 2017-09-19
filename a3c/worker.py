@@ -10,9 +10,9 @@ from btc_env import BitcoinEnv
 MINI_BATCH = 512  # winner=150
 REWARD_FACTOR = 0.001
 
-STEPS = 10000
-EPSILON_EPISODES = 150
-HYPER_SWITCH = 500
+STEPS = 1000
+EPSILON_STEPS = 1e6
+HYPER_SWITCH = 1e8
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
@@ -183,8 +183,8 @@ class Worker():
                     total_steps += 1
                     episode_step_count += 1
 
-                if self.epsilon > 0.1:  # decrement epsilon over time
-                    self.epsilon -= (1.0 / EPSILON_EPISODES)
+                    if self.epsilon > 0.1:  # decrement epsilon over time
+                        self.epsilon -= (1.0 / EPSILON_STEPS)
 
                 self.episode_rewards.append(episode_reward)
                 self.episode_totals.append(self.env.cash + self.env.value)
