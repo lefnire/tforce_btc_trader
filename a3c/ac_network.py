@@ -25,20 +25,17 @@ class AC_Network():
         CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 256
 
         with tf.variable_scope(scope):
-            he_init = tf.contrib.layers.variance_scaling_initializer()
-
             # Input
-            self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
+            he_init = tf.contrib.layers.variance_scaling_initializer()
             self.training = training = tf.placeholder_with_default(False, shape=())
-
-            # net = tf.layers.batch_normalization(self.inputs, training=training, momentum=.9)
+            self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
             net = tf.layers.dropout(self.inputs, rate=DROPOUT, training=training)
-            # net = self.inputs
 
             # Layer 1 (Dense)
-            net = tf.layers.dense(net, CELL_UNITS, kernel_initializer=he_init, use_bias=False)
-            net = tf.layers.batch_normalization(net, training=training, momentum=.9)
-            net = tf.nn.elu(net)
+            # net = tf.layers.dense(net, CELL_UNITS, kernel_initializer=he_init, use_bias=False)
+            # net = tf.layers.batch_normalization(self.inputs, training=training, momentum=.9)
+            # net = tf.nn.elu(net)
+            net = tf.layers.dense(net, CELL_UNITS, kernel_initializer=he_init, activation=tf.nn.elu)
             net = tf.layers.dropout(net, rate=DROPOUT, training=training)
 
             # Recurrent network for temporal dependencies
@@ -63,14 +60,12 @@ class AC_Network():
             self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
             rnn_out = tf.reshape(lstm_outputs, [-1, CELL_UNITS])
 
-            net = rnn_out
-
             # Output layers for policy and value estimations
-            self.policy = slim.fully_connected(net, a_size,
+            self.policy = slim.fully_connected(rnn_out, a_size,
                                                activation_fn=tf.nn.softmax,
                                                weights_initializer=normalized_columns_initializer(0.01),
                                                biases_initializer=None)
-            self.value = slim.fully_connected(net, 1,
+            self.value = slim.fully_connected(rnn_out, 1,
                                               activation_fn=None,
                                               weights_initializer=normalized_columns_initializer(1.0),
                                               biases_initializer=None)

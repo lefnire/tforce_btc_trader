@@ -11,7 +11,7 @@
 # Author: Liam Pettigrew
 # =================================================
 
-import os, threading, multiprocessing, shutil
+import os, threading, multiprocessing, shutil, time
 import numpy as np
 import tensorflow as tf
 
@@ -42,7 +42,7 @@ TEST_MODEL = False
 # Directory for storing session model
 MODEL_DIR = './model/'
 # Learning rate
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.001
 # Discount rate for advantage estimation and reward discounting
 GAMMA = 0.99
 
@@ -58,7 +58,7 @@ def main(_):
     # likely winners: elu, 2L
     # try: batch normalization, indicators, reward_factor, dense last (2L), peepholes
     # for hyper in ['neurons:256', 'neurons:512', 'layers:2', 'layers:3', 'layers:4', 'activation:tanh', 'activation:elu', 'dropout:off', 'dropout:on']:
-    for hyper in ['ohlc:60']:
+    for hyper in ['lstm:remember']:
         agent_conf.wipe_rows('A3CAgent|' + hyper)
         tf.reset_default_graph()
 
@@ -113,6 +113,7 @@ def main(_):
                     worker_work = lambda: worker.work(GAMMA, sess, coord, saver)
                     t = threading.Thread(target=(worker_work))
                     t.start()
+                    time.sleep(.5)
                     worker_threads.append(t)
                 coord.join(worker_threads)
 

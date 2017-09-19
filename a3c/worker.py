@@ -7,7 +7,7 @@ from a3c.ac_network import AC_Network
 from btc_env import BitcoinEnv
 
 # Size of mini batches to run training on
-MINI_BATCH = 512  # winner=150
+MINI_BATCH = 100  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 1000
@@ -101,22 +101,24 @@ class Worker():
         # Generate network statistics to periodically save
         # sess.run(self.local_AC.reset_state_op)
         net = self.local_AC
-        rnn_state = net.state_init
-        feed_dict = {net.training: True,
-                     net.target_v: discounted_rewards,
-                     net.inputs: np.vstack(states),
-                     net.actions: np.vstack(actions),
-                     net.advantages: discounted_advantages,
-                     net.state_in[0]: rnn_state[0],
-                     net.state_in[1]: rnn_state[1],
-                     }
-        v_l, p_l, e_l, g_n, v_n, _ = sess.run([net.value_loss,
-                                               net.policy_loss,
-                                               net.entropy,
-                                               net.grad_norms,
-                                               net.var_norms,
-                                               net.apply_grads],
-                                              feed_dict=feed_dict)
+        feed_dict = {
+            net.training: True,
+            net.target_v: discounted_rewards,
+            net.inputs: np.vstack(states),
+            net.actions: np.vstack(actions),
+            net.advantages: discounted_advantages,
+            net.state_in[0]: self.batch_rnn_state[0],
+            net.state_in[1]: self.batch_rnn_state[1],
+        }
+        v_l, p_l, e_l, g_n, v_n, self.batch_rnn_state, _ = sess.run([
+            net.value_loss,
+            net.policy_loss,
+            net.entropy,
+            net.grad_norms,
+            net.var_norms,
+            net.state_out,
+            net.apply_grads
+        ], feed_dict=feed_dict)
         return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n
 
     def work(self, gamma, sess, coord, saver):
@@ -128,7 +130,6 @@ class Worker():
                 net = self.local_AC
                 sess.run(self.update_local_ops)
                 episode_buffer = []
-                episode_mini_buffer = []
                 episode_values = []
                 episode_states = []
                 episode_reward = 0
@@ -139,6 +140,7 @@ class Worker():
                 s = self.env.reset()
 
                 rnn_state = net.state_init
+                self.batch_rnn_state = rnn_state
 
                 # Run an episode
                 while not terminal:
@@ -160,23 +162,19 @@ class Worker():
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
                     s2, r, terminal = self.env.step(np.argmax(a))
-
                     episode_reward += r
-
                     episode_buffer.append([s, a, r, s2, terminal, v[0, 0]])
-                    episode_mini_buffer.append([s, a, r, s2, terminal, v[0, 0]])
-
                     episode_values.append(v[0, 0])
 
                     # Train on mini batches from episode
                     mini_batch = int(self.hyper.split(':')[1]) if self.hyper.startswith('mini_batch') else MINI_BATCH
-                    if len(episode_mini_buffer) == mini_batch and not self.is_test:
+                    if len(episode_buffer) == mini_batch and not self.is_test:
                         v1 = sess.run([net.value],
                                       feed_dict={net.inputs: [s],
                                                  net.state_in[0]: rnn_state[0],
                                                  net.state_in[1]: rnn_state[1]})
-                        v_l, p_l, e_l, g_n, v_n = self.train(episode_mini_buffer, sess, gamma, v1[0][0])
-                        episode_mini_buffer = []
+                        v_l, p_l, e_l, g_n, v_n = self.train(episode_buffer, sess, gamma, v1[0][0])
+                        episode_buffer = []
 
                     # Set previous state for next step
                     s = s2

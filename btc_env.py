@@ -234,6 +234,10 @@ class BitcoinEnv(Environment):
     step = execute  # alias execute as step, called step by some frameworks
 
     def write_results(self):
+        # skip some for performance
+        if len(self.episode_results['cash']) % 10 != 0:
+            return
+
         episode = len(self.episode_results['cash'])
         reward, cash, value = self.total_reward, self.cash, self.value
         print("{}) time:{}, reward:{} totals:{}, actions:{}".format(
