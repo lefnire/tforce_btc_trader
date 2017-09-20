@@ -94,7 +94,7 @@ def main(_):
             #env.monitor.start(MONITOR_DIR, video_callable=False, force=True)
         # END with tf.device("/cpu:0"):
 
-        tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
+        tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.6))
         with tf.Session(config=tf_session_config) as sess:
             coord = tf.train.Coordinator()
             if LOAD_MODEL or TEST_MODEL:

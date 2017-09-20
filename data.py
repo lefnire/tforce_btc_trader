@@ -1,7 +1,7 @@
 import pandas as pd
 from sqlalchemy import create_engine
 
-DB = "coins"
+DB = "kaggle"
 
 engine = create_engine("postgres://lefnire:lefnire@localhost:5432/{}".format(DB))
 conn = engine.connect()
@@ -24,6 +24,12 @@ elif DB == 'coins2':
     columns = ['open', 'high', 'low', 'close', 'volume']
     close_col = 'close'
     predict_col = 'g_close'
+elif DB == 'kaggle':
+    tables = ['bitstamp', 'btcn']
+    ts_col = 'timestamp'
+    columns = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']
+    close_col = 'close'
+    predict_col = 'bitstamp_close'
 
 
 def wipe_rows(agent_name):
@@ -42,7 +48,7 @@ def wipe_rows(agent_name):
             primary key (episode, agent_name)
     );
     """)
-    conn.execute("delete from episodes where agent_name='{}'".format(agent_name))
+    conn.execute(f"delete from episodes where agent_name='{agent_name}'")
 
 
 mode = 'ALL'  # ALL|TRAIN|TEST
@@ -86,7 +92,8 @@ def _db_to_dataframe_main(limit='ALL', offset=0):
         for t in tables
     )
 
-    interval = 10  # what time-intervals to group by? 60 would be 1-minute intervals
+    # interval = 10  # what time-intervals to group by? 60 would be 1-minute intervals
+    # TODO https://gis.stackexchange.com/a/127874/105932 for arbitrary interval-grouping
     for (i, table) in enumerate(tables):
         query += " from (" if i == 0 else " inner join ("
         avg_cols = ', '.join(f'avg({c}) as {c}' for c in columns)
@@ -94,14 +101,14 @@ def _db_to_dataframe_main(limit='ALL', offset=0):
               select {avg_cols},
                 date_trunc('second', {ts_col} at time zone 'utc') as ts
               from {table}
-              where {ts_col} > now() - interval '1 year'
+              where {ts_col} > now() - interval '2 years'
               group by ts
             ) {table}
             """
         if i != 0:
-            query += 'on {a}.ts={b}.ts'.format(a=table, b=tables[i - 1])
+            query += f'on {table}.ts={tables[i - 1]}.ts'
 
-    query += " order by {}.ts desc limit {} offset {}".format(tables[0], limit, offset)
+    query += f" order by {tables[0]}.ts desc limit {limit} offset {offset}"
 
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
