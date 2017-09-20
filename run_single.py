@@ -1,7 +1,7 @@
 from tensorforce.execution import Runner
-import agent_conf
+import agent_conf, data
 
-agent_conf.wipe_rows()
+data.wipe_rows(agent_conf.AGENT_NAME)
 conf = agent_conf.conf(
     tf_saver=False,
     tf_summary="logs_async",

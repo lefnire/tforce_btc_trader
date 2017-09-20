@@ -10,14 +10,39 @@ if DB == 'coins':
     tables = ['okcoin_btccny', 'gdax_btcusd']
     ts_col = 'ts'
     columns = ['last', 'high', 'low', 'volume']
+    close_col = 'last'
+    predict_col = 'gdax_btcusd_last'
 elif DB.endswith('btc'):  # alex's database
     tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd']
     ts_col = 'trade_timestamp'
     columns = ['last', 'high', 'low', 'volume']
+    close_col = 'last'
+    predict_col = 'gdax_btcusd_last'
 elif DB == 'coins2':
     tables = ['g', 'o']
     ts_col = 'close_time'
     columns = ['open', 'high', 'low', 'close', 'volume']
+    close_col = 'close'
+    predict_col = 'g_close'
+
+
+def wipe_rows(agent_name='VPGAgent'):
+    conn.execute("""
+    create table if not exists episodes
+    (
+        episode integer not null,
+        reward double precision,
+        cash double precision,
+        value double precision,
+        agent_name char(256) not null,
+        y double precision[],
+        signals double precision[],
+        steps integer,
+        constraint episodes_pkey
+            primary key (episode, agent_name)
+    );
+    """)
+    conn.execute("delete from episodes where agent_name='{}'".format(agent_name))
 
 
 def count_rows():

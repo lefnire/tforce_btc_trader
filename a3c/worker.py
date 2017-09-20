@@ -11,8 +11,9 @@ MINI_BATCH = 100  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 1000
-EPSILON_STEPS = 1e6
+EPSILON_STEPS = 2e6
 HYPER_SWITCH = 1e8
+
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
@@ -24,6 +25,7 @@ def update_target_graph(from_scope,to_scope):
     for from_var,to_var in zip(from_vars,to_vars):
         op_holder.append(to_var.assign(from_var))
     return op_holder
+
 
 # Weighted random selection returns n_picks random indexes.
 # the chance to pick the index i is give by the weight weights[i].
@@ -42,12 +44,14 @@ def weighted_pick(weights, n_picks, epsilon=0):
 def discounting(x, gamma):
     return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
 
+
 # Normalization of inputs and outputs
 def norm(x, upper, lower=0.):
     return (x-lower)/max((upper-lower), 1e-12)
 
+
 class Worker():
-    def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, env_name, seed, test, hyper):
+    def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, seed, test, hyper):
         self.name = "worker_" + str(name)
         self.number = name
         self.model_path = model_path
@@ -58,7 +62,7 @@ class Worker():
         self.episode_totals = []
         self.episode_lengths = []
         self.episode_mean_values = []
-        self.summary_writer = tf.summary.FileWriter("train_" + hyper)
+        self.summary_writer = tf.summary.FileWriter("./saves/train/" + hyper)
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
@@ -68,7 +72,6 @@ class Worker():
         self.local_AC = AC_Network(s_size, a_size, self.name, trainer, hyper)
         self.update_local_ops = update_target_graph('global', self.name)
 
-        # self.env = gym.make(env_name)
         indicators = hyper == 'indicators:on'
         self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent|'+hyper, indicators=indicators)
         self.env.seed(seed)
@@ -181,7 +184,7 @@ class Worker():
                     total_steps += 1
                     episode_step_count += 1
 
-                    if self.epsilon > 0.1:  # decrement epsilon over time
+                    if self.epsilon > 0.01:  # decrement epsilon over time
                         self.epsilon -= (1.0 / EPSILON_STEPS)
 
                 self.episode_rewards.append(episode_reward)
@@ -205,9 +208,8 @@ class Worker():
                         self.summary_writer.add_summary(summary, episode_count)
                         self.summary_writer.flush()
 
-                    if episode_count % 100 == 0 and not self.is_test:
-                        pass
-                        #saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
+                    if episode_count % 50 == 0 and not self.is_test:
+                        saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
 
                     if episode_count >= HYPER_SWITCH:
                         coord.request_stop()

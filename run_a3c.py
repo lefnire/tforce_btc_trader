@@ -7,6 +7,7 @@ from tensorforce.execution import Runner
 from tensorforce.util import log_levels
 
 import agent_conf
+import data
 
 
 def main():
@@ -38,7 +39,7 @@ def main():
         return 0
 
     if not args.is_child:
-        agent_conf.wipe_rows()
+        data.wipe_rows(agent_conf.AGENT_NAME)
 
         # start up child processes
         target_script = os.path.abspath(inspect.stack()[0][1])

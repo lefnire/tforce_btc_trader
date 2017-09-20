@@ -12,25 +12,6 @@ STEPS = 10000
 AGENT_NAME = 'VPGAgent'
 
 
-def wipe_rows(name=AGENT_NAME):
-    conn.execute("""
-    create table if not exists episodes
-    (
-        episode integer not null,
-        reward double precision,
-        cash double precision,
-        value double precision,
-        agent_name char(256) not null,
-        y double precision[],
-        signals double precision[],
-        steps integer,
-        constraint episodes_pkey
-            primary key (episode, agent_name)
-    );
-    """)
-    conn.execute("delete from episodes where agent_name='{}'".format(name))
-
-
 def conf(**kwargs):
     agent_type = AGENT_NAME.split('|')[0]
     env = BitcoinEnv(

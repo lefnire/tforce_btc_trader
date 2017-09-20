@@ -15,7 +15,7 @@ import os, threading, multiprocessing, shutil, time
 import numpy as np
 import tensorflow as tf
 
-import agent_conf
+import data
 from btc_env import BitcoinEnv
 from a3c.worker import Worker
 from a3c.ac_network import AC_Network
@@ -25,11 +25,10 @@ from a3c.ac_network import AC_Network
 # ===========================
 # Gym environment
 
-ENV_NAME = 'BitcoinEnv'
 # STATE_DIM = BitcoinEnv.num_features()
-ACTION_DIM = 3
+# ACTION_DIM = 3
 # Directory for storing gym results
-MONITOR_DIR = './results/' + ENV_NAME
+MONITOR_DIR = './saves/monitor/'
 
 # ==========================
 #   Training Parameters
@@ -40,7 +39,7 @@ LOAD_MODEL = False
 # Test and visualise a trained model
 TEST_MODEL = False
 # Directory for storing session model
-MODEL_DIR = './model/'
+MODEL_DIR = './saves/model/'
 # Learning rate
 LEARNING_RATE = 0.001
 # Discount rate for advantage estimation and reward discounting
@@ -54,16 +53,16 @@ def main(_):
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
 
-    # definite winners: N256, L1-2, batch150
-    # likely winners: elu, 2L
-    # try: batch normalization, indicators, reward_factor, dense last (2L), peepholes
+    # definite winners: N256, L1-2, batch150, elu, 2L (batch normalization is crap-shoot)
+    # try: indicators, reward_factor, dense last (2L), peepholes
     # for hyper in ['neurons:256', 'neurons:512', 'layers:2', 'layers:3', 'layers:4', 'activation:tanh', 'activation:elu', 'dropout:off', 'dropout:on']:
     for hyper in ['lstm:remember']:
-        agent_conf.wipe_rows('A3CAgent|' + hyper)
+        data.wipe_rows('A3CAgent|' + hyper)
         tf.reset_default_graph()
 
-        btc_env = BitcoinEnv(agent_name='A3CAgent|'+hyper, indicators=hyper=='indicators:on')
+        btc_env = BitcoinEnv(agent_name='A3CAgent|'+hyper, indicators=hyper == 'indicators:on')
         STATE_DIM = btc_env.num_features()
+        ACTION_DIM = btc_env.actions['num_actions']
 
         # with tf.device("/cpu:0"):
         np.random.seed(RANDOM_SEED)
@@ -82,7 +81,7 @@ def main(_):
         # Create worker classes
         for i in range(num_workers):
             workers.append(Worker(i, STATE_DIM, ACTION_DIM, trainer, MODEL_DIR, global_episodes,
-                                  ENV_NAME, RANDOM_SEED, TEST_MODEL, hyper))
+                                  RANDOM_SEED, TEST_MODEL, hyper))
         saver = tf.train.Saver(max_to_keep=5)
 
         # Gym monitor
@@ -91,8 +90,8 @@ def main(_):
             #env.monitor.start(MONITOR_DIR, video_callable=False, force=True)
         # END with tf.device("/cpu:0"):
 
-        # tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
-        with tf.Session() as sess:
+        tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
+        with tf.Session(config=tf_session_config) as sess:
             coord = tf.train.Coordinator()
             if LOAD_MODEL or TEST_MODEL:
                 print('Loading Model...')

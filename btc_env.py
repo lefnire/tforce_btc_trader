@@ -50,7 +50,9 @@ class BitcoinEnv(Environment):
             return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
 
     def num_features(self):
-        num = 8 if self.indicators else 5  # num features from self._xform_data
+        num = len(data.columns)
+        if self.indicators:
+            num += 4  # num features from self._get_indicators
         num *= len(data.tables)  # That many features per table
         num += 2  # [self.cash, self.value]
         return num
@@ -96,67 +98,44 @@ class BitcoinEnv(Environment):
             .fillna(0).values
 
     def _xform_data(self, df):
-        if data.DB == 'coins2':
-            columns = []
-            for k in data.tables:
-                xchange_df = df.rename(columns={
-                    k + '_open': 'open',
-                    k + '_high': 'high',
-                    k + '_low': 'low',
-                    k + '_close': 'close',
-                    k + '_volume': 'volume'
-                })
-                columns += [
-                    self.diff(xchange_df['open']),
-                    self.diff(xchange_df['high']),
-                    self.diff(xchange_df['low']),
-                    self.diff(xchange_df['close']),
-                    self.diff(xchange_df['volume']),
-                ]
-            states = np.nan_to_num(np.column_stack(columns))
-            prices = df['g_close'].values
-            return states, prices
-
-        ### -----------
-
         columns = []
         for k in data.tables:
             # TA-Lib requires specifically-named columns (#TODO need to get our hands on "open")
-            xchange_df = df.rename(columns={
-                k + '_last': 'close',
+            c = {
                 k + '_high': 'high',
                 k + '_low': 'low',
+                '{}_{}'.format(k, data.close_col): 'close',
                 k + '_volume': 'volume'
-            })
+            }
+            if data.DB == 'coins2': c[k + '_open'] = 'open'
+            xchange_df = df.rename(columns=c)
 
             # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
             # are absolute values, causing number-range instability
-            columns += [
-                self.diff(xchange_df['close']),
-                self.diff(xchange_df['high']),
-                self.diff(xchange_df['low']),
-                self.diff(xchange_df['volume']),
-            ]
+            columns += list(map(lambda k: self.diff(xchange_df[k]), c.values()))
             if self.indicators:
-                columns += [
-                    ## Original indicators from boilerplate
-                    # SMA(xchange_df, timeperiod=15),
-                    # SMA(xchange_df, timeperiod=60),
-                    # RSI(xchange_df, timeperiod=14),
-                    # ATR(xchange_df, timeperiod=14),
-
-                    ## Indicators from "How to Day Trade For a Living" (try these)
-                    ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
-                    self.diff(EMA(xchange_df, timeperiod=9)),
-                    self.diff(EMA(xchange_df, timeperiod=20)),
-                    self.diff(SMA(xchange_df, timeperiod=50)),
-                    self.diff(SMA(xchange_df, timeperiod=200)),
-                ]
+                columns += self._get_indicators(xchange_df)
 
         states = np.nan_to_num(np.column_stack(columns))
-        prices = df['gdax_btcusd_last'].values
+        prices = df[data.predict_col].values
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/self.cash after each action
         return states, prices
+
+    def _get_indicators(self, df):
+        return [
+            ## Original indicators from boilerplate
+            # SMA(xchange_df, timeperiod=15),
+            # SMA(xchange_df, timeperiod=60),
+            # RSI(xchange_df, timeperiod=14),
+            # ATR(xchange_df, timeperiod=14),
+
+            ## Indicators from "How to Day Trade For a Living" (try these)
+            ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
+            self.diff(EMA(df, timeperiod=9)),
+            self.diff(EMA(df, timeperiod=20)),
+            self.diff(SMA(df, timeperiod=50)),
+            self.diff(SMA(df, timeperiod=200)),
+        ]
 
     def reset(self):
         self.time = time.time()
