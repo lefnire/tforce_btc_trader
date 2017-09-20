@@ -1,7 +1,7 @@
 import pandas as pd
 from sqlalchemy import create_engine
 
-DB = "coins2"
+DB = "coins"
 
 engine = create_engine("postgres://lefnire:lefnire@localhost:5432/{}".format(DB))
 conn = engine.connect()
@@ -12,12 +12,12 @@ if DB == 'coins':
     columns = ['last', 'high', 'low', 'volume']
     close_col = 'last'
     predict_col = 'gdax_btcusd_last'
-elif DB.endswith('btc'):  # alex's database
-    tables = ['norm_btcncny', 'norm_bitstampusd', 'norm_coinbaseusd']
+elif DB == 'alex':
+    tables = ['exch_ticker_bitstamp_usd', 'exch_ticker_coinbase_usd']
     ts_col = 'trade_timestamp'
-    columns = ['last', 'high', 'low', 'volume']
-    close_col = 'last'
-    predict_col = 'gdax_btcusd_last'
+    columns = ['last_trade', 'ask', 'high', 'low', 'vwap', 'volume']
+    close_col = 'last_trade'
+    predict_col = 'exch_ticker_coinbase_usd_ask'
 elif DB == 'coins2':
     tables = ['g', 'o']
     ts_col = 'close_time'
@@ -26,7 +26,7 @@ elif DB == 'coins2':
     predict_col = 'g_close'
 
 
-def wipe_rows(agent_name='VPGAgent'):
+def wipe_rows(agent_name):
     conn.execute("""
     create table if not exists episodes
     (
@@ -45,22 +45,28 @@ def wipe_rows(agent_name='VPGAgent'):
     conn.execute("delete from episodes where agent_name='{}'".format(agent_name))
 
 
+mode = 'ALL'  # ALL|TRAIN|TEST
+def set_mode(m):
+    global mode
+    mode = m
+
+
+row_count = 0
+train_test_split = 0
 def count_rows():
-    # FIXME! when using data other than Tyler's, need to use count based on db_to_dataframe query, which will count
-    # the inner-joined (many rows will disappear and this query won't work)
-    if DB == 'coins2':
-        return conn.execute("""
-            select count(*)
-            from ohlc_gdax g
-            inner join ohlc_okcoin o on o.close_time=g.close_time
-            where g.period='60' and o.period='60';
-        """).fetchone()[0]
-    return conn.execute('select count(*) from {}'.format(tables[0])).fetchone()[0]
+    global row_count, train_test_split
+    if row_count: return row_count  # cached
+    all_rows = db_to_dataframe()
+    row_count = all_rows.shape[0]
+    train_test_split = int(row_count * .8)
+    print('mode: ', mode, ' row_count: ', row_count, ' split: ', train_test_split)
+    row_count = train_test_split if mode == 'TRAIN' else row_count - train_test_split
+    return row_count
 
 
 def _db_to_dataframe_ohlc(limit='ALL', offset=0):
     # 600, 300, 1800
-    query = """
+    query = f"""
     select 
       g.open_price as g_open, g.high_price as g_high, g.low_price as g_low, g.close_price as g_close, g.volume as g_volume,
       o.open_price as o_open, o.high_price as o_high, o.low_price as o_low, o.close_price as o_close, o.volume as o_volume
@@ -69,35 +75,40 @@ def _db_to_dataframe_ohlc(limit='ALL', offset=0):
     where g.period='60' and o.period='60'
     order by g.close_time::integer desc
     limit {limit} offset {offset}
-    """.format(limit=limit, offset=offset)
+    """
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
+
 
 def _db_to_dataframe_main(limit='ALL', offset=0):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
-    # TODO cols we should use: high, low, volume(check) OPEN, CLOSE
     query = 'select ' + ', '.join(
-        ', '.join('{t}.{c} as {t}_{c}'.format(t=t, c=c) for c in columns)
+        ', '.join(f"{t}.{c} as {t}_{c}" for c in columns)
         for t in tables
     )
+
+    interval = 10  # what time-intervals to group by? 60 would be 1-minute intervals
     for (i, table) in enumerate(tables):
         query += " from (" if i == 0 else " inner join ("
-        avg_cols = ', '.join('avg({c}) as {c}'.format(c=c) for c in columns)
-        query += """
-          select {avg_cols},
-            date_trunc('second', {ts_col} at time zone 'utc') as ts
-          from {table}
-          where {ts_col} > now() - interval '1 year'
-          group by ts
-        ) {table}
-        """.format(table=table, ts_col=ts_col, avg_cols=avg_cols)
+        avg_cols = ', '.join(f'avg({c}) as {c}' for c in columns)
+        query += f"""
+              select {avg_cols},
+                date_trunc('second', {ts_col} at time zone 'utc') as ts
+              from {table}
+              where {ts_col} > now() - interval '1 year'
+              group by ts
+            ) {table}
+            """
         if i != 0:
-            query += 'on {a}.ts={b}.ts'.format(a=table, b=tables[i-1])
+            query += 'on {a}.ts={b}.ts'.format(a=table, b=tables[i - 1])
 
     query += " order by {}.ts desc limit {} offset {}".format(tables[0], limit, offset)
 
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
+
 def db_to_dataframe(limit='ALL', offset=0):
+    global mode
+    offset = offset + train_test_split if mode == 'TEST' else offset
     return _db_to_dataframe_ohlc(limit=limit, offset=offset) if DB == 'coins2'\
         else _db_to_dataframe_main(limit=limit, offset=offset)

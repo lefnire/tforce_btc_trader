@@ -46,9 +46,13 @@ LEARNING_RATE = 0.001
 GAMMA = 0.99
 
 
+
 def main(_):
     global master_network
     global global_episodes
+
+    # Set train/test mode for database for all workers
+    data.set_mode('TEST' if TEST_MODEL else 'TRAIN')
 
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)

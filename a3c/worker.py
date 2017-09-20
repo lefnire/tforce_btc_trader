@@ -11,7 +11,7 @@ MINI_BATCH = 100  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 1000
-EPSILON_STEPS = 2e6
+EPSILON_STEPS = 1e6
 HYPER_SWITCH = 1e8
 
 
@@ -62,7 +62,7 @@ class Worker():
         self.episode_totals = []
         self.episode_lengths = []
         self.episode_mean_values = []
-        self.summary_writer = tf.summary.FileWriter("./saves/train/" + hyper)
+        self.summary_writer = tf.summary.FileWriter("./saves/{}/{}".format('test' if test else 'train', hyper))
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
@@ -105,7 +105,7 @@ class Worker():
         # sess.run(self.local_AC.reset_state_op)
         net = self.local_AC
         feed_dict = {
-            net.training: True,
+            net.training: not self.is_test,
             net.target_v: discounted_rewards,
             net.inputs: np.vstack(states),
             net.actions: np.vstack(actions),
@@ -157,9 +157,10 @@ class Worker():
                                                     net.state_in[0]: rnn_state[0],
                                                     net.state_in[1]: rnn_state[1]})
 
-                    a0 = weighted_pick(a_dist[0], 1, self.epsilon) # Use stochastic distribution sampling
                     if self.is_test:
                         a0 = np.argmax(a_dist[0]) # Use maximum when testing
+                    else:
+                        a0 = weighted_pick(a_dist[0], 1, self.epsilon) # Use stochastic distribution sampling
                     a = np.zeros(self.a_size)
                     a[a0] = 1
 
@@ -193,26 +194,30 @@ class Worker():
                 self.episode_mean_values.append(np.mean(episode_values))
 
                 if self.name == 'worker_0':
+                    summary = tf.Summary()
+                    summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
+                    summary.value.add(tag='Perf/Reward', simple_value=float(self.episode_rewards[-1]))
+                    summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
+                    # summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
+                    summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
                     if not self.is_test:
-                        summary = tf.Summary()
-                        summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
-                        summary.value.add(tag='Perf/Reward', simple_value=float(self.episode_rewards[-1]))
-                        summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
-                        # summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
-                        summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
                         summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
                         summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))
                         summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
                         summary.value.add(tag='Losses/Grad Norm', simple_value=float(g_n))
                         summary.value.add(tag='Losses/Var Norm', simple_value=float(v_n))
-                        self.summary_writer.add_summary(summary, episode_count)
-                        self.summary_writer.flush()
+                    self.summary_writer.add_summary(summary, episode_count)
+                    self.summary_writer.flush()
 
-                    if episode_count % 50 == 0 and not self.is_test:
-                        saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
+                    if not self.is_test:
+                        if episode_count % 100 == 0:
+                            saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
 
-                    if episode_count >= HYPER_SWITCH:
-                        coord.request_stop()
+                        # stop if we're showing net gains to prevent overfitting
+                        last_100_positive = len(self.episode_totals) > 100 and np.mean(self.episode_rewards[-100:]) > 0
+
+                        if episode_count >= HYPER_SWITCH or last_100_positive:
+                            coord.request_stop()
 
                     sess.run(self.increment) # Next global episode
 

@@ -19,9 +19,10 @@ try:
 except Exception: pass
 
 class BitcoinEnv(Environment):
-    ACTION_BUY = 0
-    ACTION_SELL = 1
-    ACTION_HOLD = 2
+    # In this order since it's numeric value indicates the direction/action. Otherwise let's use one-hot in ac_network
+    ACTION_SELL = 0
+    ACTION_HOLD = 1
+    ACTION_BUY = 2
 
     START_CAP = 1000
 
@@ -100,14 +101,9 @@ class BitcoinEnv(Environment):
     def _xform_data(self, df):
         columns = []
         for k in data.tables:
-            # TA-Lib requires specifically-named columns (#TODO need to get our hands on "open")
-            c = {
-                k + '_high': 'high',
-                k + '_low': 'low',
-                '{}_{}'.format(k, data.close_col): 'close',
-                k + '_volume': 'volume'
-            }
-            if data.DB == 'coins2': c[k + '_open'] = 'open'
+            # TA-Lib requires specifically-named columns (OHLCV)
+            c = dict([(f'{k}_{c}', c) for c in data.columns if c != data.close_col])
+            c['close'] = f'{k}_{data.close_col}'
             xchange_df = df.rename(columns=c)
 
             # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
