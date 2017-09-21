@@ -4,24 +4,20 @@ from tensorforce.agents import VPGAgent, PPOAgent, DQNAgent
 from tensorforce.core.networks import layered_network_builder
 from pprint import pprint
 
-from data import conn
 from btc_env import BitcoinEnv
 
-EPISODES = 500000
 STEPS = 5000
-AGENT_NAME = 'PPOAgent|misc'
 
 
-def conf(**kwargs):
-    agent_type = AGENT_NAME.split('|')[0]
+def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2):
+    agent_name = agent_type + '|' + mods
+
     env = BitcoinEnv(
-        limit=STEPS, agent_type=agent_type, agent_name=AGENT_NAME,
+        limit=STEPS, agent_type=agent_type, agent_name=agent_name,
         scale_features=False,
         abs_reward=False
     )
 
-    neurons = 256
-    dropout = .2
     # Global conf
     # try-next: diff dropout, dqn, discount
     # possible winners: no-scale, relative-reward, normalize_rewards=False, 512>256, elu/he_init LSTM
@@ -29,9 +25,12 @@ def conf(**kwargs):
     # losers: 3x-baseline, dense(original)
     # unclear: vpg
     conf = dict(
-        # tf_session_config=None,
+        tf_session_config=None,
         # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
-        tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
+        # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
+        tf_saver=False,
+        tf_summary=None,
+        tf_summary_level=0,
 
         network=[
             dict(type='dropout', size=neurons, dropout=dropout),
@@ -70,7 +69,6 @@ def conf(**kwargs):
             batch_size=1024,  # TODO experiment
             gae_rewards=True,  # winner
             keep_last=True,
-            max_timesteps=-1,
         )
         # VPGAgent
         if agent_type == 'VPGAgent':
@@ -129,8 +127,8 @@ def conf(**kwargs):
             )[approach])
 
     # From caller (A3C v single-run)
-    conf.update(**kwargs)
-    pprint(conf)
+    conf.update(overrides)
+    # pprint(conf)
     # Allow overrides to network above, then run it through configurator
     conf['network'] = layered_network_builder(conf['network'])
     conf = Configuration(**conf)
@@ -138,5 +136,6 @@ def conf(**kwargs):
     return dict(
         agent=agent_class(config=conf),
         conf=conf,
-        env=env
+        env=env,
+        agent_name=agent_name
     )
