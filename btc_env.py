@@ -158,8 +158,8 @@ class BitcoinEnv(Environment):
             # signal = 0 if -40 < action < 5 else action
             signal = 0 if -1 < action < 1 else action
         else:
-            signal = 40 if action == self.ACTION_BUY\
-                else -40 if action == self.ACTION_SELL\
+            signal = 1 if action == self.ACTION_BUY\
+                else -1 if action == self.ACTION_SELL\
                 else 0
 
         self.signals.append(signal)
@@ -209,14 +209,14 @@ class BitcoinEnv(Environment):
     step = execute  # alias execute as step, called step by some frameworks
 
     def write_results(self):
+        res = self.episode_results
         # skip some for performance
-        if len(self.episode_results['cash']) % 10 != 0:
-            return
+        # if len(res['cash']) % 10 != 0: return
 
-        episode = len(self.episode_results['cash'])
+        episode = len(res['cash'])
         reward, cash, value = self.total_reward, self.cash, self.value
-        print("{}) time:{}, reward:{} totals:{}, actions:{}".format(
-            episode, self.time, round(reward), round(cash + value), self.action_counter))
+        avg1k = int(np.mean(res['cash'][-1000:]) + np.mean(res['values'][-1000:]))
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(cash + value)}\tAVG$:{avg1k}\tActions:{self.action_counter}")
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
         if cash + value > BitcoinEnv.START_CAP * 2:

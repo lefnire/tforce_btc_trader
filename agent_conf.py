@@ -8,8 +8,8 @@ from data import conn
 from btc_env import BitcoinEnv
 
 EPISODES = 500000
-STEPS = 10000
-AGENT_NAME = 'VPGAgent'
+STEPS = 5000
+AGENT_NAME = 'PPOAgent|misc'
 
 
 def conf(**kwargs):
@@ -37,12 +37,11 @@ def conf(**kwargs):
             dict(type='dropout', size=neurons, dropout=dropout),
             dict(type='dense2', size=neurons, dropout=dropout),  # combine attrs into attr-combos (eg VWAP)
             dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
-            dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
-            dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
+            # dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
         ],
 
         # Main
-        discount=.97,  # TODO experiment
+        discount=.99,  # TODO experiment
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
@@ -68,7 +67,7 @@ def conf(**kwargs):
     # PolicyGradientModel
     if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         conf.update(
-            batch_size=4096,  # TODO experiment
+            batch_size=1024,  # TODO experiment
             gae_rewards=True,  # winner
             keep_last=True,
             max_timesteps=-1,
@@ -78,15 +77,16 @@ def conf(**kwargs):
             agent_class = VPGAgent
             conf.update(dict(
                 # normalize_rewards=True,  # winner
-                normalize_rewards=False, random_sampling=True,
+                normalize_rewards=False,
+                random_sampling=True,
                 learning_rate=.001
             ))
         # PPOAgent
         elif agent_type == 'PPOAgent':
             agent_class = PPOAgent
             conf.update(dict(
-                epochs=5,
-                optimizer_batch_size=512,
+                epochs=50,
+                optimizer_batch_size=1024,
                 random_sampling=True,  # seems winner
                 normalize_rewards=False,  # winner (even when scale_features=True)
                 learning_rate=.001  # .001 best, currently speed-running
@@ -140,26 +140,3 @@ def conf(**kwargs):
         conf=conf,
         env=env
     )
-
-
-def my_network():
-    """ Define full network since will be using batch_normalization and other special handling
-    TODO incomplete. Need to run extra_update_ops from tf.GraphKeys.UPDATE_OPS (see p. 284)
-    """
-    n_inputs = 28*28
-    n_hidden1 = 300
-    n_hidden2 = 100
-    n_outputs = 10
-
-    X = tf.placeholder(tf.float32, shape=(None, n_inputs), name='X')
-
-    training = tf.placeholder_with_default(False, shape=(), name='training')
-
-    hidden1 = tf.layers.dense(X, n_hidden1, name='hidden1')
-    bn1 = tf.layers.batch_normalization(hidden1, training=training, momentum=.9)
-    bn1_act = tf.nn.elu(bn1)
-    hidden2 = tf.layers.dense(bn1_act, n_hidden2, name='hidden2')
-    bn2 = tf.layers.batch_normalization(hidden2, training=training, momentum=.9)
-    bn2_act = tf.nn.elu(bn2)
-    logits_before_bn = tf.layers.dense(bn2_act, n_outputs, name='outputs')
-    logits = tf.layers.batch_normalization(logits_before_bn, training=training, momentum=.9)

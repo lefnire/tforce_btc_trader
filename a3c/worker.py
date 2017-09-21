@@ -7,11 +7,11 @@ from a3c.ac_network import AC_Network
 from btc_env import BitcoinEnv
 
 # Size of mini batches to run training on
-MINI_BATCH = 100  # winner=150
+MINI_BATCH = 200  # winner=150
 REWARD_FACTOR = 0.001
 
-STEPS = 1000
-EPSILON_STEPS = 1e6
+STEPS = 5000
+EPSILON_STEPS = 1e7
 HYPER_SWITCH = 1e8
 
 
@@ -210,13 +210,15 @@ class Worker():
                     self.summary_writer.flush()
 
                     if not self.is_test:
-                        if episode_count % 100 == 0:
+                        if episode_count % 20 == 0:
                             saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
 
                         # stop if we're showing net gains to prevent overfitting
-                        last_100_positive = len(self.episode_totals) > 100 and np.mean(self.episode_rewards[-100:]) > 0
+                        n_pos = 100
+                        last_n_positive = len(self.episode_totals) > n_pos \
+                            and np.all(np.array(self.episode_rewards[-n_pos:]) > 0)
 
-                        if episode_count >= HYPER_SWITCH or last_100_positive:
+                        if episode_count >= HYPER_SWITCH or last_n_positive:
                             coord.request_stop()
 
                     sess.run(self.increment) # Next global episode

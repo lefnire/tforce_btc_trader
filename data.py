@@ -64,6 +64,7 @@ def count_rows():
     if row_count: return row_count  # cached
     all_rows = db_to_dataframe()
     row_count = all_rows.shape[0]
+    del all_rows  # big
     train_test_split = int(row_count * .8)
     print('mode: ', mode, ' row_count: ', row_count, ' split: ', train_test_split)
     row_count = train_test_split if mode == 'TRAIN' else row_count - train_test_split
@@ -115,7 +116,7 @@ def _db_to_dataframe_main(limit='ALL', offset=0):
 
 
 def db_to_dataframe(limit='ALL', offset=0):
-    global mode
+    global mode, train_test_split
     offset = offset + train_test_split if mode == 'TEST' else offset
     return _db_to_dataframe_ohlc(limit=limit, offset=offset) if DB == 'coins2'\
         else _db_to_dataframe_main(limit=limit, offset=offset)
