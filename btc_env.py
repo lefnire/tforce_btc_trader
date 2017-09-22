@@ -22,7 +22,8 @@ class BitcoinEnv(Environment):
     # In this order since it's numeric value indicates the direction/action. Otherwise let's use one-hot in ac_network
     ACTION_SELL = 0
     ACTION_HOLD = 1
-    ACTION_BUY = 2
+    ACTION_BUY1 = 2
+    ACTION_BUY2 = 3
 
     START_CAP = 1000
 
@@ -36,7 +37,7 @@ class BitcoinEnv(Environment):
         self.abs_reward = abs_reward
         self.indicators = indicators
 
-        self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent'])
+        self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent', 'A3CAgent'])
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
     @property
@@ -48,7 +49,7 @@ class BitcoinEnv(Environment):
         if self.continuous_actions:
             return dict(continuous=True, shape=(), min_value=-100, max_value=100)
         else:
-            return dict(continuous=False, num_actions=3)  # BUY SELL HOLD
+            return dict(continuous=False, num_actions=4)  # BUY SELL HOLD
 
     def num_features(self):
         num = len(data.columns)
@@ -158,8 +159,9 @@ class BitcoinEnv(Environment):
             # signal = 0 if -40 < action < 5 else action
             signal = 0 if -1 < action < 1 else action
         else:
-            signal = 1 if action == self.ACTION_BUY\
-                else -1 if action == self.ACTION_SELL\
+            signal = 5 if action == self.ACTION_BUY1 \
+                else 40 if action == self.ACTION_BUY2 \
+                else -40 if action == self.ACTION_SELL\
                 else 0
 
         self.signals.append(signal)
@@ -215,8 +217,8 @@ class BitcoinEnv(Environment):
 
         episode = len(res['cash'])
         reward, cash, value = self.total_reward, self.cash, self.value
-        avg1k = int(np.mean(res['cash'][-1000:]) + np.mean(res['values'][-1000:]))
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(cash + value)}\tAVG$:{avg1k}\tActions:{self.action_counter}")
+        avg100 = int(np.mean(res['cash'][-100:]) + np.mean(res['values'][-100:]))
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(cash + value)}\tAVG$:{avg100}\tActions:{self.action_counter}")
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
         if cash + value > BitcoinEnv.START_CAP * 2:

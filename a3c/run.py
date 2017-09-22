@@ -25,8 +25,6 @@ from a3c.ac_network import AC_Network
 # ===========================
 # Gym environment
 
-# STATE_DIM = BitcoinEnv.num_features()
-# ACTION_DIM = 3
 # Directory for storing gym results
 MONITOR_DIR = './saves/monitor/'
 
@@ -60,13 +58,15 @@ def main(_):
     # definite winners: N256, L1-2, batch150, elu, 2L (batch normalization is crap-shoot)
     # try: indicators, reward_factor, dense last (2L), peepholes
     # for hyper in ['neurons:256', 'neurons:512', 'layers:2', 'layers:3', 'layers:4', 'activation:tanh', 'activation:elu', 'dropout:off', 'dropout:on']:
-    for hyper in ['lstm:remember']:
-        data.wipe_rows('A3CAgent|' + hyper)
+    for hyper in ['continuous:base']:
+        agent_name = 'A3CAgent|' + hyper
+        data.wipe_rows(agent_name)
         tf.reset_default_graph()
 
-        btc_env = BitcoinEnv(agent_name='A3CAgent|'+hyper, indicators=hyper == 'indicators:on')
+        btc_env = BitcoinEnv(agent_name=agent_name, agent_type=agent_name.split('|')[0], indicators=hyper == 'indicators:on')
         STATE_DIM = btc_env.num_features()
-        ACTION_DIM = btc_env.actions['num_actions']
+        # ACTION_DIM = btc_env.actions['num_actions']
+        ACTION_DIM = 1
 
         # with tf.device("/cpu:0"):
         np.random.seed(RANDOM_SEED)
@@ -96,6 +96,7 @@ def main(_):
 
         tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
         with tf.Session(config=tf_session_config) as sess:
+        # with tf.Session() as sess:
             coord = tf.train.Coordinator()
             if LOAD_MODEL or TEST_MODEL:
                 print('Loading Model...')

@@ -62,9 +62,7 @@ train_test_split = 0
 def count_rows():
     global row_count, train_test_split
     if row_count: return row_count  # cached
-    all_rows = db_to_dataframe()
-    row_count = all_rows.shape[0]
-    del all_rows  # big
+    row_count = db_to_dataframe(just_count=True)
     train_test_split = int(row_count * .8)
     print('mode: ', mode, ' row_count: ', row_count, ' split: ', train_test_split)
     row_count = train_test_split if mode == 'TRAIN' else row_count - train_test_split
@@ -86,12 +84,15 @@ def _db_to_dataframe_ohlc(limit='ALL', offset=0):
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
 
-def _db_to_dataframe_main(limit='ALL', offset=0):
+def _db_to_dataframe_main(limit='ALL', offset=0, just_count=False):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
-    query = 'select ' + ', '.join(
-        ', '.join(f"{t}.{c} as {t}_{c}" for c in columns)
-        for t in tables
-    )
+    if just_count:
+        query = 'select count(*) over ()'
+    else:
+        query = 'select ' + ', '.join(
+            ', '.join(f"{t}.{c} as {t}_{c}" for c in columns)
+            for t in tables
+        )
 
     # interval = 10  # what time-intervals to group by? 60 would be 1-minute intervals
     # TODO https://gis.stackexchange.com/a/127874/105932 for arbitrary interval-grouping
@@ -109,14 +110,18 @@ def _db_to_dataframe_main(limit='ALL', offset=0):
         if i != 0:
             query += f'on {table}.ts={tables[i - 1]}.ts'
 
+    if just_count:
+        query += " limit 1"
+        return conn.execute(query).fetchone()[0]
+
     query += f" order by {tables[0]}.ts desc limit {limit} offset {offset}"
 
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
 
-def db_to_dataframe(limit='ALL', offset=0):
+def db_to_dataframe(limit='ALL', offset=0, just_count=False):
     global mode, train_test_split
     offset = offset + train_test_split if mode == 'TEST' else offset
     return _db_to_dataframe_ohlc(limit=limit, offset=offset) if DB == 'coins2'\
-        else _db_to_dataframe_main(limit=limit, offset=offset)
+        else _db_to_dataframe_main(limit=limit, offset=offset, just_count=just_count)

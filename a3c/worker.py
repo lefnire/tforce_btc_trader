@@ -7,11 +7,11 @@ from a3c.ac_network import AC_Network
 from btc_env import BitcoinEnv
 
 # Size of mini batches to run training on
-MINI_BATCH = 200  # winner=150
+MINI_BATCH = 100  # winner=150
 REWARD_FACTOR = 0.001
 
 STEPS = 5000
-EPSILON_STEPS = 1e7
+EPSILON_STEPS = STEPS*400
 HYPER_SWITCH = 1e8
 
 
@@ -108,7 +108,7 @@ class Worker():
             net.training: not self.is_test,
             net.target_v: discounted_rewards,
             net.inputs: np.vstack(states),
-            net.actions: np.vstack(actions),
+            net.actions: actions,
             net.advantages: discounted_advantages,
             net.state_in[0]: self.batch_rnn_state[0],
             net.state_in[1]: self.batch_rnn_state[1],
@@ -157,15 +157,13 @@ class Worker():
                                                     net.state_in[0]: rnn_state[0],
                                                     net.state_in[1]: rnn_state[1]})
 
-                    if self.is_test:
-                        a0 = np.argmax(a_dist[0]) # Use maximum when testing
+                    if self.is_test or random.random() > self.epsilon:
+                        a = a_dist  # Use maximum when testing
                     else:
-                        a0 = weighted_pick(a_dist[0], 1, self.epsilon) # Use stochastic distribution sampling
-                    a = np.zeros(self.a_size)
-                    a[a0] = 1
+                        a = random.randint(-100, 100)  # Use stochastic distribution sampling
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
-                    s2, r, terminal = self.env.step(np.argmax(a))
+                    s2, r, terminal = self.env.step(a)
                     episode_reward += r
                     episode_buffer.append([s, a, r, s2, terminal, v[0, 0]])
                     episode_values.append(v[0, 0])
@@ -211,7 +209,7 @@ class Worker():
 
                     if not self.is_test:
                         if episode_count % 20 == 0:
-                            saver.save(sess, self.model_path + '/model-' + str(episode_count) + '.cptk')
+                            saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
 
                         # stop if we're showing net gains to prevent overfitting
                         n_pos = 100

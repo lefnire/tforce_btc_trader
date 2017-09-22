@@ -61,10 +61,12 @@ class AC_Network():
             rnn_out = tf.reshape(lstm_outputs, [-1, CELL_UNITS])
 
             # Output layers for policy and value estimations
-            self.policy = slim.fully_connected(rnn_out, a_size,
-                                               activation_fn=tf.nn.softmax,
-                                               weights_initializer=normalized_columns_initializer(0.01),
-                                               biases_initializer=None)
+            self.policy = slim.fully_connected(rnn_out, 1,
+                                               activation_fn=None, #tf.nn.tanh,
+                                               weights_initializer=normalized_columns_initializer(1.0),  #(0.01),
+                                               biases_initializer=None
+                                               )
+            self.policy = tf.squeeze(self.policy)
             self.value = slim.fully_connected(rnn_out, 1,
                                               activation_fn=None,
                                               weights_initializer=normalized_columns_initializer(1.0),
@@ -74,20 +76,28 @@ class AC_Network():
             if scope != 'global':
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, scope)
                 with tf.control_dependencies(update_ops):
-                    self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32)
+                    """ https://goo.gl/ZU2Z9a
+                    Value Loss: L = Σ(R - V(s))²
+                    Policy Loss: L = -log(π(s)) * A(s) - β*H(π)
+                    """
+                    self.actions = tf.placeholder(shape=[None], dtype=tf.float32)
                     self.target_v = tf.placeholder(shape=[None], dtype=tf.float32)
                     self.advantages = tf.placeholder(shape=[None], dtype=tf.float32)
-
-                    self.responsible_outputs = tf.reduce_sum(self.policy * self.actions, [1])
 
                     # Value loss function
                     self.value_loss = 0.5 * tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
 
                     # Softmax policy loss function
-                    self.policy_loss = -tf.reduce_sum(tf.log(tf.maximum(self.responsible_outputs, 1e-12)) * self.advantages)
+                    # self.responsible_outputs = tf.reduce_sum(self.policy * self.action, [1])
+                    # self.policy_loss = -tf.reduce_sum(tf.log(tf.maximum(self.responsible_outputs, 1e-12)) * self.advantages)
+                    self.policy_loss = -tf.reduce_sum(
+                        tf.square(self.actions - self.policy)
+                        * self.advantages
+                    )
 
                     # Softmax entropy function
-                    self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
+                    # self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
+                    self.entropy = tf.constant(0.)
 
                     self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * 0.01
 
