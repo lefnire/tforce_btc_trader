@@ -2,17 +2,14 @@ import tensorflow as tf
 import scipy.signal
 import numpy as np
 import random
-import gym
 from a3c.ac_network import AC_Network
 from btc_env import BitcoinEnv
 
-# Size of mini batches to run training on
-MINI_BATCH = 100  # winner=150
+MINI_BATCH = 2e3
 REWARD_FACTOR = 0.001
-
-STEPS = 5000
-EPSILON_STEPS = STEPS*400
-HYPER_SWITCH = 1e8
+STEPS = 6e3; STEPS += STEPS // MINI_BATCH  # tack on some leg-room
+EPSILON_STEPS = 3e6
+HYPER_SWITCH = 1e10
 
 
 # Copies one set of variables to another.
@@ -42,9 +39,11 @@ class Worker():
         self.increment = self.global_episodes.assign_add(1)
         self.episode_rewards = []
         self.episode_totals = []
+        self.episode_totals_true = []
         self.episode_lengths = []
         self.episode_mean_values = []
         self.summary_writer = tf.summary.FileWriter("./saves/{}/{}".format('test' if test else 'train', hyper))
+        self.summary_writer_true = tf.summary.FileWriter("./saves/{}:true/{}".format('test' if test else 'train', hyper))
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
@@ -57,6 +56,8 @@ class Worker():
         indicators = hyper == 'indicators:on'
         self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent|'+hyper, indicators=indicators)
         self.env.seed(seed)
+
+        self.train_itr = 0
 
     def get_env(self):
         return self.env
@@ -130,8 +131,6 @@ class Worker():
                 # Run an episode
                 while not terminal:
                     episode_states.append(s)
-                    if self.is_test:
-                        self.env.render()
 
                     # Get preferred action distribution
                     a_dist, v, rnn_state = sess.run([net.policy, net.value, net.state_out],
@@ -145,7 +144,7 @@ class Worker():
                         a = random.randint(-100, 100)  # Use stochastic distribution sampling
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
-                    s2, r, terminal = self.env.step(a)
+                    s2, r, terminal = self.env.step(a, action_true=a_dist)
                     episode_reward += r
                     episode_buffer.append([s, a, r, s2, terminal, v[0, 0]])
                     episode_values.append(v[0, 0])
@@ -153,6 +152,7 @@ class Worker():
                     # Train on mini batches from episode
                     mini_batch = int(self.hyper.split(':')[1]) if self.hyper.startswith('mini_batch') else MINI_BATCH
                     if len(episode_buffer) == mini_batch and not self.is_test:
+                        self.train_itr += 1
                         v1 = sess.run([net.value],
                                       feed_dict={net.inputs: [s],
                                                  net.state_in[0]: rnn_state[0],
@@ -165,13 +165,17 @@ class Worker():
                     total_steps += 1
                     episode_step_count += 1
 
-                    if self.epsilon > 0.01:  # decrement epsilon over time
+                    if self.epsilon > 0.1:  # decrement epsilon over time
                         self.epsilon -= (1.0 / EPSILON_STEPS)
 
                 self.episode_rewards.append(episode_reward)
                 self.episode_totals.append(self.env.cash + self.env.value)
+                self.episode_totals_true.append(self.env.cash_true + self.env.value_true)
                 self.episode_lengths.append(episode_step_count)
                 self.episode_mean_values.append(np.mean(episode_values))
+
+                if self.train_itr < STEPS // MINI_BATCH:
+                    raise Exception(f"Didn't train over all batches ({self.train_itr} of {STEPS // MINI_BATCH})")
 
                 if self.name == 'worker_0':
                     summary = tf.Summary()
@@ -180,23 +184,30 @@ class Worker():
                     summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
                     # summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
                     summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
+                    summary.value.add(tag='Perf/Time', simple_value=float(self.env.time))
                     if not self.is_test:
                         summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
                         summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))
-                        summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
+                        # summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
                         summary.value.add(tag='Losses/Grad Norm', simple_value=float(g_n))
                         summary.value.add(tag='Losses/Var Norm', simple_value=float(v_n))
                     self.summary_writer.add_summary(summary, episode_count)
                     self.summary_writer.flush()
 
+                    summary = tf.Summary()
+                    summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals_true[-1]))
+                    self.summary_writer_true.add_summary(summary, episode_count)
+                    self.summary_writer_true.flush()
+
                     if not self.is_test:
-                        if episode_count % 20 == 0:
+                        if episode_count % 50 == 0:
+                            # pass
                             saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
 
                         # stop if we're showing net gains to prevent overfitting
-                        n_pos = 100
+                        n_pos = 50
                         last_n_positive = len(self.episode_totals) > n_pos \
-                            and np.all(np.array(self.episode_rewards[-n_pos:]) > 0)
+                            and np.all(np.array(self.episode_totals_true[-n_pos:]) > 2000)
 
                         if episode_count >= HYPER_SWITCH or last_n_positive:
                             coord.request_stop()

@@ -136,11 +136,12 @@ class BitcoinEnv(Environment):
 
     def reset(self):
         self.time = time.time()
-        self.cash = self.START_CAP
-        self.value = self.START_CAP
+        self.cash = self.cash_true = self.START_CAP
+        self.value = self.value_true = self.START_CAP
         start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
+        self.signals_true = [0] * start_timestep
         self.total_reward = 0
 
         # Fetch random slice of rows from the database (based on limit)
@@ -154,10 +155,11 @@ class BitcoinEnv(Environment):
             first_state = scaler.transform([first_state])[0]
         return first_state
 
-    def execute(self, action):
+    def execute(self, action, action_true=None):
         if self.continuous_actions:
             # signal = 0 if -40 < action < 5 else action
-            signal = 0 if -1 < action < 1 else action
+            signal = 0 if -40 < action < 1 else action
+            signal_true = action_true
         else:
             signal = 5 if action == self.ACTION_BUY1 \
                 else 40 if action == self.ACTION_BUY2 \
@@ -165,8 +167,10 @@ class BitcoinEnv(Environment):
                 else 0
 
         self.signals.append(signal)
+        self.signals_true.append(signal_true)
 
         abs_sig = abs(signal)
+        abs_sig_true = abs(action_true)
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
         before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
         if signal > 0:
@@ -178,8 +182,18 @@ class BitcoinEnv(Environment):
                 self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
+        if signal_true > 0:
+            if self.cash_true >= abs_sig_true:
+                self.value_true += abs_sig_true - abs_sig_true*fee
+            self.cash_true -= abs_sig_true
+        elif signal_true < 0:
+            if self.value_true >= abs_sig_true:
+                self.cash_true += abs_sig_true - abs_sig_true*fee
+            self.value_true -= abs_sig_true
+
         pct_change = self.prices_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
+        self.value_true += pct_change * self.value_true
         total = self.value + self.cash
         if self.abs_reward:
             reward = total - self.START_CAP*2  # Absolute reward
@@ -198,12 +212,12 @@ class BitcoinEnv(Environment):
 
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
-            self.time = round(time.time() - self.time)
             self.signals.append(0)  # Add one last signal (to match length)
-            self.episode_results['cash'].append(self.cash)
-            self.episode_results['values'].append(self.value)
+            self.episode_results['cash'].append(self.cash_true)
+            self.episode_results['values'].append(self.value_true)
             self.episode_results['rewards'].append(self.total_reward)
-            self.action_counter = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
+            self.action_counter = dict((round(k), v) for k, v in Counter(self.signals_true).most_common(5))
+            self.time = round(time.time() - self.time)
             self.write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal
@@ -216,9 +230,11 @@ class BitcoinEnv(Environment):
         # if len(res['cash']) % 10 != 0: return
 
         episode = len(res['cash'])
-        reward, cash, value = self.total_reward, self.cash, self.value
+        reward, cash, value = self.total_reward, self.cash_true, self.value_true
         avg100 = int(np.mean(res['cash'][-100:]) + np.mean(res['values'][-100:]))
         print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(cash + value)}\tAVG$:{avg100}\tActions:{self.action_counter}")
+
+        return
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
         if cash + value > BitcoinEnv.START_CAP * 2:

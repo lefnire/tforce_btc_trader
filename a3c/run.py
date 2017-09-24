@@ -58,7 +58,7 @@ def main(_):
     # definite winners: N256, L1-2, batch150, elu, 2L (batch normalization is crap-shoot)
     # try: indicators, reward_factor, dense last (2L), peepholes
     # for hyper in ['neurons:256', 'neurons:512', 'layers:2', 'layers:3', 'layers:4', 'activation:tanh', 'activation:elu', 'dropout:off', 'dropout:on']:
-    for hyper in ['continuous:base']:
+    for hyper in ['continuous:200-5k']:
         agent_name = 'A3CAgent|' + hyper
         data.wipe_rows(agent_name)
         tf.reset_default_graph()
@@ -94,9 +94,9 @@ def main(_):
             #env.monitor.start(MONITOR_DIR, video_callable=False, force=True)
         # END with tf.device("/cpu:0"):
 
-        tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
-        with tf.Session(config=tf_session_config) as sess:
-        # with tf.Session() as sess:
+        # tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.4))
+        # with tf.Session(config=tf_session_config) as sess:
+        with tf.Session() as sess:
             coord = tf.train.Coordinator()
             if LOAD_MODEL or TEST_MODEL:
                 print('Loading Model...')
