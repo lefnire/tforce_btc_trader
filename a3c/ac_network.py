@@ -8,14 +8,6 @@ CLIP_NORM = 40.0
 # CELL_UNITS = 256
 DROPOUT = .2
 
-#Used to initialize weights for policy and value output layers
-def normalized_columns_initializer(std=1.0):
-    def _initializer(shape, dtype=None, partition_info=None):
-        out = np.random.randn(*shape).astype(np.float32)
-        out *= std / np.sqrt(np.square(out).sum(axis=0, keepdims=True))
-        return tf.constant(out)
-    return _initializer
-
 
 class AC_Network():
     def __init__(self, s_size, a_size, scope, trainer, hyper):
@@ -61,16 +53,8 @@ class AC_Network():
             rnn_out = tf.reshape(lstm_outputs, [-1, CELL_UNITS])
 
             # Output layers for policy and value estimations
-            self.policy = slim.fully_connected(rnn_out, 1,
-                                               activation_fn=None, #tf.nn.tanh,
-                                               weights_initializer=normalized_columns_initializer(1.0),  #(0.01),
-                                               biases_initializer=None
-                                               )
-            self.policy = tf.squeeze(self.policy)
-            self.value = slim.fully_connected(rnn_out, 1,
-                                              activation_fn=None,
-                                              weights_initializer=normalized_columns_initializer(1.0),
-                                              biases_initializer=None)
+            self.policy = tf.squeeze(tf.layers.dense(rnn_out, 1, kernel_initializer=he_init))
+            self.value = tf.layers.dense(rnn_out, 1, kernel_initializer=he_init)
 
             # Only the worker network need ops for loss functions and gradient updating.
             if scope != 'global':
@@ -85,7 +69,7 @@ class AC_Network():
                     self.advantages = tf.placeholder(shape=[None], dtype=tf.float32)
 
                     # Value loss function
-                    self.value_loss = 0.5 * tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
+                    self.value_loss = tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
 
                     # Softmax policy loss function
                     # self.responsible_outputs = tf.reduce_sum(self.policy * self.action, [1])
@@ -99,7 +83,7 @@ class AC_Network():
                     # self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
                     self.entropy = tf.constant(0.)
 
-                    self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * 0.01
+                    self.loss = self.value_loss + self.policy_loss - self.entropy * 0.01
 
                     # Get gradients from local network using local losses
                     local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)

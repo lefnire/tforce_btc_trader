@@ -27,27 +27,9 @@ def update_target_graph(from_scope,to_scope):
     return op_holder
 
 
-# Weighted random selection returns n_picks random indexes.
-# the chance to pick the index i is give by the weight weights[i].
-def weighted_pick(weights, n_picks, epsilon=0):
-    # Epsilon Greedy
-    if random.random() < epsilon:  # choose random action
-        return np.random.randint(0, len(weights), n_picks)
-
-    # Else, weighted pick
-    t = np.cumsum(weights)
-    s = np.sum(weights)
-    return np.searchsorted(t,np.random.rand(n_picks)*s)
-
-
 # Discounting function used to calculate discounted returns.
 def discounting(x, gamma):
     return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
-
-
-# Normalization of inputs and outputs
-def norm(x, upper, lower=0.):
-    return (x-lower)/max((upper-lower), 1e-12)
 
 
 class Worker():
