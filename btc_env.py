@@ -66,8 +66,6 @@ class BitcoinEnv(Environment):
     def render(self): pass
 
     def seed(self, num):
-        return
-        # TODO is all this correct/necessary?
         random.seed(num)
         np.random.seed(num)
         tf.set_random_seed(num)

@@ -41,7 +41,7 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
         ],
 
         # Main
-        discount=.97,  # TODO experiment
+        discount=.99,
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
@@ -57,7 +57,7 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
         conf.update(
             baseline=dict(
                 type="mlp",
-                sizes=[128, 128],  # losers: 2x256, winners: 2x128
+                sizes=[256, 256],
                 epochs=5,
                 update_batch_size=128,
                 learning_rate=.01
@@ -67,29 +67,20 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
     # PolicyGradientModel
     if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         conf.update(
-            batch_size=2048,
-            gae_rewards=True,  # winner
-            keep_last=True,
+            batch_size=2048,  # batch_size must be > optimizer_batch_size
+            optimizer_batch_size=1024,
+            learning_rate=.001,
+            normalize_rewards=True  # definite winner=True
+            # gae_rewards winner=False
         )
         # VPGAgent
         if agent_type == 'VPGAgent':
             agent_class = VPGAgent
-            conf.update(dict(
-                # normalize_rewards=True,  # winner
-                normalize_rewards=False,
-                random_sampling=True,
-                learning_rate=.001
-            ))
+            conf.update(dict())
         # PPOAgent
         elif agent_type == 'PPOAgent':
             agent_class = PPOAgent
-            conf.update(dict(
-                epochs=5,
-                optimizer_batch_size=2048,
-                random_sampling=True,  # seems winner
-                normalize_rewards=False,  # winner (even when scale_features=True)
-                learning_rate=.01  # .01 best
-            ))
+            conf.update(dict())
 
     # Q-model
     else:
