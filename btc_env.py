@@ -156,6 +156,7 @@ class BitcoinEnv(Environment):
         return first_state
 
     def execute(self, action, action_true=None):
+        if action_true is None: action_true = action
         if self.continuous_actions:
             # signal = 0 if -40 < action < 5 else action
             signal = 0 if -40 < action < 1 else action

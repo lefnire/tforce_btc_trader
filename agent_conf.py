@@ -6,7 +6,7 @@ from pprint import pprint
 
 from btc_env import BitcoinEnv
 
-STEPS = 5000
+STEPS = 2048 * 3 + 3
 
 
 def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2):
@@ -34,13 +34,14 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
 
         network=[
             dict(type='dropout', size=neurons, dropout=dropout),
-            dict(type='dense2', size=neurons, dropout=dropout),  # combine attrs into attr-combos (eg VWAP)
             dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
-            # dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
+            dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
+            dict(type='dense2', size=neurons, dropout=dropout),  # combine attrs into attr-combos (eg VWAP)
+            dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
         ],
 
         # Main
-        discount=.99,  # TODO experiment
+        discount=.97,  # TODO experiment
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
@@ -66,7 +67,7 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
     # PolicyGradientModel
     if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         conf.update(
-            batch_size=1024,  # TODO experiment
+            batch_size=2048,
             gae_rewards=True,  # winner
             keep_last=True,
         )
@@ -83,11 +84,11 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
         elif agent_type == 'PPOAgent':
             agent_class = PPOAgent
             conf.update(dict(
-                epochs=50,
-                optimizer_batch_size=1024,
+                epochs=5,
+                optimizer_batch_size=2048,
                 random_sampling=True,  # seems winner
                 normalize_rewards=False,  # winner (even when scale_features=True)
-                learning_rate=.001  # .001 best, currently speed-running
+                learning_rate=.01  # .01 best
             ))
 
     # Q-model
@@ -128,7 +129,7 @@ def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2)
 
     # From caller (A3C v single-run)
     conf.update(overrides)
-    # pprint(conf)
+    pprint(conf)
     # Allow overrides to network above, then run it through configurator
     conf['network'] = layered_network_builder(conf['network'])
     conf = Configuration(**conf)
