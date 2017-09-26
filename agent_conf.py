@@ -4,19 +4,17 @@ from tensorforce.agents import VPGAgent, PPOAgent, DQNAgent
 from tensorforce.core.networks import layered_network_builder
 from pprint import pprint
 
-from btc_env import BitcoinEnv
+import btc_env
+from btc_env.btc_env import BitcoinEnvTforce
 
 STEPS = 2048 * 3 + 3
 
 
-def conf(overrides, agent_type='PPOAgent', mods='main', neurons=256, dropout=.2):
+def conf(overrides, agent_type='PPOAgent', mods='main', is_main=True):
     agent_name = agent_type + '|' + mods
+    env = BitcoinEnvTforce(steps=STEPS, agent_type=agent_type, agent_name=agent_name, is_main=is_main)
+    neurons, dropout = 256, .2
 
-    env = BitcoinEnv(
-        limit=STEPS, agent_type=agent_type, agent_name=agent_name,
-        scale_features=False,
-        abs_reward=False
-    )
 
     # Global conf
     # try-next: diff dropout, dqn, discount

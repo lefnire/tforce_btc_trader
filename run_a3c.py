@@ -108,7 +108,7 @@ def main():
         tf_summary_level=0,
         preprocessing=None,
     )
-    conf = agent_conf.conf(c['conf'], 'PPOAgent', c['name'])
+    conf = agent_conf.conf(c['conf'], 'PPOAgent', c['name'], is_main=args.task_index == 0)
 
     logger = logging.getLogger(__name__)
     logger.setLevel(log_levels[conf['conf'].log_level])
@@ -126,20 +126,7 @@ def main():
         task_index=args.task_index
     )
 
-    summary_writer = tf.summary.FileWriter(f"./a3c/saves/train/{conf['agent_name']}")
-    def episode_finished(r):
-        if args.task_index == 0:
-            results = r.environment.episode_results
-            total = float(results['cash'][-1] + results['values'][-1])
-            reward = float(results['rewards'][-1])
-            summary = tf.Summary()
-            summary.value.add(tag='Perf/Total', simple_value=total)
-            summary.value.add(tag='Perf/Reward', simple_value=reward)
-            summary_writer.add_summary(summary, r.episode)
-            summary_writer.flush()
-        return True
-
-    runner.run(1000, agent_conf.STEPS, episode_finished=episode_finished, num_workers=args.num_workers)
+    runner.run(1000, agent_conf.STEPS)
 
 
 if __name__ == '__main__':
