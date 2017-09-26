@@ -19,25 +19,16 @@ try:
 except Exception: pass
 
 class BitcoinEnv(Environment):
-    # In this order since it's numeric value indicates the direction/action. Otherwise let's use one-hot in ac_network
-    ACTION_SELL = 0
-    ACTION_HOLD = 1
-    ACTION_BUY1 = 2
-    ACTION_BUY2 = 3
-
     START_CAP = 1000
 
-    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=False, abs_reward=False,
-                 indicators=False):
+    def __init__(self, limit=10000, agent_type='DQNAgent', agent_name=None, scale_features=False, indicators=False):
         """Initializes a minimal test environment."""
         self.limit = limit
         self.agent_type = agent_type
         self.agent_name = agent_name
         self.scale_features = scale_features
-        self.abs_reward = abs_reward
         self.indicators = indicators
 
-        self.continuous_actions = bool(agent_type in ['PPOAgent', 'TRPOAgent', 'NAFAgent', 'VPGAgent', 'A3CAgent'])
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
     @property
@@ -46,10 +37,7 @@ class BitcoinEnv(Environment):
 
     @property
     def actions(self):
-        if self.continuous_actions:
-            return dict(continuous=True, shape=(), min_value=-100, max_value=100)
-        else:
-            return dict(continuous=False, num_actions=4)  # BUY SELL HOLD
+        return dict(continuous=True, shape=(), min_value=-100, max_value=100)
 
     def num_features(self):
         num = len(data.columns)
@@ -153,15 +141,8 @@ class BitcoinEnv(Environment):
         return first_state
 
     def execute(self, action):
-        if self.continuous_actions:
-            # signal = 0 if -40 < action < 1 else action
-            signal = action
-        else:
-            signal = 5 if action == self.ACTION_BUY1 \
-                else 40 if action == self.ACTION_BUY2 \
-                else -40 if action == self.ACTION_SELL\
-                else 0
-
+        # signal = 0 if -40 < action < 1 else action
+        signal = action
         self.signals.append(signal)
 
         abs_sig = abs(signal)
@@ -179,10 +160,7 @@ class BitcoinEnv(Environment):
         pct_change = self.prices_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        if self.abs_reward:
-            reward = total - self.START_CAP*2  # Absolute reward
-        else:
-            reward = total - before['total']  # Relative reward (seems to work better)
+        reward = total - before['total']  # Relative reward (seems to work better)
 
         self.timestep += 1
         next_state = np.append(self.observations[self.timestep], [
