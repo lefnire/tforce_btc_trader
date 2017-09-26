@@ -10,9 +10,9 @@ from btc_env.btc_env import BitcoinEnvTforce
 STEPS = 2048 * 3 + 3
 
 
-def conf(overrides, agent_type='PPOAgent', mods='main', is_main=True):
+def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
     agent_name = agent_type + '|' + mods
-    env = BitcoinEnvTforce(steps=STEPS, agent_type=agent_type, agent_name=agent_name, is_main=is_main)
+    env = BitcoinEnvTforce(steps=STEPS, agent_type=agent_type, agent_name=agent_name, **env_args)
     neurons, dropout = 256, .2
 
 

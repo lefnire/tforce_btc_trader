@@ -21,6 +21,12 @@ try:
     scaler = joblib.load('data_/scaler.pkl')
 except Exception: pass
 
+try:
+    min_max = joblib.load('data_/min_max.pkl')
+    print('using min_max', min_max)
+except Exception:
+    min_max = None
+
 class BitcoinEnv(gym.Env):
     metadata = {
         'render.modes': []
@@ -30,14 +36,14 @@ class BitcoinEnv(gym.Env):
         self.indicators = False  # TODO move this to set_opts (required by observation_space here)
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
         self.action_space = spaces.Box(low=-100, high=100, shape=(1,))
-        self.observation_space = spaces.Box(low=-1000, high=1000, shape=(self.num_features(),))  # TODO
+        self.observation_space = spaces.Box(*min_max) if min_max else\
+            spaces.Box(low=-100, high=100, shape=(self.num_features(),))
         # self._seed()
 
-    def set_opts(self, steps=2048*5+5, agent_type='PPOAgent', agent_name='PPOAgent|main', scale_features=False,
-                 indicators=False, start_cap=1e3, is_main=True, log_results=True):
+    def set_opts(self, steps=2048*5+5, agent_name='PPOAgent|main', scale_features=False,
+                 indicators=False, start_cap=1e3, is_main=True, log_results=True, log_states=False):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.steps = steps
-        self.agent_type = agent_type
         self.agent_name = agent_name
         self.scale_features = scale_features
         self.indicators = indicators
@@ -45,6 +51,7 @@ class BitcoinEnv(gym.Env):
         self.is_main = is_main
         self.log_results = log_results
         self.summary_writer = tf.summary.FileWriter(f"./a3c/saves/train/{agent_name}")
+        self.log_states = log_states
         if is_main:
             data.wipe_rows(agent_name)
 
@@ -65,22 +72,6 @@ class BitcoinEnv(gym.Env):
         num *= len(data.tables)  # That many features per table
         num += 2  # [self.cash, self.value]
         return num
-
-    def _scale_features_and_save(self):
-        """
-        When using scaling on features (TODO experiment) then call this method once after changing
-        any way we're using features before training
-        """
-        all_data, _ = self._xform_data(data.db_to_dataframe())
-        # Add a rough estimate min/max of cash & value
-        for i in range(2):
-            all_data = np.hstack((
-                all_data,
-                np.random.uniform(-500000, 1500, (all_data.shape[0], 1))
-            ))
-        scaler = preprocessing.StandardScaler()
-        scaler.fit(all_data)
-        joblib.dump(scaler, 'data_/scaler.pkl')
 
     @staticmethod
     def _pct_change(arr):
@@ -174,6 +165,13 @@ class BitcoinEnv(gym.Env):
             self.cash,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
             self.value  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
         ])
+
+        # If we need to record a few thousand observations for use in scaling or determining min/max vals (turn off after)
+        if self.log_states:
+            # create table if not exists observations (obs double precision[])
+            obs = [float(o) for o in next_state]
+            conn.execute(text("insert into observations (obs) values (:obs)"), obs=obs)
+
         if self.scale_features:
             next_state = scaler.transform([next_state])[0]
 
@@ -218,6 +216,7 @@ class BitcoinEnv(gym.Env):
                 self.summary_writer.add_summary(summary, episode)
                 self.summary_writer.flush()
 
+            return
             # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
             if total > self.start_cap * 2:
                 y = [float(p) for p in self.prices]
@@ -233,8 +232,26 @@ class BitcoinEnv(gym.Env):
             conn.execute(q, episode=episode, reward=reward, cash=cash, value=value,
                          agent_name=self.agent_name, steps=self.timestep, y=y, signals=signals)
 
+
 class BitcoinEnvTforce(OpenAIGym):
     def __init__(self, **kwargs):
         super(BitcoinEnvTforce, self).__init__('BTC-v0')
         seed = 1234; np.random.seed(seed); tf.set_random_seed(seed); self.gym.env.seed(seed)
         self.gym.env.set_opts(**kwargs)
+
+
+def scale_features_and_save():
+    """
+    If we want to scale/normalize or min/max features (states), first run the Env in log_states=True mode for a while,
+    then call this function manually from python shell
+    """
+    observations = conn.execute('select obs from observations').fetchall()
+    observations = [o[0] for o in observations]
+    mat = np.array(observations)
+    min_max = [np.floor(np.amin(mat, axis=0)), np.ceil(np.amax(mat, axis=0))]
+    print('min/max: ', min_max)
+    joblib.dump(min_max, 'data_/min_max.pkl')
+    # scaler = preprocessing.StandardScaler()
+    scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
+    scaler.fit(observations)
+    joblib.dump(scaler, 'data_/scaler.pkl')
