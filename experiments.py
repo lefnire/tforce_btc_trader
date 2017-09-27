@@ -31,8 +31,8 @@ confs = [
             'DLLD', 'LLDD', 'LLLD',
             'DLLLD'
         ]
-        # Good: LL64, LLDD64
-        # Bad
+        # Good: LLDD64, DLLLD64; ~DLL128, LLD128, LLDD128
+        # LLDD seems best arch, tie b/w 64/128
     ]),
     dict(k='batch', v=[
         dict(k='b2048.o64(ppo1)', v=dict(batch_size=2048, optimizer_batch_size=64)),

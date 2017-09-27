@@ -13,6 +13,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     ac = env.action_space.sample() # not used, just so we have the datatype
     new = True # marks if we're on first timestep of an episode
     ob = env.reset()
+    rnn_state = pi.rnn_init
 
     cur_ep_ret = 0 # return in current episode
     cur_ep_len = 0 # len of current episode
@@ -25,12 +26,12 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     vpreds = np.zeros(horizon, 'float32')
     news = np.zeros(horizon, 'int32')
     acs = np.array([ac for _ in range(horizon)])
-    rnn_states = np.array([pi.rnn_state_init for _ in range(horizon)])
+    rnn_states = np.array([pi.rnn_init for _ in range(horizon)])
     prevacs = acs.copy()
 
     while True:
         prevac = ac
-        ac, vpred, rnn_state = pi.act(stochastic, ob)
+        ac, vpred, rnn_state = pi.act(stochastic, ob, rnn_state)
         # Slight weirdness here because we need value function at time T
         # before returning segment [0, T-1] so we get the correct
         # terminal value

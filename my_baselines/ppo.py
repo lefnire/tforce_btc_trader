@@ -8,7 +8,8 @@ import sys
 import btc_env
 
 def train(env_id, num_timesteps, seed):
-    from baselines.ppo1 import mlp_policy, pposgd_simple
+    # from baselines.ppo1 import mlp_policy, pposgd_simple
+    from my_baselines.ppo2 import mlp_policy, pposgd_simple
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(seed)
     env = gym.make(env_id)
@@ -24,7 +25,7 @@ def train(env_id, num_timesteps, seed):
             max_timesteps=num_timesteps,
             timesteps_per_batch=2048,
             clip_param=0.2, entcoeff=0.0,
-            optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64,
+            optim_epochs=1, optim_stepsize=3e-4, optim_batchsize=1,
             gamma=0.99, lam=0.95, schedule='linear',
         )
     env.close()
