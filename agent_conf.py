@@ -12,16 +12,9 @@ STEPS = 2048 * 3 + 3
 
 def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
     agent_name = agent_type + '|' + mods
-    env = BitcoinEnvTforce(steps=STEPS, agent_type=agent_type, agent_name=agent_name, **env_args)
+    env = BitcoinEnvTforce(steps=STEPS, agent_name=agent_name, **env_args)
     neurons, dropout = 256, .2
 
-
-    # Global conf
-    # try-next: diff dropout, dqn, discount
-    # possible winners: no-scale, relative-reward, normalize_rewards=False, 512>256, elu/he_init LSTM
-    # definite winners: dropout, dense2, 256>150 4L, baseline=None (try MLP for DQN), random_sampling=True, nadam
-    # losers: 3x-baseline, dense(original)
-    # unclear: vpg
     conf = dict(
         tf_session_config=None,
         # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
@@ -38,6 +31,14 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
             dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
         ],
 
+        baseline=dict(
+            type="mlp",
+            sizes=[64, 64],
+            epochs=5,  # 10
+            update_batch_size=128,  # 1024
+            learning_rate=.01
+        ),
+
         # Main
         discount=.99,
         exploration=dict(
@@ -50,17 +51,6 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
         states=env.states,
         actions=env.actions,
     )
-
-    if not env.actions['continuous']:
-        conf.update(
-            baseline=dict(
-                type="mlp",
-                sizes=[256, 256],
-                epochs=5,
-                update_batch_size=128,
-                learning_rate=.01
-            ),
-        )
 
     # PolicyGradientModel
     if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
