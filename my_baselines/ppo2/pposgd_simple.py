@@ -7,7 +7,6 @@ from baselines.common.mpi_adam import MpiAdam
 from baselines.common.mpi_moments import mpi_moments
 from mpi4py import MPI
 from collections import deque
-from my_baselines.ppo2.mlp_policy import NEURONS, LAYERS
 
 def traj_segment_generator(pi, env, horizon, stochastic):
     t = 0
@@ -123,12 +122,20 @@ def learn(env, policy_func, *,
     loss_names = ["pol_surr", "pol_entpen", "vf_loss", "kl", "ent"]
 
     var_list = pi.get_trainable_variables()
-    lossandgrad = U.function([ob, ac, atarg, ret, lrmult, rnn_state], losses + [U.flatgrad(total_loss, var_list)])
+    lossandgrad = U.function(
+        [ob, ac, atarg, ret, lrmult, rnn_state],
+        losses + [U.flatgrad(total_loss, var_list)],
+        givens={pi.training: True}
+    )
     adam = MpiAdam(var_list, epsilon=adam_epsilon)
 
     assign_old_eq_new = U.function([],[], updates=[tf.assign(oldv, newv)
         for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
-    compute_losses = U.function([ob, ac, atarg, ret, lrmult, rnn_state], losses)
+    compute_losses = U.function(
+        [ob, ac, atarg, ret, lrmult, rnn_state],
+        losses,
+        givens={pi.training: True}
+    )
 
     U.initialize()
     adam.sync()

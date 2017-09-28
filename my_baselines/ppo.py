@@ -15,8 +15,8 @@ def main():
     set_global_seeds(seed)
     env = gym.make("BTC-v0")
     env.env.init(env,
-        agent_name=f'baselines.{mlp_policy.NEURONS}.{mlp_policy.MODE}',
-        scale_features=mlp_policy.MODE == 'scale'
+        agent_name=f'baselines.{mlp_policy.NAME}',
+        scale_features='scale' in mlp_policy.NAME
     )
     def policy_fn(name, ob_space, ac_space):
         return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space)
@@ -28,7 +28,7 @@ def main():
             max_timesteps=1e12,   # infinite
             timesteps_per_batch=2048,
             clip_param=0.2, entcoeff=0.0,
-            optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64,
+            optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=128,
             gamma=0.99, lam=0.95, schedule='linear',
         )
     env.close()
