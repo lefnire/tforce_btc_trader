@@ -108,7 +108,7 @@ def main():
         tf_summary_level=0,
         preprocessing=None,
     )
-    conf = agent_conf.conf(c['conf'], 'PPOAgent', c['name'], is_main=args.task_index == 0)
+    conf = agent_conf.conf(c['conf'], 'PPOAgent', c['name'], env_args=dict(is_main=args.task_index == 0))
 
     logger = logging.getLogger(__name__)
     logger.setLevel(log_levels[conf['conf'].log_level])

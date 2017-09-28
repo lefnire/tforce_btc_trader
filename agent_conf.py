@@ -10,15 +10,16 @@ from btc_env.btc_env import BitcoinEnvTforce
 STEPS = 2048 * 3 + 3
 
 
-def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
+def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=False):
     agent_name = agent_type + '|' + mods
     env = BitcoinEnvTforce(steps=STEPS, agent_name=agent_name, **env_args)
-    neurons, dropout = 256, .2
+    neurons, dropout = 64, .2
 
     conf = dict(
         tf_session_config=None,
         # tf_session_config=tf.ConfigProto(device_count={'GPU': 0}),
         # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
+        log_level="info",
         tf_saver=False,
         tf_summary=None,
         tf_summary_level=0,
@@ -45,7 +46,7 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
             type="epsilon_decay",
             epsilon=1.0,
             epsilon_final=0.1,
-            epsilon_timesteps=2e6
+            epsilon_timesteps=1e6
         ),
         optimizer="nadam", # winner=nadam
         states=env.states,
@@ -55,8 +56,8 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
     # PolicyGradientModel
     if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         conf.update(
-            batch_size=2048,  # batch_size must be > optimizer_batch_size
-            optimizer_batch_size=1024,
+            batch_size=1024,  # batch_size must be > optimizer_batch_size
+            optimizer_batch_size=256,
             learning_rate=.001,
             normalize_rewards=True  # definite winner=True
             # gae_rewards winner=False
@@ -108,13 +109,13 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}):
 
     # From caller (A3C v single-run)
     conf.update(overrides)
-    pprint(conf)
+    # pprint(conf)
     # Allow overrides to network above, then run it through configurator
     conf['network'] = layered_network_builder(conf['network'])
     conf = Configuration(**conf)
 
     return dict(
-        agent=agent_class(config=conf),
+        agent=None if no_agent else agent_class(config=conf),
         conf=conf,
         env=env,
         agent_name=agent_name

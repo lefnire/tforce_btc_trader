@@ -13,7 +13,7 @@ class MlpPolicy(object):
             self.scope = tf.get_variable_scope().name
 
     def lstm(self, x, size, name):
-        inputs = x if tf.rank(x) == 3 else tf.expand_dims(x, [0])
+        inputs = tf.expand_dims(x, [0])
 
         cell = tf.nn.rnn_cell.LSTMCell(size)
         self.rnn_init = (

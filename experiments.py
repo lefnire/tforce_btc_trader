@@ -10,7 +10,7 @@ def baseline(**kwargs):
     return b
 
 
-def network(arch='LLDD', n=256, d=.2, a='elu'):
+def network(arch='LLDD', n=128, d=.2, a='elu'):
     net = [dict(type='dropout', size=n, dropout=d)] if d else []
     for layer in arch:
         if layer == 'L':
@@ -22,17 +22,36 @@ def network(arch='LLDD', n=256, d=.2, a='elu'):
 confs = [
     dict(k='main', v=[dict(k='-', v=dict())]),
     dict(k='network', v=[
+        # dict(k='LLDD.64', v=network(n=64)),
+        dict(k='LLDD.128', v=network(n=128)),
+        dict(k='LLDD.256', v=network(n=256)),
+    ]),
+    dict(k='baseline', v=[dict(k='None', v=dict(baseline=None))]),
+
+
+    dict(k='baseline', v=[
+        dict(k='None', v=dict(baseline=None)),
+        dict(k='2x128', v=baseline(sizes=[128, 128])),  # TODO test 64 vs 128
+        # dict(k='2x256', v=baseline(sizes=[256, 256])),  # loser
+        dict(k='epochs10', v=baseline(epochs=10)),
+        dict(k='update_batch_size64', v=baseline(update_batch_size=64)),
+        dict(k='update_batch_size512', v=baseline(update_batch_size=512)),
+        dict(k='learning_rate.001', v=baseline(learning_rate=.001)),
+    ]),
+    dict(k='network', v=[
         dict(k=f'{arch}.{neur}', v=network(arch, neur))
         for neur in [64, 128, 256, 512]
         for arch in [
-            'L',
-            'DL', 'LD', 'LL',
-            'DLD', 'DLL', 'LDD', 'LLD', 'LLL',
-            'DLLD', 'LLDD', 'LLLD',
-            'DLLLD'
+            # 'L',  # loser
+            # 'DL', 'LD', 'LL',  # losers
+            # 'DLD', 'DLL', 'LDD', 'LLD', 'LLL',
+            # 'DLLD', 'LLDD', 'LLLD',
+            # 'DLLLD'
+            'LLD', 'LLDD', 'DLLD', 'DLLDD', #'DLLLD
         ]
+
         # Good: LLDD64, DLLLD64; ~DLL128, LLD128, LLDD128
-        # LLDD seems best arch, tie b/w 64/128
+        # D{0|1}L{2+}D{1+}, LLDD seems best
     ]),
     dict(k='batch', v=[
         dict(k='b2048.o64(ppo1)', v=dict(batch_size=2048, optimizer_batch_size=64)),
@@ -44,15 +63,6 @@ confs = [
         dict(k='b4096.o1024', v=dict(batch_size=4096, optimizer_batch_size=1024)),
         # dict(k='b4096.o2048', v=dict(batch_size=4096, optimizer_batch_size=2048)),
     ]),
-    dict(k='baseline', v=[
-        dict(k='None', v=dict(baseline=None)),
-        dict(k='2x128', v=baseline(sizes=[128, 128])),  # TODO test 64 vs 128
-        # dict(k='2x256', v=baseline(sizes=[256, 256])),  # loser
-        dict(k='epochs10', v=baseline(epochs=5)),
-        dict(k='update_batch_size64', v=baseline(update_batch_size=64)),
-        dict(k='update_batch_size512', v=baseline(update_batch_size=512)),
-        dict(k='learning_rate.001', v=baseline(learning_rate=.001)),
-    ]),
     dict(k='epochs', v=[
         dict(k='1', v=dict(epochs=1)),
         dict(k='10', v=dict(epochs=10)),
@@ -62,6 +72,7 @@ confs = [
         dict(k='selu', v=network(a='selu')),
         dict(k='tanh', v=network(a='tanh'))
     ]),
+
     dict(k='gae_rewards', v=[
         dict(k='True', v=dict(gae_rewards=True)),  # winner=False
     ]),

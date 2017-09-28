@@ -247,11 +247,12 @@ def scale_features_and_save():
     """
     observations = conn.execute('select obs from observations').fetchall()
     observations = [o[0] for o in observations]
+
     mat = np.array(observations)
     min_max = [np.floor(np.amin(mat, axis=0)), np.ceil(np.amax(mat, axis=0))]
     print('min/max: ', min_max)
     joblib.dump(min_max, 'data_/min_max.pkl')
-    # scaler = preprocessing.StandardScaler()
-    scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
-    scaler.fit(observations)
+
+    scaler = preprocessing.StandardScaler()
+    observations = scaler.fit_transform(observations)
     joblib.dump(scaler, 'data_/scaler.pkl')
