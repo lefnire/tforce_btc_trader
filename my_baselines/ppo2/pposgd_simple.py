@@ -7,6 +7,7 @@ from baselines.common.mpi_adam import MpiAdam
 from baselines.common.mpi_moments import mpi_moments
 from mpi4py import MPI
 from collections import deque
+from my_baselines.ppo2.mlp_policy import NEURONS, LAYERS
 
 def traj_segment_generator(pi, env, horizon, stochastic):
     t = 0
@@ -104,8 +105,7 @@ def learn(env, policy_func, *,
 
     ob = U.get_placeholder_cached(name="ob")
     ac = pi.pdtype.sample_placeholder([None])
-    c_in = U.get_placeholder_cached(name="c_in")
-    h_in = U.get_placeholder_cached(name="h_in")
+    rnn_state = U.get_placeholder_cached(name="rnn_state")
 
     kloldnew = oldpi.pd.kl(pi.pd)
     ent = pi.pd.entropy()
@@ -123,12 +123,12 @@ def learn(env, policy_func, *,
     loss_names = ["pol_surr", "pol_entpen", "vf_loss", "kl", "ent"]
 
     var_list = pi.get_trainable_variables()
-    lossandgrad = U.function([ob, ac, atarg, ret, lrmult, c_in, h_in], losses + [U.flatgrad(total_loss, var_list)])
+    lossandgrad = U.function([ob, ac, atarg, ret, lrmult, rnn_state], losses + [U.flatgrad(total_loss, var_list)])
     adam = MpiAdam(var_list, epsilon=adam_epsilon)
 
     assign_old_eq_new = U.function([],[], updates=[tf.assign(oldv, newv)
         for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
-    compute_losses = U.function([ob, ac, atarg, ret, lrmult, c_in, h_in], losses)
+    compute_losses = U.function([ob, ac, atarg, ret, lrmult, rnn_state], losses)
 
     U.initialize()
     adam.sync()
@@ -185,9 +185,9 @@ def learn(env, policy_func, *,
         for _ in range(optim_epochs):
             losses = [] # list of tuples, each of which gives the loss for a minibatch
             for batch in d.iterate_once(optim_batchsize):
-                c_in = batch["rnn_state"][:, 0, :, :].reshape(optim_batchsize, -1)
-                h_in = batch["rnn_state"][:, 1, :, :].reshape(optim_batchsize, -1)
-                *newlosses, g = lossandgrad(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult, c_in, h_in)
+                # We collect rnn_states batch-first, naturally. TF expects batch in 3rd column...
+                rnn_state = np.transpose(batch["rnn_state"], [1, 2, 0, 3])
+                *newlosses, g = lossandgrad(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult, rnn_state)
                 adam.update(g, optim_stepsize * cur_lrmult) 
                 losses.append(newlosses)
             logger.log(fmt_row(13, np.mean(losses, axis=0)))
@@ -195,9 +195,8 @@ def learn(env, policy_func, *,
         logger.log("Evaluating losses...")
         losses = []
         for batch in d.iterate_once(optim_batchsize):
-            c_in = batch["rnn_state"][:,0,:,:].reshape(optim_batchsize,-1)
-            h_in = batch["rnn_state"][:,1,:,:].reshape(optim_batchsize,-1)
-            newlosses = compute_losses(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult, c_in, h_in)
+            rnn_state = np.transpose(batch["rnn_state"], [1, 2, 0, 3])
+            newlosses = compute_losses(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult, rnn_state)
             losses.append(newlosses)            
         meanlosses,_,_ = mpi_moments(losses, axis=0)
         logger.log(fmt_row(13, meanlosses))

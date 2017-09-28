@@ -214,10 +214,8 @@ class BitcoinEnv(gym.Env):
                 reward = float(results['rewards'][-1])
                 reward_avg = np.mean(results['rewards'][-50:])
                 summary = tf.Summary()
-                if episode > 15:
-                    # Tensorboard smoothing is affected by all data points, but early points are random
-                    summary.value.add(tag='Perf/Total', simple_value=total)
-                    summary.value.add(tag='Perf/Reward', simple_value=reward)
+                summary.value.add(tag='Perf/Total', simple_value=total)
+                summary.value.add(tag='Perf/Reward', simple_value=reward)
                 summary.value.add(tag='Perf/Reward_AVG', simple_value=reward_avg)
                 self.summary_writer.add_summary(summary, episode)
                 self.summary_writer.flush()

@@ -26,18 +26,26 @@ def network(arch='LLDD', n=512, d=.2, a='elu'):
 
 confs = [
     dict(k='main', v=[dict(k='-', v=dict())]),
+    dict(k='network', v=[
+        dict(k=f'{arch}.{neur}', v=network(arch, neur))
+        for neur in [512, 256, 64, 128]
+        for arch in [
+            # 'L',  # loser
+            # 'DL', 'LD', 'LL',  # losers
+            # 'DLD', 'DLL', 'LDD', 'LLD', 'LLL',
+            # 'DLLD', 'LLDD', 'LLLD',
+            # 'DLLLD'
+            'LLdd', 'LLDD', 'LLD', 'DLLD', 'DLLDD', 'DLLLD'
+        ]
+        # Good: LLDD64, DLLLD64; ~DLL128, LLD128, LLDD128
+        # D{0|1}L{2+}D{1+}, LLDD seems best
+    ]),
     dict(k='activation', v=[
         dict(k='tanh', v=network(a='tanh')),
         dict(k='selu', v=network(a='selu')),
         dict(k='dense1', v=network('LLdd')),
         dict(k='dense1.l2', v=network('LLdd', d=None))
     ]),
-    # dict(k='network', v=[
-        # dict(k='LLDD.64', v=network(n=64)),
-        # dict(k='LLDD.128', v=network(n=128)),
-        # dict(k='LLDD.256', v=network(n=256)),  # clear winner
-        # dict(k='LLDD.512', v=network(n=512)),
-    # ]),
     dict(k='baseline', v=[
         dict(k='None', v=dict(baseline=None)),  # Baseline is good
         dict(k='2x128', v=baseline(sizes=[128, 128])),  # TODO test 64 vs 128
@@ -46,21 +54,6 @@ confs = [
         dict(k='update_batch_size64', v=baseline(update_batch_size=64)),
         dict(k='update_batch_size512', v=baseline(update_batch_size=512)),
         dict(k='learning_rate.001', v=baseline(learning_rate=.001)),
-    ]),
-    dict(k='network', v=[
-        dict(k=f'{arch}.{neur}', v=network(arch, neur))
-        for neur in [64, 128, 256, 512]
-        for arch in [
-            # 'L',  # loser
-            # 'DL', 'LD', 'LL',  # losers
-            # 'DLD', 'DLL', 'LDD', 'LLD', 'LLL',
-            # 'DLLD', 'LLDD', 'LLLD',
-            # 'DLLLD'
-            'LLD', 'LLDD', 'DLLD', 'DLLDD', #'DLLLD
-        ]
-
-        # Good: LLDD64, DLLLD64; ~DLL128, LLD128, LLDD128
-        # D{0|1}L{2+}D{1+}, LLDD seems best
     ]),
     dict(k='batch', v=[
         dict(k='b2048.o64(ppo1)', v=dict(batch_size=2048, optimizer_batch_size=64)),
