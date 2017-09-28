@@ -5,6 +5,10 @@ import tensorflow as tf
 import gym
 from baselines.common.distributions import make_pdtype
 
+NEURONS, LAYERS = 256, 2
+MODE = 'dropout'  # tanh, selu, dropout, scale  - try next: 256, 2L, w/o ob_rms, tforce w/ min/max=5, dense1 (relu + init)
+
+
 class MlpPolicy(object):
     recurrent = True
     def __init__(self, name, *args, **kwargs):
@@ -13,9 +17,11 @@ class MlpPolicy(object):
             self.scope = tf.get_variable_scope().name
 
     def lstm(self, x, size, name):
-        inputs = tf.expand_dims(x, [0])
+        inputs = x if len(x.get_shape()) > 2 else tf.expand_dims(x, [1])
 
         cell = tf.nn.rnn_cell.LSTMCell(size)
+        if MODE == 'dropout':
+            cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=.8, input_keep_prob=.8)
         self.rnn_init = (
             np.zeros((1, cell.state_size.c), np.float32),
             np.zeros((1, cell.state_size.h), np.float32)
@@ -25,14 +31,16 @@ class MlpPolicy(object):
 
         lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
             cell, inputs,
-            initial_state=tf.contrib.rnn.LSTMStateTuple(self.c_in, self.h_in),
+            # sequence_length=(tf.shape(x)[1], 1),
+            initial_state=tf.nn.rnn_cell.LSTMStateTuple(self.c_in, self.h_in),
             time_major=False)
         lstm_c, lstm_h = lstm_state
 
-        self.rnn_next = (lstm_c[:1, :], lstm_h[:1, :])
+        # self.rnn_next = (lstm_c[:1, :], lstm_h[:1, :])
+        self.rnn_next = (lstm_c, lstm_h)
         return tf.reshape(lstm_outputs, [-1, size])
 
-    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, gaussian_fixed_var=True):
+    def _init(self, ob_space, ac_space, gaussian_fixed_var=True):
         assert isinstance(ob_space, gym.spaces.Box)
 
         self.pdtype = pdtype = make_pdtype(ac_space)
@@ -47,16 +55,20 @@ class MlpPolicy(object):
 
         # Value Function
         last_out = obz
-        last_out = self.lstm(last_out, hid_size, "vffc_lstm")
+        last_out = self.lstm(last_out, NEURONS, "vffc_lstm")
         rnn_out = last_out
-        for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(U.dense(last_out, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+        for i in range(LAYERS):
+            last_out = tf.nn.tanh(U.dense(last_out, NEURONS, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+            if MODE == 'dropout':
+                last_out = tf.layers.dropout(last_out, rate=.2, training=True)
         self.vpred = U.dense(last_out, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
 
         # Policy Function
         last_out = rnn_out
-        for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(U.dense(last_out, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+        for i in range(LAYERS):
+            last_out = tf.nn.tanh(U.dense(last_out, NEURONS, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+            if MODE == 'dropout':
+                last_out = tf.layers.dropout(last_out, rate=.2, training=True)
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
             logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer())

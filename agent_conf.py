@@ -13,7 +13,7 @@ STEPS = 2048 * 3 + 3
 def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=False):
     agent_name = agent_type + '|' + mods
     env = BitcoinEnvTforce(steps=STEPS, agent_name=agent_name, **env_args)
-    neurons, dropout = 64, .2
+    neurons, dropout = 512, .2
 
     conf = dict(
         tf_session_config=None,

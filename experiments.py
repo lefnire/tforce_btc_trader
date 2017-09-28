@@ -10,27 +10,36 @@ def baseline(**kwargs):
     return b
 
 
-def network(arch='LLDD', n=128, d=.2, a='elu'):
+def network(arch='LLDD', n=512, d=.2, a='elu'):
     net = [dict(type='dropout', size=n, dropout=d)] if d else []
     for layer in arch:
         if layer == 'L':
-            net.append(dict(type='lstm', size=n, dropout=d))
+            net += [dict(type='lstm', size=n, dropout=d)]
         elif layer == 'D':
-            net.append(dict(type='dense2', size=n, dropout=d, activation=a))
+            net += [dict(type='dense2', size=n, dropout=d, activation=a)]
+        elif layer == 'd':
+            if d:
+                net += [dict(type='dense', size=n), dict(type='dropout', size=n, dropout=d)]
+            else:
+                net += [dict(type='dense', size=n, l2_regularization=.001)]
     return dict(network=net)
 
 confs = [
     dict(k='main', v=[dict(k='-', v=dict())]),
-    dict(k='network', v=[
-        # dict(k='LLDD.64', v=network(n=64)),
-        dict(k='LLDD.128', v=network(n=128)),
-        dict(k='LLDD.256', v=network(n=256)),
+    dict(k='activation', v=[
+        dict(k='tanh', v=network(a='tanh')),
+        dict(k='selu', v=network(a='selu')),
+        dict(k='dense1', v=network('LLdd')),
+        dict(k='dense1.l2', v=network('LLdd', d=None))
     ]),
-    dict(k='baseline', v=[dict(k='None', v=dict(baseline=None))]),
-
-
+    # dict(k='network', v=[
+        # dict(k='LLDD.64', v=network(n=64)),
+        # dict(k='LLDD.128', v=network(n=128)),
+        # dict(k='LLDD.256', v=network(n=256)),  # clear winner
+        # dict(k='LLDD.512', v=network(n=512)),
+    # ]),
     dict(k='baseline', v=[
-        dict(k='None', v=dict(baseline=None)),
+        dict(k='None', v=dict(baseline=None)),  # Baseline is good
         dict(k='2x128', v=baseline(sizes=[128, 128])),  # TODO test 64 vs 128
         # dict(k='2x256', v=baseline(sizes=[256, 256])),  # loser
         dict(k='epochs10', v=baseline(epochs=10)),
@@ -68,11 +77,6 @@ confs = [
         dict(k='10', v=dict(epochs=10)),
         # dict(k='40', v=dict(epochs=40)),  # loser
     ]),
-    dict(k='activation', v=[
-        dict(k='selu', v=network(a='selu')),
-        dict(k='tanh', v=network(a='tanh'))
-    ]),
-
     dict(k='gae_rewards', v=[
         dict(k='True', v=dict(gae_rewards=True)),  # winner=False
     ]),

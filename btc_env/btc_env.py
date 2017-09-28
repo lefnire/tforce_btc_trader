@@ -23,7 +23,7 @@ except Exception: pass
 
 try:
     min_max = joblib.load('data_/min_max.pkl')
-    print('using min_max', min_max)
+    min_max_scaled = joblib.load('data_/min_max_scaled.pkl')
 except Exception:
     min_max = None
 
@@ -32,16 +32,11 @@ class BitcoinEnv(gym.Env):
         'render.modes': []
     }
 
-    def __init__(self):
-        self.indicators = False  # TODO move this to set_opts (required by observation_space here)
-        self.episode_results = {'cash': [], 'values': [], 'rewards': []}
-        self.action_space = spaces.Box(low=-100, high=100, shape=(1,))
-        self.observation_space = spaces.Box(*min_max) if min_max else\
-            spaces.Box(low=-100, high=100, shape=(self.num_features(),))
-        # self._seed()
+    # Calling gym.make(ID) doesn't allow passing in params, so we make then initialize separately
+    # def __init__(self):
 
-    def set_opts(self, steps=2048*5+5, agent_name='PPOAgent|main', scale_features=False,
-                 indicators=False, start_cap=1e3, is_main=True, log_results=True, log_states=False):
+    def init(self, gym_env, steps=2048*5+5, agent_name='PPOAgent|main', scale_features=False,
+             indicators=False, start_cap=1e3, is_main=True, log_results=True, log_states=False):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.steps = steps
         self.agent_name = agent_name
@@ -52,6 +47,16 @@ class BitcoinEnv(gym.Env):
         self.log_results = log_results
         self.summary_writer = tf.summary.FileWriter(f"./a3c/saves/train/{agent_name}")
         self.log_states = log_states
+        self.episode_results = {'cash': [], 'values': [], 'rewards': []}
+
+        gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
+        gym_env.observation_space = spaces.Box(*min_max_scaled) if scale_features else\
+            spaces.Box(*min_max) if min_max else\
+            spaces.Box(low=-100, high=100, shape=(self.num_features(),))
+        if scale_features: print('using min_max', min_max_scaled)
+        elif min_max: print('using min_max', min_max)
+        
+        # self._seed()
         if is_main:
             data.wipe_rows(agent_name)
 
@@ -183,7 +188,6 @@ class BitcoinEnv(gym.Env):
             self.episode_results['cash'].append(self.cash)
             self.episode_results['values'].append(self.value)
             self.episode_results['rewards'].append(self.total_reward)
-            self.action_counter = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
             self.time = round(time.time() - self.time)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
@@ -199,7 +203,9 @@ class BitcoinEnv(gym.Env):
         reward, cash, value = float(self.total_reward), float(self.cash), float(self.value)
         total = cash + value
         avg100 = int(np.mean(res['cash'][-100:]) + np.mean(res['values'][-100:]))
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(total)}\tAVG$:{avg100}\tActions:{self.action_counter}")
+        common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
+        high, low = np.max(self.signals), np.min(self.signals)
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(total)}\tAVG$:{avg100}\tActions:{common}(high={high},low={low})")
 
         if self.is_main:
             if self.log_results:
@@ -237,7 +243,7 @@ class BitcoinEnvTforce(OpenAIGym):
     def __init__(self, **kwargs):
         super(BitcoinEnvTforce, self).__init__('BTC-v0')
         seed = 1234; np.random.seed(seed); tf.set_random_seed(seed); self.gym.env.seed(seed)
-        self.gym.env.set_opts(**kwargs)
+        self.gym.env.init(self.gym, **kwargs)
 
 
 def scale_features_and_save():
@@ -254,5 +260,10 @@ def scale_features_and_save():
     joblib.dump(min_max, 'data_/min_max.pkl')
 
     scaler = preprocessing.StandardScaler()
-    observations = scaler.fit_transform(observations)
+    scaled = scaler.fit_transform(observations)
     joblib.dump(scaler, 'data_/scaler.pkl')
+
+    mat = np.array(scaled)
+    min_max = [np.floor(np.amin(mat, axis=0)), np.ceil(np.amax(mat, axis=0))]
+    print('min/max (scaled): ', min_max)
+    joblib.dump(min_max, 'data_/min_max_scaled.pkl')
