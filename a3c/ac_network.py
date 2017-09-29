@@ -4,7 +4,7 @@ import numpy as np
 # Clipping ratio for gradients
 CLIP_NORM = 40.0
 CELL_UNITS = 512
-D_LAYERS, L_LAYERS = 2, 2
+L_LAYERS = 2
 FUNNEL = True
 DROPOUT = .4
 
@@ -23,6 +23,10 @@ class AC_Network():
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
 
             net = self.inputs if self.inputs.get_shape().ndims == 3 else tf.expand_dims(self.inputs, [1])
+            net = tf.layers.dropout(net, rate=DROPOUT, training=training)
+
+            # 1st dense layer
+            net = tf.layers.dense(net, 64, kernel_initializer=he_init, activation=tf.nn.elu)
             net = tf.layers.dropout(net, rate=DROPOUT, training=training)
 
             # Recurrent network for temporal dependencies
@@ -48,14 +52,15 @@ class AC_Network():
             # self.rnn_next = (lstm_c[:1, :], lstm_h[:1, :])
             net = tf.reshape(output, [-1, CELL_UNITS])
 
-            for i in range(2):
-                size = CELL_UNITS//(i+1) if FUNNEL else CELL_UNITS
-                net = tf.layers.dense(net, size, kernel_initializer=he_init, activation=tf.nn.elu)
-                net = tf.layers.dropout(net, rate=DROPOUT, training=training)
+            # Policy function
+            policy = tf.layers.dense(net, 128, kernel_initializer=he_init, activation=tf.nn.elu)
+            policy = tf.layers.dropout(policy, rate=DROPOUT, training=training)
+            self.policy = tf.squeeze(tf.layers.dense(policy, 1, kernel_initializer=he_init))
 
-            # Output layers for policy and value estimations
-            self.policy = tf.squeeze(tf.layers.dense(net, 1, kernel_initializer=he_init))
-            self.value = tf.layers.dense(net, 1, kernel_initializer=he_init)
+            # Value estimation
+            value = tf.layers.dense(net, 128, kernel_initializer=he_init, activation=tf.nn.elu)
+            value = tf.layers.dropout(value, rate=DROPOUT, training=training)
+            self.value = tf.layers.dense(value, 1, kernel_initializer=he_init)
 
             # Only the worker network need ops for loss functions and gradient updating.
             if scope != 'global':
