@@ -212,7 +212,7 @@ class BitcoinEnv(gym.Env):
                 results = self.episode_results
                 total = float(results['cash'][-1] + results['values'][-1])
                 reward = float(results['rewards'][-1])
-                reward_avg = np.mean(results['rewards'][-50:])
+                reward_avg = np.mean(results['rewards'][-20:])
                 summary = tf.Summary()
                 summary.value.add(tag='Perf/Total', simple_value=total)
                 summary.value.add(tag='Perf/Reward', simple_value=reward)
