@@ -13,8 +13,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     ac = env.action_space.sample() # not used, just so we have the datatype
     new = True # marks if we're on first timestep of an episode
     ob = env.reset()
-    vffc_state = pi.rnn_init()
-    polfc_state = pi.rnn_init()
+    rnn_state = pi.rnn_init
 
     cur_ep_ret = 0 # return in current episode
     cur_ep_len = 0 # len of current episode
@@ -27,20 +26,19 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     vpreds = np.zeros(horizon, 'float32')
     news = np.zeros(horizon, 'int32')
     acs = np.array([ac for _ in range(horizon)])
-    vffc_states = np.array([pi.rnn_init() for _ in range(horizon)])
-    polfc_states = np.array([pi.rnn_init() for _ in range(horizon)])
+    rnn_states = np.array([pi.rnn_init for _ in range(horizon)])
     prevacs = acs.copy()
 
     while True:
         prevac = ac
-        ac, vpred, vffc_state, polfc_state = pi.act(stochastic, ob, vffc_state, polfc_state)
+        ac, vpred, rnn_state = pi.act(stochastic, ob, rnn_state)
         # Slight weirdness here because we need value function at time T
         # before returning segment [0, T-1] so we get the correct
         # terminal value
         if t > 0 and t % horizon == 0:
             yield {"ob" : obs, "rew" : rews, "vpred" : vpreds, "new" : news,
                     "ac" : acs, "prevac" : prevacs, "nextvpred": vpred * (1 - new),
-                    "ep_rets" : ep_rets, "ep_lens" : ep_lens, "vffc_state": vffc_states, "polfc_state": polfc_states}
+                    "ep_rets" : ep_rets, "ep_lens" : ep_lens, "rnn_state": rnn_states}
             # Be careful!!! if you change the downstream algorithm to aggregate
             # several of these batches, then be sure to do a deepcopy
             ep_rets = []
@@ -51,8 +49,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         news[i] = new
         acs[i] = ac
         prevacs[i] = prevac
-        vffc_states[i] = vffc_state
-        polfc_states[i] = polfc_state
+        rnn_states[i] = rnn_state
 
         ob, rew, new, _ = env.step(ac)
         rews[i] = rew
@@ -107,8 +104,7 @@ def learn(env, policy_func, *,
 
     ob = U.get_placeholder_cached(name="ob")
     ac = pi.pdtype.sample_placeholder([None])
-    vffc_state = U.get_placeholder_cached(name="vffc/rnn_prev")
-    polfc_state = U.get_placeholder_cached(name="polfc/rnn_prev")
+    rnn_state = U.get_placeholder_cached(name="rnn_state")
 
     kloldnew = oldpi.pd.kl(pi.pd)
     ent = pi.pd.entropy()
@@ -127,7 +123,7 @@ def learn(env, policy_func, *,
 
     var_list = pi.get_trainable_variables()
     lossandgrad = U.function(
-        [ob, ac, atarg, ret, lrmult, vffc_state, polfc_state],
+        [ob, ac, atarg, ret, lrmult, rnn_state],
         losses + [U.flatgrad(total_loss, var_list)],
         givens={pi.training: True}
     )
@@ -136,7 +132,7 @@ def learn(env, policy_func, *,
     assign_old_eq_new = U.function([],[], updates=[tf.assign(oldv, newv)
         for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
     compute_losses = U.function(
-        [ob, ac, atarg, ret, lrmult, vffc_state, polfc_state],
+        [ob, ac, atarg, ret, lrmult, rnn_state],
         losses,
         givens={pi.training: True}
     )
@@ -181,11 +177,10 @@ def learn(env, policy_func, *,
         add_vtarg_and_adv(seg, gamma, lam)
 
         # ob, ac, atarg, ret, td1ret = map(np.concatenate, (obs, acs, atargs, rets, td1rets))
-        ob, ac, atarg, tdlamret, vffc_state, polfc_state = seg["ob"], seg["ac"], seg["adv"], seg["tdlamret"], \
-                                                           seg["vffc_state"], seg["polfc_state"]
+        ob, ac, atarg, tdlamret, rnn_state = seg["ob"], seg["ac"], seg["adv"], seg["tdlamret"], seg["rnn_state"]
         vpredbefore = seg["vpred"] # predicted value function before udpate
         atarg = (atarg - atarg.mean()) / atarg.std() # standardized advantage function estimate
-        d = Dataset(dict(ob=ob, ac=ac, atarg=atarg, vtarg=tdlamret, vffc_state=vffc_state, polfc_state=polfc_state), shuffle=not pi.recurrent)
+        d = Dataset(dict(ob=ob, ac=ac, atarg=atarg, vtarg=tdlamret, rnn_state=rnn_state), shuffle=not pi.recurrent)
         optim_batchsize = optim_batchsize or ob.shape[0]
 
         if hasattr(pi, "ob_rms"): pi.ob_rms.update(ob) # update running mean/std for policy
@@ -198,10 +193,8 @@ def learn(env, policy_func, *,
             losses = [] # list of tuples, each of which gives the loss for a minibatch
             for batch in d.iterate_once(optim_batchsize):
                 # We collect rnn_states batch-first, naturally. TF expects batch in 3rd column...
-                vffc_state = np.transpose(batch["vffc_state"], [1, 2, 0, 3])
-                polfc_state = np.transpose(batch["polfc_state"], [1, 2, 0, 3])
-                *newlosses, g = lossandgrad(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult,
-                                            vffc_state, polfc_state)
+                rnn_state = np.transpose(batch["rnn_state"], [1, 2, 0, 3])
+                *newlosses, g = lossandgrad(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult, rnn_state)
                 adam.update(g, optim_stepsize * cur_lrmult) 
                 losses.append(newlosses)
             logger.log(fmt_row(13, np.mean(losses, axis=0)))
@@ -209,10 +202,8 @@ def learn(env, policy_func, *,
         logger.log("Evaluating losses...")
         losses = []
         for batch in d.iterate_once(optim_batchsize):
-            vffc_state = np.transpose(batch["vffc_state"], [1, 2, 0, 3])
-            polfc_state = np.transpose(batch["polfc_state"], [1, 2, 0, 3])
-            newlosses = compute_losses(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult,
-                                       vffc_state, polfc_state)
+            rnn_state = np.transpose(batch["rnn_state"], [1, 2, 0, 3])
+            newlosses = compute_losses(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult, rnn_state)
             losses.append(newlosses)            
         meanlosses,_,_ = mpi_moments(losses, axis=0)
         logger.log(fmt_row(13, meanlosses))
