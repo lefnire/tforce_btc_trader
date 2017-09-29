@@ -2,13 +2,13 @@ import tensorflow as tf
 import scipy.signal
 import numpy as np
 import random
-from a3c.ac_network import AC_Network
-from btc_env import BitcoinEnv
+from a3c.ac_network import AC_Network, L_LAYERS, CELL_UNITS
+from btc_env.btc_env import BitcoinEnvTforce
 
-MINI_BATCH = 2e3
+MINI_BATCH = 256
 REWARD_FACTOR = 0.001
-STEPS = 6e3; STEPS += STEPS // MINI_BATCH  # tack on some leg-room
-EPSILON_STEPS = 3e6
+STEPS = 2048*3; STEPS += STEPS // MINI_BATCH  # tack on some leg-room
+EPSILON_STEPS = 1e6
 HYPER_SWITCH = 1e10
 
 
@@ -42,8 +42,6 @@ class Worker():
         self.episode_totals_true = []
         self.episode_lengths = []
         self.episode_mean_values = []
-        self.summary_writer = tf.summary.FileWriter("./saves/{}/{}".format('test' if test else 'train', hyper))
-        self.summary_writer_true = tf.summary.FileWriter("./saves/{}:true/{}".format('test' if test else 'train', hyper))
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
@@ -54,13 +52,18 @@ class Worker():
         self.update_local_ops = update_target_graph('global', self.name)
 
         indicators = hyper == 'indicators:on'
-        self.env = BitcoinEnv(limit=STEPS, agent_type='A3CAgent', agent_name='A3CAgent|'+hyper, indicators=indicators)
-        self.env.seed(seed)
+        self.env = BitcoinEnvTforce(
+            steps=STEPS,
+            agent_name='A3CAgent|'+hyper,
+            indicators=indicators,
+            is_main=name == 0
+        )
+        self.env.gym.seed(seed)
 
         self.train_itr = 0
 
     def get_env(self):
-        return self.env
+        return self.env.gym.env
 
     def train(self, rollout, sess, gamma, r):
         rollout = np.array(rollout)
@@ -68,6 +71,7 @@ class Worker():
         actions = rollout[:, 1]
         rewards = rollout[:, 2]
         values = rollout[:, 5]
+        rnn_states = rollout[:, 6]
 
         # Here we take the rewards and values from the rollout, and use them to
         # generate the advantage and discounted returns.
@@ -88,21 +92,19 @@ class Worker():
         # sess.run(self.local_AC.reset_state_op)
         net = self.local_AC
         feed_dict = {
-            net.training: not self.is_test,
+            net.training: True,
             net.target_v: discounted_rewards,
             net.inputs: np.vstack(states),
             net.actions: actions,
             net.advantages: discounted_advantages,
-            net.state_in[0]: self.batch_rnn_state[0],
-            net.state_in[1]: self.batch_rnn_state[1],
+            net.rnn_prev: np.transpose([np.asarray(state) for state in rnn_states], [1,2,0,3])
         }
-        v_l, p_l, e_l, g_n, v_n, self.batch_rnn_state, _ = sess.run([
+        v_l, p_l, e_l, g_n, v_n, _ = sess.run([
             net.value_loss,
             net.policy_loss,
             net.entropy,
             net.grad_norms,
             net.var_norms,
-            net.state_out,
             net.apply_grads
         ], feed_dict=feed_dict)
         return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n
@@ -117,26 +119,20 @@ class Worker():
                 sess.run(self.update_local_ops)
                 episode_buffer = []
                 episode_values = []
-                episode_states = []
                 episode_reward = 0
                 episode_step_count = 0
 
                 # Restart environment
                 terminal = False
                 s = self.env.reset()
-
-                rnn_state = net.state_init
-                self.batch_rnn_state = rnn_state
+                rnn_prev = np.zeros([L_LAYERS, 2, 1, CELL_UNITS])
 
                 # Run an episode
                 while not terminal:
-                    episode_states.append(s)
-
                     # Get preferred action distribution
-                    a_dist, v, rnn_state = sess.run([net.policy, net.value, net.state_out],
+                    a_dist, v, rnn_next = sess.run([net.policy, net.value, net.rnn_next],
                                          feed_dict={net.inputs: [s],
-                                                    net.state_in[0]: rnn_state[0],
-                                                    net.state_in[1]: rnn_state[1]})
+                                                    net.rnn_prev: rnn_prev})
 
                     if self.is_test or random.random() > self.epsilon:
                         a = a_dist  # Use maximum when testing
@@ -144,9 +140,9 @@ class Worker():
                         a = random.randint(-100, 100)  # Use stochastic distribution sampling
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
-                    s2, r, terminal = self.env.step(a, action_true=a_dist)
+                    s2, r, terminal = self.env.execute([a])
                     episode_reward += r
-                    episode_buffer.append([s, a, r, s2, terminal, v[0, 0]])
+                    episode_buffer.append([s, a, r, s2, terminal, v[0, 0], np.squeeze(rnn_prev)])
                     episode_values.append(v[0, 0])
 
                     # Train on mini batches from episode
@@ -155,23 +151,19 @@ class Worker():
                         self.train_itr += 1
                         v1 = sess.run([net.value],
                                       feed_dict={net.inputs: [s],
-                                                 net.state_in[0]: rnn_state[0],
-                                                 net.state_in[1]: rnn_state[1]})
+                                                 net.rnn_prev: rnn_prev})
                         v_l, p_l, e_l, g_n, v_n = self.train(episode_buffer, sess, gamma, v1[0][0])
                         episode_buffer = []
 
                     # Set previous state for next step
                     s = s2
+                    rnn_prev = rnn_next
                     total_steps += 1
                     episode_step_count += 1
 
                     if self.epsilon > 0.1:  # decrement epsilon over time
                         self.epsilon -= (1.0 / EPSILON_STEPS)
 
-                self.episode_rewards.append(episode_reward)
-                self.episode_totals.append(self.env.cash + self.env.value)
-                self.episode_totals_true.append(self.env.cash_true + self.env.value_true)
-                self.episode_lengths.append(episode_step_count)
                 self.episode_mean_values.append(np.mean(episode_values))
 
                 if self.train_itr < STEPS // MINI_BATCH:
@@ -180,29 +172,20 @@ class Worker():
                 if self.name == 'worker_0':
                     summary = tf.Summary()
                     summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
-                    summary.value.add(tag='Perf/Reward', simple_value=float(self.episode_rewards[-1]))
-                    summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals[-1]))
-                    # summary.value.add(tag='Perf/Length', simple_value=float(self.episode_lengths[-1]))
                     summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
-                    summary.value.add(tag='Perf/Time', simple_value=float(self.env.time))
                     if not self.is_test:
                         summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
                         summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))
                         # summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
                         summary.value.add(tag='Losses/Grad Norm', simple_value=float(g_n))
                         summary.value.add(tag='Losses/Var Norm', simple_value=float(v_n))
-                    self.summary_writer.add_summary(summary, episode_count)
-                    self.summary_writer.flush()
-
-                    summary = tf.Summary()
-                    summary.value.add(tag='Perf/Total', simple_value=float(self.episode_totals_true[-1]))
-                    self.summary_writer_true.add_summary(summary, episode_count)
-                    self.summary_writer_true.flush()
+                    self.get_env().summary_writer.add_summary(summary, episode_count)
+                    self.get_env().summary_writer.flush()
 
                     if not self.is_test:
                         if episode_count % 50 == 0:
-                            # pass
-                            saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
+                            pass
+                            # saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
 
                         # stop if we're showing net gains to prevent overfitting
                         n_pos = 50

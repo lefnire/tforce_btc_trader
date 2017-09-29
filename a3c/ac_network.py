@@ -1,60 +1,61 @@
 import tensorflow as tf
 import numpy as np
-import tensorflow.contrib.slim as slim
 
 # Clipping ratio for gradients
 CLIP_NORM = 40.0
-# Cell units
-# CELL_UNITS = 256
-DROPOUT = .2
+CELL_UNITS = 512
+D_LAYERS, L_LAYERS = 2, 2
+FUNNEL = True
+DROPOUT = .4
 
 
 class AC_Network():
     def __init__(self, s_size, a_size, scope, trainer, hyper):
         hyper_k, hyper_v = hyper.split(':')
-        use_dropout = hyper != 'dropout:off'
-        use_tanh = hyper == 'activation:tanh'
-        CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 256
+        # use_dropout = hyper != 'dropout:off'
+        # use_tanh = hyper == 'activation:tanh'
+        # CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 512
 
         with tf.variable_scope(scope):
             # Input
             he_init = tf.contrib.layers.variance_scaling_initializer()
-            self.training = training = tf.placeholder_with_default(False, shape=())
+            self.training = training = tf.placeholder_with_default(False, shape=(), name='training')
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
-            net = tf.layers.dropout(self.inputs, rate=DROPOUT, training=training)
 
-            # Layer 1 (Dense)
-            # net = tf.layers.dense(net, CELL_UNITS, kernel_initializer=he_init, use_bias=False)
-            # net = tf.layers.batch_normalization(self.inputs, training=training, momentum=.9)
-            # net = tf.nn.elu(net)
-            net = tf.layers.dense(net, CELL_UNITS, kernel_initializer=he_init, activation=tf.nn.elu)
+            net = self.inputs if self.inputs.get_shape().ndims == 3 else tf.expand_dims(self.inputs, [1])
             net = tf.layers.dropout(net, rate=DROPOUT, training=training)
 
             # Recurrent network for temporal dependencies
             # Original: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2
-            # TODO Multi-layer: https://medium.com/@erikhallstrm/using-the-tensorflow-multilayered-lstm-api-f6e7da7bbe40
-            lstm_cell = tf.nn.rnn_cell.LSTMCell(CELL_UNITS, state_is_tuple=True)
-            keep_prob = tf.cond(training, lambda: 1-DROPOUT, lambda: 1.)
-            lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
-            c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
-            h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
-            self.state_init = [c_init, h_init]
-            c_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.c])
-            h_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.h])
-            self.state_in = (c_in, h_in)
-            rnn_in = tf.expand_dims(net, [0])
-            state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
-            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
-                lstm_cell, rnn_in,
-                initial_state=state_in,
+            # Multi-layer: https://medium.com/@erikhallstrm/using-the-tensorflow-multilayered-lstm-api-f6e7da7bbe40
+            cell = [tf.nn.rnn_cell.LSTMCell(CELL_UNITS) for _ in range(L_LAYERS)]
+            output_keep = tf.cond(self.training, lambda: 1 - DROPOUT, lambda: 1.)
+            if DROPOUT:
+                cell = [tf.nn.rnn_cell.DropoutWrapper(c, output_keep_prob=output_keep) for c in cell]
+            multi = tf.nn.rnn_cell.MultiRNNCell(cell)
+
+            self.rnn_prev = tf.placeholder(dtype=tf.float32, shape=[L_LAYERS, 2, None, CELL_UNITS], name="rnn_state")
+            l = tf.unstack(self.rnn_prev, axis=0)
+            rnn_tuple_state = tuple([
+                tf.nn.rnn_cell.LSTMStateTuple(l[i][0], l[i][1])
+                for i in range(L_LAYERS)
+            ])
+
+            output, self.rnn_next = tf.nn.dynamic_rnn(
+                multi, net,
+                initial_state=rnn_tuple_state,
                 time_major=False)
-            lstm_c, lstm_h = lstm_state
-            self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
-            rnn_out = tf.reshape(lstm_outputs, [-1, CELL_UNITS])
+            # self.rnn_next = (lstm_c[:1, :], lstm_h[:1, :])
+            net = tf.reshape(output, [-1, CELL_UNITS])
+
+            for i in range(2):
+                size = CELL_UNITS//(i+1) if FUNNEL else CELL_UNITS
+                net = tf.layers.dense(net, size, kernel_initializer=he_init, activation=tf.nn.elu)
+                net = tf.layers.dropout(net, rate=DROPOUT, training=training)
 
             # Output layers for policy and value estimations
-            self.policy = tf.squeeze(tf.layers.dense(rnn_out, 1, kernel_initializer=he_init))
-            self.value = tf.layers.dense(rnn_out, 1, kernel_initializer=he_init)
+            self.policy = tf.squeeze(tf.layers.dense(net, 1, kernel_initializer=he_init))
+            self.value = tf.layers.dense(net, 1, kernel_initializer=he_init)
 
             # Only the worker network need ops for loss functions and gradient updating.
             if scope != 'global':
