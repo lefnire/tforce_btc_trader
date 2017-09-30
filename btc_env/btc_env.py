@@ -127,10 +127,11 @@ class BitcoinEnv(gym.Env):
     def _reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
+        self.cash_true = self.value_true = self.start_cap
         start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
-        self.total_reward = 0
+        self.total_reward = self.total_reward_true = 0
 
         # Fetch random slice of rows from the database (based on limit)
         offset = random.randint(0, data.count_rows() - self.steps)
@@ -146,10 +147,11 @@ class BitcoinEnv(gym.Env):
     def _step(self, action):
         # signal = 0 if -40 < action < 1 else action
         signal = action[0]
-        self.signals.append(signal)
+        signal_true = action[1] if len(action) > 1 else signal
+        self.signals.append(signal_true)
 
-        abs_sig = abs(signal)
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
+        abs_sig = abs(signal)
         before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
         if signal > 0:
             if self.cash >= abs_sig:
@@ -160,10 +162,25 @@ class BitcoinEnv(gym.Env):
                 self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
+        abs_sig_true = abs(signal_true)
+        before_true = dict(cash=self.cash_true, value=self.value_true, total=self.cash_true + self.value_true)
+        if signal_true > 0:
+            if self.cash_true >= abs_sig_true:
+                self.value_true += abs_sig_true - abs_sig_true * fee
+            self.cash_true -= abs_sig_true
+        elif signal_true < 0:
+            if self.value_true >= abs_sig_true:
+                self.cash_true += abs_sig_true - abs_sig_true * fee
+            self.value_true -= abs_sig_true
+
         pct_change = self.prices_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         self.value += pct_change * self.value
         total = self.value + self.cash
         reward = total - before['total']  # Relative reward (seems to work better)
+
+        self.value_true += pct_change * self.value_true
+        total_true = self.value_true + self.cash_true
+        reward_true = total_true - before_true['total']  # Relative reward (seems to work better)
 
         self.timestep += 1
         next_state = np.append(self.observations[self.timestep], [
@@ -181,13 +198,14 @@ class BitcoinEnv(gym.Env):
             next_state = scaler.transform([next_state])[0]
 
         self.total_reward += reward
+        self.total_reward_true += reward_true
 
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
-            self.episode_results['cash'].append(self.cash)
-            self.episode_results['values'].append(self.value)
-            self.episode_results['rewards'].append(self.total_reward)
+            self.episode_results['cash'].append(self.cash_true)
+            self.episode_results['values'].append(self.value_true)
+            self.episode_results['rewards'].append(self.total_reward_true)
             self.time = round(time.time() - self.time)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
@@ -212,7 +230,7 @@ class BitcoinEnv(gym.Env):
                 results = self.episode_results
                 total = float(results['cash'][-1] + results['values'][-1])
                 reward = float(results['rewards'][-1])
-                reward_avg = np.mean(results['rewards'][-50:])
+                reward_avg = np.mean(results['rewards'][-20:])
                 summary = tf.Summary()
                 summary.value.add(tag='Perf/Total', simple_value=total)
                 summary.value.add(tag='Perf/Reward', simple_value=reward)

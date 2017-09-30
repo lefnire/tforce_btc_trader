@@ -2,14 +2,12 @@ import tensorflow as tf
 import scipy.signal
 import numpy as np
 import random
-from a3c.ac_network import AC_Network, L_LAYERS, CELL_UNITS
+from a3c.ac_network import AC_Network
 from btc_env.btc_env import BitcoinEnvTforce
 
-MINI_BATCH = 256
 REWARD_FACTOR = 0.001
-STEPS = 2048*3; STEPS += STEPS // MINI_BATCH  # tack on some leg-room
-EPSILON_STEPS = 1e6
-HYPER_SWITCH = 1e10
+EPSILON_STEPS = .5e6
+HYPER_SWITCH = 2e6
 
 
 # Copies one set of variables to another.
@@ -30,32 +28,30 @@ def discounting(x, gamma):
 
 
 class Worker():
-    def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, seed, test, hyper):
+    def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, seed, test, hyper, agent_name):
         self.name = "worker_" + str(name)
         self.number = name
         self.model_path = model_path
         self.trainer = trainer
         self.global_episodes = global_episodes
         self.increment = self.global_episodes.assign_add(1)
-        self.episode_rewards = []
         self.episode_totals = []
         self.episode_totals_true = []
-        self.episode_lengths = []
         self.episode_mean_values = []
         self.is_test = test
         self.a_size = a_size
         self.epsilon = 1
         self.hyper = hyper
+        self.steps = 2048*3 + (2048*3 // self.hyper['batch'])  # tack on some leg-room
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
         self.local_AC = AC_Network(s_size, a_size, self.name, trainer, hyper)
         self.update_local_ops = update_target_graph('global', self.name)
 
-        indicators = hyper == 'indicators:on'
         self.env = BitcoinEnvTforce(
-            steps=STEPS,
-            agent_name='A3CAgent|'+hyper,
-            indicators=indicators,
+            steps=self.steps,
+            agent_name=agent_name,
+            indicators=hyper.get('indicators', False),
             is_main=name == 0
         )
         self.env.gym.seed(seed)
@@ -99,19 +95,19 @@ class Worker():
             net.advantages: discounted_advantages,
             net.rnn_prev: np.transpose([np.asarray(state) for state in rnn_states], [1,2,0,3])
         }
-        v_l, p_l, e_l, g_n, v_n, _ = sess.run([
-            net.value_loss,
-            net.policy_loss,
-            net.entropy,
-            net.grad_norms,
-            net.var_norms,
-            net.apply_grads
-        ], feed_dict=feed_dict)
+        for _ in range(self.hyper['epochs']):
+            v_l, p_l, e_l, g_n, v_n, _ = sess.run([
+                net.value_loss,
+                net.policy_loss,
+                net.entropy,
+                net.grad_norms,
+                net.var_norms,
+                net.apply_grads
+            ], feed_dict=feed_dict)
         return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n
 
     def work(self, gamma, sess, coord, saver):
         episode_count = sess.run(self.global_episodes)
-        total_steps = 0
         print("Starting worker " + str(self.number))
         with sess.as_default(), sess.graph.as_default():
             while not coord.should_stop():
@@ -125,7 +121,7 @@ class Worker():
                 # Restart environment
                 terminal = False
                 s = self.env.reset()
-                rnn_prev = np.zeros([L_LAYERS, 2, 1, CELL_UNITS])
+                rnn_prev = np.zeros([self.hyper['l_layers'], 2, 1, self.hyper['l_units']])
 
                 # Run an episode
                 while not terminal:
@@ -140,14 +136,13 @@ class Worker():
                         a = random.randint(-100, 100)  # Use stochastic distribution sampling
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
-                    s2, r, terminal = self.env.execute([a])
+                    s2, r, terminal = self.env.execute([a, a_dist])
                     episode_reward += r
                     episode_buffer.append([s, a, r, s2, terminal, v[0, 0], np.squeeze(rnn_prev)])
                     episode_values.append(v[0, 0])
 
                     # Train on mini batches from episode
-                    mini_batch = int(self.hyper.split(':')[1]) if self.hyper.startswith('mini_batch') else MINI_BATCH
-                    if len(episode_buffer) == mini_batch and not self.is_test:
+                    if len(episode_buffer) == self.hyper['batch'] and not self.is_test:
                         self.train_itr += 1
                         v1 = sess.run([net.value],
                                       feed_dict={net.inputs: [s],
@@ -158,7 +153,6 @@ class Worker():
                     # Set previous state for next step
                     s = s2
                     rnn_prev = rnn_next
-                    total_steps += 1
                     episode_step_count += 1
 
                     if self.epsilon > 0.1:  # decrement epsilon over time
@@ -166,8 +160,8 @@ class Worker():
 
                 self.episode_mean_values.append(np.mean(episode_values))
 
-                if self.train_itr < STEPS // MINI_BATCH:
-                    raise Exception(f"Didn't train over all batches ({self.train_itr} of {STEPS // MINI_BATCH})")
+                if self.train_itr < self.steps // self.hyper['batch']:
+                    raise Exception(f"Didn't train over all batches ({self.train_itr} of {self.steps // self.hyper['batch']})")
 
                 if self.name == 'worker_0':
                     summary = tf.Summary()
@@ -192,7 +186,7 @@ class Worker():
                         last_n_positive = len(self.episode_totals) > n_pos \
                             and np.all(np.array(self.episode_totals_true[-n_pos:]) > 2000)
 
-                        if episode_count >= HYPER_SWITCH or last_n_positive:
+                        if episode_count >= HYPER_SWITCH//self.steps or last_n_positive:
                             coord.request_stop()
 
                     sess.run(self.increment) # Next global episode

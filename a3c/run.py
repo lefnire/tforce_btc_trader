@@ -38,8 +38,6 @@ LOAD_MODEL = False
 TEST_MODEL = False
 # Directory for storing session model
 MODEL_DIR = './saves/model/'
-# Learning rate
-LEARNING_RATE = 0.001
 # Discount rate for advantage estimation and reward discounting
 GAMMA = 0.99
 
@@ -57,13 +55,37 @@ def main(_):
 
     # definite winners: N256, L1-2, batch150, elu, 2L (batch normalization is crap-shoot)
     # try: indicators, reward_factor, dense last (2L), peepholes
-    # for hyper in ['neurons:256', 'neurons:512', 'layers:2', 'layers:3', 'layers:4', 'activation:tanh', 'activation:elu', 'dropout:off', 'dropout:on']:
-    for hyper in ['continuous:-']:
-        agent_name = 'A3CAgent|' + hyper
-        data.wipe_rows(agent_name)
+    # next: layers, funnel, dropout, tanh
+    # left-off: -5,256,3; -7,64,1 (need to finish those & cover -6)
+    h_lr_batch = []
+    defaults = dict(funnel=False, dropout=.5, lr=1e-6, batch=256, mult=2, epochs=10, l_units=128, d_units=128, l_layers=2, d_layers=2)
+    for batch in [256, 1024, 2048]:
+        for lr in [1e-5, 1e-6, 1e-7]:
+            h = defaults.copy()
+            h.update(lr=lr, batch=batch)
+            h_lr_batch.append(h)
+    h_mult = []
+    for mult in [1, 2, 3]:
+        h = defaults.copy()
+        h.update(
+            mult=mult,
+            l_units={1: 64, 2: 128, 3: 256}[mult],
+            d_units={1: 64, 2: 128, 3: 256}[mult],
+            l_layers={1: 1, 2: 2, 3: 2}[mult],
+            d_layers={1: 1, 2: 2, 3: 2}[mult],
+        )
+        h_mult.append(h)
+    h_epochs = []
+    for epoch in [5, 10, 50]:
+        h = defaults.copy()
+        h.update(epochs=epoch)
+        h_epochs.append(h)
+    for i, hyper in enumerate(h_lr_batch + h_mult + h_epochs):
+    # for i, hyper in enumerate(h_mult[1:2]):
+        agent_name = f"A3CAgent|lr{hyper['lr']}bs{hyper['batch']}x{hyper['mult']}ep{hyper['epochs']}"
         tf.reset_default_graph()
 
-        btc_env = BitcoinEnvTforce(agent_name=agent_name, indicators=hyper == 'indicators:on')
+        btc_env = BitcoinEnvTforce(agent_name=agent_name, is_main=False)
         STATE_DIM = btc_env.states['shape'][0]
         ACTION_DIM = btc_env.actions['shape'][0]
 
@@ -72,7 +94,7 @@ def main(_):
         tf.set_random_seed(RANDOM_SEED)
 
         global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
-        trainer = tf.contrib.opt.NadamOptimizer(learning_rate=LEARNING_RATE)
+        trainer = tf.contrib.opt.NadamOptimizer(learning_rate=hyper['lr'])
         master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, hyper)  # Generate global network
         num_workers = multiprocessing.cpu_count()  # Set workers to number of available CPU threads
 
@@ -84,7 +106,7 @@ def main(_):
         # Create worker classes
         for i in range(num_workers):
             workers.append(Worker(i, STATE_DIM, ACTION_DIM, trainer, MODEL_DIR, global_episodes,
-                                  RANDOM_SEED, TEST_MODEL, hyper))
+                                  RANDOM_SEED, TEST_MODEL, hyper, agent_name))
         saver = tf.train.Saver(max_to_keep=5)
 
         # Gym monitor
@@ -93,7 +115,7 @@ def main(_):
             #env.monitor.start(MONITOR_DIR, video_callable=False, force=True)
         # END with tf.device("/cpu:0"):
 
-        tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.6))
+        tf_session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.43))
         with tf.Session(config=tf_session_config) as sess:
         # with tf.Session() as sess:
             coord = tf.train.Coordinator()

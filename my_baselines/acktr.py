@@ -17,7 +17,7 @@ if __name__ == "__main__":
     num_timesteps = 1e6
     seed = 1234
     env = gym.make('BTC-v0')
-    env.env.set_opts(agent_name='baselines_acktr')
+    env.env.init(env, agent_name='baselines_acktr')
     if logger.get_dir():
         pass
         # env = bench.Monitor(env, os.path.join(logger.get_dir(), "monitor.json"))

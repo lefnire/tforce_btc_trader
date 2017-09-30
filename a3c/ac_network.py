@@ -3,18 +3,13 @@ import numpy as np
 
 # Clipping ratio for gradients
 CLIP_NORM = 40.0
-CELL_UNITS = 512
-L_LAYERS = 2
-FUNNEL = True
-DROPOUT = .4
-
 
 class AC_Network():
     def __init__(self, s_size, a_size, scope, trainer, hyper):
-        hyper_k, hyper_v = hyper.split(':')
-        # use_dropout = hyper != 'dropout:off'
-        # use_tanh = hyper == 'activation:tanh'
-        # CELL_UNITS = int(hyper_v) if hyper_k == 'neurons' else 512
+        L_UNITS, D_UNITS = hyper['l_units'], hyper['d_units']
+        L_LAYERS, D_LAYERS = hyper['l_layers'], hyper['d_layers']
+        FUNNEL = hyper['funnel']
+        DROPOUT = hyper['dropout']
 
         with tf.variable_scope(scope):
             # Input
@@ -26,19 +21,18 @@ class AC_Network():
             net = tf.layers.dropout(net, rate=DROPOUT, training=training)
 
             # 1st dense layer
-            net = tf.layers.dense(net, 64, kernel_initializer=he_init, activation=tf.nn.elu)
+            net = tf.layers.dense(net, D_UNITS, kernel_initializer=he_init, activation=tf.nn.elu)
             net = tf.layers.dropout(net, rate=DROPOUT, training=training)
 
             # Recurrent network for temporal dependencies
             # Original: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2
             # Multi-layer: https://medium.com/@erikhallstrm/using-the-tensorflow-multilayered-lstm-api-f6e7da7bbe40
-            cell = [tf.nn.rnn_cell.LSTMCell(CELL_UNITS) for _ in range(L_LAYERS)]
+            cell = [tf.nn.rnn_cell.LSTMCell(L_UNITS) for _ in range(L_LAYERS)]
             output_keep = tf.cond(self.training, lambda: 1 - DROPOUT, lambda: 1.)
-            if DROPOUT:
-                cell = [tf.nn.rnn_cell.DropoutWrapper(c, output_keep_prob=output_keep) for c in cell]
+            cell = [tf.nn.rnn_cell.DropoutWrapper(c, output_keep_prob=output_keep) for c in cell]
             multi = tf.nn.rnn_cell.MultiRNNCell(cell)
 
-            self.rnn_prev = tf.placeholder(dtype=tf.float32, shape=[L_LAYERS, 2, None, CELL_UNITS], name="rnn_state")
+            self.rnn_prev = tf.placeholder(dtype=tf.float32, shape=[L_LAYERS, 2, None, L_UNITS], name="rnn_state")
             l = tf.unstack(self.rnn_prev, axis=0)
             rnn_tuple_state = tuple([
                 tf.nn.rnn_cell.LSTMStateTuple(l[i][0], l[i][1])
@@ -50,16 +44,18 @@ class AC_Network():
                 initial_state=rnn_tuple_state,
                 time_major=False)
             # self.rnn_next = (lstm_c[:1, :], lstm_h[:1, :])
-            net = tf.reshape(output, [-1, CELL_UNITS])
+            net = tf.reshape(output, [-1, L_UNITS])
 
             # Policy function
-            policy = tf.layers.dense(net, 128, kernel_initializer=he_init, activation=tf.nn.elu)
-            policy = tf.layers.dropout(policy, rate=DROPOUT, training=training)
+            for i in range(D_LAYERS):
+                policy = tf.layers.dense(net, D_UNITS//(i+1 if FUNNEL else 1), kernel_initializer=he_init, activation=tf.nn.elu)
+                policy = tf.layers.dropout(policy, rate=DROPOUT, training=training)
             self.policy = tf.squeeze(tf.layers.dense(policy, 1, kernel_initializer=he_init))
 
             # Value estimation
-            value = tf.layers.dense(net, 128, kernel_initializer=he_init, activation=tf.nn.elu)
-            value = tf.layers.dropout(value, rate=DROPOUT, training=training)
+            for i in range(D_LAYERS):
+                value = tf.layers.dense(net, D_UNITS//(i+1 if FUNNEL else 1), kernel_initializer=he_init, activation=tf.nn.elu)
+                value = tf.layers.dropout(value, rate=DROPOUT, training=training)
             self.value = tf.layers.dense(value, 1, kernel_initializer=he_init)
 
             # Only the worker network need ops for loss functions and gradient updating.
@@ -95,7 +91,7 @@ class AC_Network():
                     local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
                     self.gradients = tf.gradients(self.loss, local_vars)
                     self.var_norms = tf.global_norm(local_vars)
-                    grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 40.0)
+                    grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, CLIP_NORM)
 
                     # Apply local gradients to global network
                     global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
