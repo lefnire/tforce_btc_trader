@@ -53,35 +53,39 @@ def main(_):
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
 
-    # definite winners: N256, L1-2, batch150, elu, 2L (batch normalization is crap-shoot)
     # try: indicators, reward_factor, dense last (2L), peepholes
     # next: layers, funnel, dropout, tanh
-    # left-off: -5,256,3; -7,64,1 (need to finish those & cover -6)
+    # short-term: -6, high-batch, high-arch; long-tail: high-batch, -7 (try -8?)
     h_lr_batch = []
-    defaults = dict(funnel=False, dropout=.5, lr=1e-6, batch=256, mult=2, epochs=10, l_units=128, d_units=128, l_layers=2, d_layers=2)
-    for batch in [256, 1024, 2048]:
-        for lr in [1e-5, 1e-6, 1e-7]:
+    defaults = dict(funnel=False, dropout=.5, lr=1e-8, batch=2048, epochs=25, mult=4, l_units=512, d_units=256, l_layers=3, d_layers=2)
+    for batch in [256, 512, 1024]:
+        for lr in [1e-6, 1e-8, 1e-10]:
+            if batch == defaults['batch'] and lr == defaults['lr']: continue
             h = defaults.copy()
             h.update(lr=lr, batch=batch)
             h_lr_batch.append(h)
     h_mult = []
-    for mult in [1, 2, 3]:
+    for mult in [1, 2, 3, 4, 5]:
+        if mult == defaults['mult']: continue
         h = defaults.copy()
         h.update(
             mult=mult,
-            l_units={1: 64, 2: 128, 3: 256}[mult],
-            d_units={1: 64, 2: 128, 3: 256}[mult],
-            l_layers={1: 1, 2: 2, 3: 2}[mult],
-            d_layers={1: 1, 2: 2, 3: 2}[mult],
+            l_units={1:64, 2:128, 3:256, 4:512, 5:512}[mult],
+            d_units={1:64, 2:128, 3:256, 4:256, 5:256}[mult],
+            l_layers={1:2, 2:2, 3:3, 4:3, 5:4}[mult],
+            d_layers={1:1, 2:1, 3:2, 4:2, 5:3}[mult]
         )
         h_mult.append(h)
     h_epochs = []
-    for epoch in [5, 10, 50]:
+    for epoch in [5, 20, 50]:
+        if epoch == defaults['epochs']: continue
         h = defaults.copy()
         h.update(epochs=epoch)
         h_epochs.append(h)
-    for i, hyper in enumerate(h_lr_batch + h_mult + h_epochs):
-    # for i, hyper in enumerate(h_mult[1:2]):
+    arr = h_lr_batch + h_mult + h_epochs
+    # for i, hyper in enumerate(arr):
+    h = defaults.copy()
+    for i, hyper in enumerate([h]):
         agent_name = f"A3CAgent|lr{hyper['lr']}bs{hyper['batch']}x{hyper['mult']}ep{hyper['epochs']}"
         tf.reset_default_graph()
 

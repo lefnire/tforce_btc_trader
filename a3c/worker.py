@@ -35,8 +35,6 @@ class Worker():
         self.trainer = trainer
         self.global_episodes = global_episodes
         self.increment = self.global_episodes.assign_add(1)
-        self.episode_totals = []
-        self.episode_totals_true = []
         self.episode_mean_values = []
         self.is_test = test
         self.a_size = a_size
@@ -144,10 +142,11 @@ class Worker():
                     # Train on mini batches from episode
                     if len(episode_buffer) == self.hyper['batch'] and not self.is_test:
                         self.train_itr += 1
-                        v1 = sess.run([net.value],
-                                      feed_dict={net.inputs: [s],
-                                                 net.rnn_prev: rnn_prev})
-                        v_l, p_l, e_l, g_n, v_n = self.train(episode_buffer, sess, gamma, v1[0][0])
+                        if not self.should_stop_training():
+                            v1 = sess.run([net.value],
+                                          feed_dict={net.inputs: [s],
+                                                     net.rnn_prev: rnn_prev})
+                            v_l, p_l, e_l, g_n, v_n = self.train(episode_buffer, sess, gamma, v1[0][0])
                         episode_buffer = []
 
                     # Set previous state for next step
@@ -182,13 +181,14 @@ class Worker():
                             # saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
 
                         # stop if we're showing net gains to prevent overfitting
-                        n_pos = 50
-                        last_n_positive = len(self.episode_totals) > n_pos \
-                            and np.all(np.array(self.episode_totals_true[-n_pos:]) > 2000)
-
-                        if episode_count >= HYPER_SWITCH//self.steps or last_n_positive:
+                        if episode_count >= HYPER_SWITCH//self.steps or self.should_stop_training():
                             coord.request_stop()
 
                     sess.run(self.increment) # Next global episode
 
                 episode_count += 1
+
+    def should_stop_training(self):
+        return False
+        rewards = self.get_env().episode_results['rewards']
+        return len(rewards) > 20 and np.mean(rewards[-20:]) > 0 # np.all(np.array(rewards[-20:]) > 0)

@@ -66,7 +66,7 @@ def main():
     logger.addHandler(logging.StreamHandler(sys.stdout))
 
     c = experiments.confs[args.experiment]
-    c['conf'].update(tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.6)))
+    c['conf'].update(tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.43)))
     confs = [
         agent_conf.conf(c['conf'], 'PPOAgent', c['name'], env_args=dict(is_main=i == 0), no_agent=True)
         for i in range(args.workers)

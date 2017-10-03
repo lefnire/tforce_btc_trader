@@ -22,7 +22,7 @@ def run_experiment(q):
             agent_type='PPOAgent',
             mods=conf['name'],
             # env_args=dict(log_states=True, is_main=True, log_results=False),
-            env_args=dict(is_main=True, log_results=True, scale_features=True)
+            env_args=dict(is_main=True, log_results=True)
         )
         print(conf['agent_name'])
         runner = Runner(agent=conf['agent'], environment=conf['env'])
