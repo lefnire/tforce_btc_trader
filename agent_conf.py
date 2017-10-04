@@ -1,11 +1,12 @@
 import tensorflow as tf
 from tensorforce import Configuration, TensorForceError
-from tensorforce.agents import VPGAgent, PPOAgent, DQNAgent
+from tensorforce.agents import VPGAgent, PPOAgent, DQNAgent, NAFAgent
 from tensorforce.core.networks import layered_network_builder
 from pprint import pprint
 
 import btc_env
 from btc_env.btc_env import BitcoinEnvTforce
+from experiments import network, net4x, net3x
 
 STEPS = 2048 * 3 + 3
 
@@ -13,7 +14,6 @@ STEPS = 2048 * 3 + 3
 def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=False):
     agent_name = agent_type + '|' + mods
     env = BitcoinEnvTforce(steps=STEPS, agent_name=agent_name, **env_args)
-    neurons, dropout = 512, .2
 
     conf = dict(
         tf_session_config=None,
@@ -24,23 +24,8 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=Fa
         tf_summary=None,
         tf_summary_level=0,
 
-        network=[
-            dict(type='dropout', size=neurons, dropout=dropout),
-            dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
-            dict(type='lstm', size=neurons, dropout=dropout),  # merge those w/ history
-            dict(type='dense2', size=neurons, dropout=dropout),  # combine attrs into attr-combos (eg VWAP)
-            dict(type='dense2', size=neurons, dropout=dropout),  # combine those into indicators (eg SMA)
-        ],
-
-        baseline=dict(
-            type="mlp",
-            sizes=[64, 64],
-            epochs=5,  # 10
-            update_batch_size=128,  # 1024
-            learning_rate=.01
-        ),
-
-        # Main
+        network=network(net3x),
+        learning_rate=1e-7,
         discount=.99,
         exploration=dict(
             type="epsilon_decay",
@@ -56,10 +41,18 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=Fa
     # PolicyGradientModel
     if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         conf.update(
-            batch_size=1024,  # batch_size must be > optimizer_batch_size
-            optimizer_batch_size=256,
-            learning_rate=.001,
-            normalize_rewards=True  # definite winner=True
+            baseline=dict(
+                type="mlp",
+                sizes=[128, 128],
+                epochs=10,
+                update_batch_size=512,  # 1024
+                learning_rate=.001
+            ),
+            batch_size=2048,  # batch_size must be > optimizer_batch_size
+            optimizer_batch_size=1024,
+            normalize_rewards=True,  # definite winner=True
+            keep_last=True,
+            epochs=5
             # gae_rewards winner=False
         )
         # VPGAgent
@@ -71,6 +64,16 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=Fa
             agent_class = PPOAgent
             conf.update(dict())
 
+    elif agent_type == 'NAFAgent':
+        conf.update(
+            batch_size=8,
+            memory_capacity=800,
+            first_update=80,
+            exploration=dict(type='ornstein_uhlenbeck'),
+            update_target_weight=.001,
+            clip_loss=1.
+        )
+        agent_class = NAFAgent
     # Q-model
     else:
         agent_class = DQNAgent

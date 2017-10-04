@@ -85,7 +85,7 @@ class BitcoinEnv(gym.Env):
 
     @staticmethod
     def _diff(arr):
-        return pd.DataFrame(arr).diff()\
+        return pd.Series(arr).diff()\
             .replace([np.inf, -np.inf], np.nan).ffill()\
             .fillna(0).values
 
@@ -94,7 +94,7 @@ class BitcoinEnv(gym.Env):
         for k in data.tables:
             # TA-Lib requires specifically-named columns (OHLCV)
             c = dict([(f'{k}_{c}', c) for c in data.columns if c != data.close_col])
-            c['close'] = f'{k}_{data.close_col}'
+            c[f'{k}_{data.close_col}'] = 'close'
             xchange_df = df.rename(columns=c)
 
             # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
@@ -111,24 +111,24 @@ class BitcoinEnv(gym.Env):
     def _get_indicators(self, df):
         return [
             ## Original indicators from boilerplate
-            # SMA(xchange_df, timeperiod=15),
-            # SMA(xchange_df, timeperiod=60),
-            # RSI(xchange_df, timeperiod=14),
-            # ATR(xchange_df, timeperiod=14),
+            self._diff(SMA(df, timeperiod=15)),
+            self._diff(SMA(df, timeperiod=60)),
+            self._diff(RSI(df, timeperiod=14)),
+            self._diff(ATR(df, timeperiod=14)),
 
             ## Indicators from "How to Day Trade For a Living" (try these)
             ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
-            self._diff(EMA(df, timeperiod=9)),
-            self._diff(EMA(df, timeperiod=20)),
-            self._diff(SMA(df, timeperiod=50)),
-            self._diff(SMA(df, timeperiod=200)),
+            # self._diff(EMA(df, timeperiod=9)),
+            # self._diff(EMA(df, timeperiod=20)),
+            # self._diff(SMA(df, timeperiod=50)),
+            # self._diff(SMA(df, timeperiod=200)),
         ]
 
     def _reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
         self.cash_true = self.value_true = self.start_cap
-        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = 200  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
         self.total_reward = self.total_reward_true = 0
@@ -223,6 +223,7 @@ class BitcoinEnv(gym.Env):
         avg100 = int(np.mean(res['cash'][-100:]) + np.mean(res['values'][-100:]))
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)
+        # if np.isnan(high) or np.isnan(low): import pdb;pdb.set_trace()
         print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(total)}\tAVG$:{avg100}\tActions:{common}(high={high},low={low})")
 
         if self.is_main:
