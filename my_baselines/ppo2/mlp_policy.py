@@ -6,8 +6,9 @@ import gym
 from baselines.common.distributions import make_pdtype
 
 NEURONS, L_LAYERS, D_LAYERS, DROPOUT = 512, 2, 2, .4
-NAME = f'N{NEURONS}L{L_LAYERS}D{D_LAYERS}drop{DROPOUT}' + 'batch128'
+NAME = f'N{NEURONS}L{L_LAYERS}D{D_LAYERS}drop{DROPOUT}' + 'tanh.l1'
 # tanh, selu, dropout, scale  - try next: 256, 2L, w/o ob_rms, tforce w/ min/max=5, dense1 (relu + init)
+# elu, elu+l1 -> nan
 
 
 class MlpPolicy(object):
@@ -60,6 +61,8 @@ class MlpPolicy(object):
         obz = tf.clip_by_value((ob - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)
         if DROPOUT:
             obz = tf.layers.dropout(obz, rate=DROPOUT, training=self.training)
+
+        obz = tf.nn.tanh(U.dense(obz, 256, "first_dense", weight_init=U.normc_initializer(1.0)))
 
         # Value Function
         last_out = obz

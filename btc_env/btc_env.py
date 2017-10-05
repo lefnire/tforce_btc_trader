@@ -38,6 +38,7 @@ class BitcoinEnv(gym.Env):
     def init(self, gym_env, steps=2048*5+5, agent_name='PPOAgent|main', scale_features=False,
              indicators=False, start_cap=1e3, is_main=True, log_results=True, log_states=False):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
+        self.gym_env = gym_env
         self.steps = steps
         self.agent_name = agent_name
         self.scale_features = scale_features
@@ -49,7 +50,10 @@ class BitcoinEnv(gym.Env):
         self.log_states = log_states
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
-        gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
+        if 'DQN' in agent_name:
+            gym_env.action_space = spaces.Discrete(4)
+        else:
+            gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
         gym_env.observation_space = spaces.Box(*min_max_scaled) if scale_features else\
             spaces.Box(*min_max) if min_max else\
             spaces.Box(low=-100, high=100, shape=(self.num_features(),))
@@ -128,7 +132,7 @@ class BitcoinEnv(gym.Env):
         self.time = time.time()
         self.cash = self.value = self.start_cap
         self.cash_true = self.value_true = self.start_cap
-        start_timestep = 200  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
         self.total_reward = self.total_reward_true = 0
@@ -145,9 +149,13 @@ class BitcoinEnv(gym.Env):
         return first_state
 
     def _step(self, action):
-        # signal = 0 if -40 < action < 1 else action
-        signal = action[0]
-        signal_true = action[1] if len(action) > 1 else signal
+        if type(self.gym_env.action_space) == spaces.Discrete:
+            signal = {0: -40, 1: 0, 2: 5, 3: 40}[int(action)]
+            signal_true = signal
+        else:
+            # signal = 0 if -40 < action < 1 else action
+            signal = action[0]
+            signal_true = action[1] if len(action) > 1 else signal
         self.signals.append(signal_true)
 
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
@@ -259,7 +267,9 @@ class BitcoinEnv(gym.Env):
 class BitcoinEnvTforce(OpenAIGym):
     def __init__(self, **kwargs):
         super(BitcoinEnvTforce, self).__init__('BTC-v0')
-        seed = 1234; np.random.seed(seed); tf.set_random_seed(seed); self.gym.env.seed(seed)
+        if 'Nstep' not in kwargs['agent_name']:
+            print('seeding')
+            self.gym.env.seed(1234)
         self.gym.env.init(self.gym, **kwargs)
 
 

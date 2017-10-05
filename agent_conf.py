@@ -1,18 +1,15 @@
-import tensorflow as tf
-from tensorforce import Configuration, TensorForceError
-from tensorforce.agents import VPGAgent, PPOAgent, DQNAgent, NAFAgent
+from tensorforce import Configuration, TensorForceError, agents, models
 from tensorforce.core.networks import layered_network_builder
-from pprint import pprint
 
-import btc_env
 from btc_env.btc_env import BitcoinEnvTforce
 from experiments import network, net4x, net3x
 
 STEPS = 2048 * 3 + 3
 
 
-def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=False):
+def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
     agent_name = agent_type + '|' + mods
+    agent_class = agents.agents[agent_type]
     env = BitcoinEnvTforce(steps=STEPS, agent_name=agent_name, **env_args)
 
     conf = dict(
@@ -30,16 +27,17 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=Fa
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
-            epsilon_final=0.1,
-            epsilon_timesteps=1e6
+            epsilon_final=0.,
+            epsilon_timesteps=1.5e6
         ),
         optimizer="nadam", # winner=nadam
         states=env.states,
         actions=env.actions,
     )
 
-    # PolicyGradientModel
-    if agent_type in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
+    if agent_class == agents.TRPOAgent:
+        pass
+    elif issubclass(agent_class.model, models.PolicyGradientModel):
         conf.update(
             baseline=dict(
                 type="mlp",
@@ -55,64 +53,30 @@ def conf(overrides, agent_type='PPOAgent', mods='main', env_args={}, no_agent=Fa
             epochs=5
             # gae_rewards winner=False
         )
-        # VPGAgent
-        if agent_type == 'VPGAgent':
-            agent_class = VPGAgent
-            conf.update(dict())
-        # PPOAgent
-        elif agent_type == 'PPOAgent':
-            agent_class = PPOAgent
-            conf.update(dict())
-
-    elif agent_type == 'NAFAgent':
+    elif agent_class == agents.NAFAgent:
         conf.update(
+            network=network(net4x, d=.4),
+            learning_rate=1e-8,
             batch_size=8,
             memory_capacity=800,
             first_update=80,
-            exploration=dict(type='ornstein_uhlenbeck'),
+            exploration=dict(
+                type="ornstein_uhlenbeck",
+                sigma=0.2,
+                mu=0,
+                theta=0.15
+            ),
             update_target_weight=.001,
             clip_loss=1.
         )
-        agent_class = NAFAgent
-    # Q-model
-    else:
-        agent_class = DQNAgent
-        conf.update(
-            # memory_capacity=STEPS
-            # first_update=int(STEPS/10),
-            # update_frequency=500,
-            baseline=None,
-            memory='replay',
-            clip_loss=.1,
-            double_dqn=True,
-        )
-        if conf['memory'] == 'prioritized_replay':
-            approach, batch = 'tforce', 16
-            conf.update(**dict(
-                tforce=dict(
-                    batch_size=8,
-                    memory_capacity=50,
-                    first_update=20,
-                    target_update_frequency=10,
-                ),
-                custom=dict(
-                    batch_size=batch,
-                    memory_capacity=int(batch * 6.25),
-                    first_update=int(batch * 2.5),
-                    target_update_frequency=int(batch * 1.25)
-                ),
-                # https://jaromiru.com/2016/11/07/lets-make-a-dqn-double-learning-and-prioritized-experience-replay/
-                blog=dict(
-                    batch_size=32,
-                    memory_capacity=200000,
-                    first_update=int(32 * 2.5),
-                    target_update_frequency=10000
-                )
-            )[approach])
+    elif agent_class == agents.DQNAgent:
+        conf.update(double_dqn=True)
+    elif agent_class == agents.DQNNstepAgent:
+        conf.update(batch_size=8)
+        # Investigate graphs: batch-8 setup, random_replay=False, 4x
 
     # From caller (A3C v single-run)
     conf.update(overrides)
-    # pprint(conf)
     # Allow overrides to network above, then run it through configurator
     conf['network'] = layered_network_builder(conf['network'])
     conf = Configuration(**conf)
