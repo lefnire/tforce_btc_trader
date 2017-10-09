@@ -1,6 +1,6 @@
 tmp/
 __pycache__
 .idea
-data_/
+saves/
 plt/
 logs_async/

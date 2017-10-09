@@ -7,7 +7,8 @@ from btc_env.btc_env import BitcoinEnvTforce
 
 REWARD_FACTOR = 0.001
 EPSILON_STEPS = .5e6
-HYPER_SWITCH = 2e6
+HYPER_SWITCH = 200
+SUMMARY_LEVEL = 1  # 0=off 1=scalars (grad/loss..) 2=histograms
 
 
 # Copies one set of variables to another.
@@ -29,8 +30,9 @@ def discounting(x, gamma):
 
 class Worker():
     def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, seed, test, hyper, agent_name):
-        self.name = "worker_" + str(name)
+        self.name = f"worker_{name}"
         self.is_main = name == 0
+        self.agent_name = agent_name
         self.number = name
         self.model_path = model_path
         self.trainer = trainer
@@ -41,21 +43,23 @@ class Worker():
         self.a_size = a_size
         self.epsilon = 1
         self.hyper = hyper
+        self.train_itr = 0
+        self.final_epsilon = 0. if self.is_main else [.2, .1][name % 2]
         self.steps = 2048*3 + (2048*3 // self.hyper['batch'])  # tack on some leg-room
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
-        self.local_AC = AC_Network(s_size, a_size, self.name, trainer, hyper)
+        summ_lev = SUMMARY_LEVEL if self.is_main else 0
+        self.local_AC = AC_Network(s_size, a_size, self.name, trainer, hyper, summary_level=summ_lev)
         self.update_local_ops = update_target_graph('global', self.name)
 
         self.env = BitcoinEnvTforce(
             steps=self.steps,
             agent_name=agent_name,
             indicators=hyper.get('indicators', False),
-            is_main=self.is_main
+            scale_features=hyper.get('scale', False),
+            is_main=self.is_main,
         )
         self.env.gym.seed(seed)
-
-        self.train_itr = 0
 
     def get_env(self):
         return self.env.gym.env
@@ -94,21 +98,24 @@ class Worker():
             net.advantages: discounted_advantages,
             net.rnn_prev: np.transpose([np.asarray(state) for state in rnn_states], [1,2,0,3])
         }
-        for _ in range(self.hyper['epochs']):
-            v_l, p_l, e_l, g_n, v_n, _ = sess.run([
-                net.value_loss,
-                net.policy_loss,
-                net.entropy,
-                net.grad_norms,
-                net.var_norms,
-                net.apply_grads
-            ], feed_dict=feed_dict)
-        return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n
+        fetches = [
+            net.noop,
+            net.apply_grads,
+        ]
+        for i in range(self.hyper['epochs']):
+            if i == self.hyper['epochs'] - 1 and self.is_main:
+                fetches[0] = net.merged_summaries
+            summaries, _ = sess.run(fetches, feed_dict=feed_dict)
+        return summaries
 
     def work(self, gamma, sess, coord, saver):
         episode_count = sess.run(self.global_episodes)
         print("Starting worker " + str(self.number))
         with sess.as_default(), sess.graph.as_default():
+            if self.is_main:
+                summary_writer = tf.summary.FileWriter(f"saves/{self.agent_name}", sess.graph)
+                self.get_env().summary_writer = summary_writer
+
             while not coord.should_stop():
                 net = self.local_AC
                 sess.run(self.update_local_ops)
@@ -120,7 +127,8 @@ class Worker():
                 # Restart environment
                 terminal = False
                 s = self.env.reset()
-                rnn_prev = np.zeros([self.hyper['l_layers'], 2, 1, self.hyper['l_units']])
+                l_layers, l_units = len(self.hyper.net[1]), self.hyper.net[1][0]
+                rnn_prev = np.zeros([l_layers, 2, 1, l_units])
 
                 # Run an episode
                 while not terminal:
@@ -129,7 +137,7 @@ class Worker():
                                          feed_dict={net.inputs: [s],
                                                     net.rnn_prev: rnn_prev})
 
-                    if self.is_test or random.random() > self.epsilon or self.is_main:
+                    if self.is_test or random.random() > self.epsilon:
                         a = a_dist  # Use maximum when testing
                     else:
                         a = random.randint(-100, 100)  # Use stochastic distribution sampling
@@ -143,11 +151,10 @@ class Worker():
                     # Train on mini batches from episode
                     if len(episode_buffer) == self.hyper['batch'] and not self.is_test:
                         self.train_itr += 1
-                        if not self.should_stop_training():
-                            v1 = sess.run([net.value],
-                                          feed_dict={net.inputs: [s],
-                                                     net.rnn_prev: rnn_prev})
-                            v_l, p_l, e_l, g_n, v_n = self.train(episode_buffer, sess, gamma, v1[0][0])
+                        v1 = sess.run([net.value],
+                                      feed_dict={net.inputs: [s],
+                                                 net.rnn_prev: rnn_prev})
+                        net_summary = self.train(episode_buffer, sess, gamma, v1[0][0])
                         episode_buffer = []
 
                     # Set previous state for next step
@@ -155,7 +162,7 @@ class Worker():
                     rnn_prev = rnn_next
                     episode_step_count += 1
 
-                    if self.epsilon > (0. if self.is_main else 0.1):  # decrement epsilon over time
+                    if self.epsilon > self.final_epsilon:
                         self.epsilon -= (1.0 / EPSILON_STEPS)
 
                 self.episode_mean_values.append(np.mean(episode_values))
@@ -164,32 +171,37 @@ class Worker():
                     raise Exception(f"Didn't train over all batches ({self.train_itr} of {self.steps // self.hyper['batch']})")
 
                 if self.is_main:
-                    summary = tf.Summary()
-                    summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
-                    summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
-                    if not self.is_test:
-                        summary.value.add(tag='Losses/Value Loss', simple_value=float(v_l))
-                        summary.value.add(tag='Losses/Policy Loss', simple_value=float(p_l))
-                        # summary.value.add(tag='Losses/Entropy', simple_value=float(e_l))
-                        summary.value.add(tag='Losses/Grad Norm', simple_value=float(g_n))
-                        summary.value.add(tag='Losses/Var Norm', simple_value=float(v_n))
-                    self.get_env().summary_writer.add_summary(summary, episode_count)
-                    self.get_env().summary_writer.flush()
+                    scalar = tf.Summary()
+                    xtra = {
+                        'perf/epsilon': float(self.epsilon),
+                        'perf/value': float(self.episode_mean_values[-1])
+                    }
+                    for k, v in xtra.items(): scalar.value.add(tag=k, simple_value=v)
+                    summary_writer.add_summary(scalar, episode_count)
+                    # self.get_env().write_results(sess, summary_writer, episode_count)
+                    summary_writer.add_summary(net_summary, episode_count)
+                    summary_writer.flush()
 
                     if not self.is_test:
-                        if episode_count % 50 == 0:
+                        if episode_count % 100 == 0:
                             pass
                             # saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
 
-                        # stop if we're showing net gains to prevent overfitting
-                        if episode_count >= HYPER_SWITCH//self.steps or self.should_stop_training():
+                        if episode_count >= HYPER_SWITCH:
                             coord.request_stop()
 
                     sess.run(self.increment) # Next global episode
 
+                if self.should_stop_training(episode_count) and not self.is_test:
+                    print('Stopped training')
+                    self.is_test = True
+
                 episode_count += 1
 
-    def should_stop_training(self):
-        return False
+    def should_stop_training(self, episode):
+        if not self.hyper.get('early_stop'): return False
+        return episode >= 90
+        # TODO ~90 is where it peaks currently. Want to use below, but will only be true of worker_0. How to communicate
+        # to the other wokers to stop training?
         rewards = self.get_env().episode_results['rewards']
         return len(rewards) > 20 and np.mean(rewards[-20:]) > 0 # np.all(np.array(rewards[-20:]) > 0)

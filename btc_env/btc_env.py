@@ -18,12 +18,12 @@ import data
 from data import conn
 
 try:
-    scaler = joblib.load('data_/scaler.pkl')
+    scaler = joblib.load('saves/scaler.pkl')
 except Exception: pass
 
 try:
-    min_max = joblib.load('data_/min_max.pkl')
-    min_max_scaled = joblib.load('data_/min_max_scaled.pkl')
+    min_max = joblib.load('saves/min_max.pkl')
+    min_max_scaled = joblib.load('saves/min_max_scaled.pkl')
 except Exception:
     min_max = None
 
@@ -35,8 +35,8 @@ class BitcoinEnv(gym.Env):
     # Calling gym.make(ID) doesn't allow passing in params, so we make then initialize separately
     # def __init__(self):
 
-    def init(self, gym_env, steps=2048*5+5, agent_name='PPOAgent|main', scale_features=False,
-             indicators=False, start_cap=1e3, is_main=True, log_results=True, log_states=False):
+    def init(self, gym_env, steps=2048*5+5, agent_name='A3C|main', scale_features=False,
+             indicators=False, start_cap=1e3, is_main=True, log_states=False):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.gym_env = gym_env
         self.steps = steps
@@ -45,12 +45,10 @@ class BitcoinEnv(gym.Env):
         self.indicators = indicators
         self.start_cap = start_cap
         self.is_main = is_main
-        self.log_results = log_results
-        self.summary_writer = tf.summary.FileWriter(f"./a3c/saves/train/{agent_name}")
         self.log_states = log_states
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
-        if 'DQN' in agent_name:
+        if 'DQN' in agent_name or 'PPO' in agent_name:
             gym_env.action_space = spaces.Discrete(4)
         else:
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
@@ -62,6 +60,11 @@ class BitcoinEnv(gym.Env):
         
         # self._seed()
         if is_main:
+            self.sess = tf.Session(config=tf.ConfigProto(device_count={'GPU': 0}))
+            self.summary_writer = tf.summary.FileWriter(f"saves/{self.agent_name}")
+            self.signals_placeholder = tf.placeholder(tf.float16, shape=(None,))
+            tf.summary.histogram('buy_sell_signals', self.signals_placeholder, collections=['btc_env'])
+            self.merged_summaries = tf.summary.merge_all('btc_env')
             data.wipe_rows(agent_name)
 
     def __str__(self): return 'BitcoinEnv'
@@ -149,10 +152,18 @@ class BitcoinEnv(gym.Env):
 
     def _step(self, action):
         if type(self.gym_env.action_space) == spaces.Discrete:
-            signal = {0: -40, 1: 0, 2: 5, 3: 40}[int(action)]
+            signal = {
+                0: -40,
+                1: 0,
+                2: 1,
+                3: 5,
+                4: 20
+            }[int(action)]
         else:
-            # signal = 0 if -40 < action < 1 else action
             signal = action[0]
+            # gdax requires a minimum .01BTC (~$40) sale. As we're learning a probability distribution, don't separate
+            # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
+            if signal < 0: signal -= 40
         self.signals.append(signal)
 
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
@@ -197,53 +208,46 @@ class BitcoinEnv(gym.Env):
             self.episode_results['values'].append(self.value)
             self.episode_results['rewards'].append(self.total_reward)
             self.time = round(time.time() - self.time)
-            self._write_results()
+            if self.is_main:
+                self.write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal, {}
 
-
-    def _write_results(self):
+    def write_results(self):
         res = self.episode_results
         episode = len(res['cash'])
-        # skip some for performance
-        # if len(res['cash']) % 10 != 0: return
-
         reward, cash, value = float(self.total_reward), float(self.cash), float(self.value)
-        total = cash + value
-        avg100 = int(np.mean(res['cash'][-100:]) + np.mean(res['values'][-100:]))
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)
-        # if np.isnan(high) or np.isnan(low): import pdb;pdb.set_trace()
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\t${int(total)}\tAVG$:{avg100}\tActions:{common}(high={high},low={low})")
 
-        if self.is_main:
-            if self.log_results:
-                results = self.episode_results
-                total = float(results['cash'][-1] + results['values'][-1])
-                reward = float(results['rewards'][-1])
-                reward_avg = np.mean(results['rewards'][-20:])
-                summary = tf.Summary()
-                summary.value.add(tag='Perf/Total', simple_value=total)
-                summary.value.add(tag='Perf/Reward', simple_value=reward)
-                summary.value.add(tag='Perf/Reward_AVG', simple_value=reward_avg)
-                self.summary_writer.add_summary(summary, episode)
-                self.summary_writer.flush()
+        scalar = tf.Summary()
+        scalar.value.add(tag='perf/time', simple_value=self.time)
+        scalar.value.add(tag='perf/reward', simple_value=reward)
+        scalar.value.add(tag='perf/reward50avg', simple_value=np.mean(res['rewards'][-50:]))
+        self.summary_writer.add_summary(scalar, episode)
 
-            return
-            # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
-            if total > self.start_cap * 2:
-                y = [float(p) for p in self.prices]
-                signals = [int(sig) for sig in self.signals]
-            else:
-                y = None
-                signals = None
+        # Every so often, record signals distribution
+        if episode % 10 == 0:
+            histos = self.sess.run(self.merged_summaries, feed_dict={self.signals_placeholder: self.signals})
+            self.summary_writer.add_summary(histos, episode)
 
-            q = text("""
-                insert into episodes (episode, reward, cash, value, agent_name, steps, y, signals) 
-                values (:episode, :reward, :cash, :value, :agent_name, :steps, :y, :signals)
-            """)
-            conn.execute(q, episode=episode, reward=reward, cash=cash, value=value,
-                         agent_name=self.agent_name, steps=self.timestep, y=y, signals=signals)
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tA:{common}(high={high},low={low})")
+        return
+
+        # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
+        if total > self.start_cap * 2:
+            y = [float(p) for p in self.prices]
+            signals = [int(sig) for sig in self.signals]
+        else:
+            y = None
+            signals = None
+
+        q = text("""
+            insert into episodes (episode, reward, cash, value, agent_name, steps, y, signals) 
+            values (:episode, :reward, :cash, :value, :agent_name, :steps, :y, :signals)
+        """)
+        conn.execute(q, episode=episode, reward=reward, cash=cash, value=value,
+                     agent_name=self.agent_name, steps=self.timestep, y=y, signals=signals)
 
 
 class BitcoinEnvTforce(OpenAIGym):
@@ -266,13 +270,13 @@ def scale_features_and_save():
     mat = np.array(observations)
     min_max = [np.floor(np.amin(mat, axis=0)), np.ceil(np.amax(mat, axis=0))]
     print('min/max: ', min_max)
-    joblib.dump(min_max, 'data_/min_max.pkl')
+    joblib.dump(min_max, 'saves/min_max.pkl')
 
     scaler = preprocessing.StandardScaler()
     scaled = scaler.fit_transform(observations)
-    joblib.dump(scaler, 'data_/scaler.pkl')
+    joblib.dump(scaler, 'saves/scaler.pkl')
 
     mat = np.array(scaled)
     min_max = [np.floor(np.amin(mat, axis=0)), np.ceil(np.amax(mat, axis=0))]
     print('min/max (scaled): ', min_max)
-    joblib.dump(min_max, 'data_/min_max_scaled.pkl')
+    joblib.dump(min_max, 'saves/min_max_scaled.pkl')

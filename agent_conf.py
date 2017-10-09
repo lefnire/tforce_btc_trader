@@ -22,13 +22,13 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
         tf_summary_level=0,
 
         network=network(net3x),
-        learning_rate=1e-7,
+        learning_rate=1e-8,
         discount=.99,
         exploration=dict(
             type="epsilon_decay",
             epsilon=1.0,
             epsilon_final=0.,
-            epsilon_timesteps=1.5e6
+            epsilon_timesteps=1.3e6
         ),
         optimizer="nadam", # winner=nadam
         states=env.states,
@@ -39,13 +39,6 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
         pass
     elif issubclass(agent_class.model, models.PolicyGradientModel):
         conf.update(
-            baseline=dict(
-                type="mlp",
-                sizes=[128, 128],
-                epochs=10,
-                update_batch_size=512,  # 1024
-                learning_rate=.001
-            ),
             batch_size=2048,  # batch_size must be > optimizer_batch_size
             optimizer_batch_size=1024,
             normalize_rewards=True,  # definite winner=True
@@ -56,7 +49,6 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
     elif agent_class == agents.NAFAgent:
         conf.update(
             network=network(net4x, d=.4),
-            learning_rate=1e-8,
             batch_size=8,
             memory_capacity=800,
             first_update=80,
@@ -70,7 +62,10 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
             clip_loss=1.
         )
     elif agent_class == agents.DQNAgent:
-        conf.update(double_dqn=True)
+        conf.update(
+            batch_size=8,
+            double_dqn=True,
+        )
     elif agent_class == agents.DQNNstepAgent:
         conf.update(batch_size=8)
         # Investigate graphs: batch-8 setup, random_replay=False, 4x
