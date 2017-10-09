@@ -30,6 +30,7 @@ def discounting(x, gamma):
 class Worker():
     def __init__(self, name, s_size, a_size, trainer, model_path, global_episodes, seed, test, hyper, agent_name):
         self.name = "worker_" + str(name)
+        self.is_main = name == 0
         self.number = name
         self.model_path = model_path
         self.trainer = trainer
@@ -50,7 +51,7 @@ class Worker():
             steps=self.steps,
             agent_name=agent_name,
             indicators=hyper.get('indicators', False),
-            is_main=name == 0
+            is_main=self.is_main
         )
         self.env.gym.seed(seed)
 
@@ -128,13 +129,13 @@ class Worker():
                                          feed_dict={net.inputs: [s],
                                                     net.rnn_prev: rnn_prev})
 
-                    if self.is_test or random.random() > self.epsilon:
+                    if self.is_test or random.random() > self.epsilon or self.is_main:
                         a = a_dist  # Use maximum when testing
                     else:
                         a = random.randint(-100, 100)  # Use stochastic distribution sampling
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
-                    s2, r, terminal = self.env.execute([a, a_dist])
+                    s2, r, terminal = self.env.execute([a])
                     episode_reward += r
                     episode_buffer.append([s, a, r, s2, terminal, v[0, 0], np.squeeze(rnn_prev)])
                     episode_values.append(v[0, 0])
@@ -154,7 +155,7 @@ class Worker():
                     rnn_prev = rnn_next
                     episode_step_count += 1
 
-                    if self.epsilon > 0.1:  # decrement epsilon over time
+                    if self.epsilon > (0. if self.is_main else 0.1):  # decrement epsilon over time
                         self.epsilon -= (1.0 / EPSILON_STEPS)
 
                 self.episode_mean_values.append(np.mean(episode_values))
@@ -162,7 +163,7 @@ class Worker():
                 if self.train_itr < self.steps // self.hyper['batch']:
                     raise Exception(f"Didn't train over all batches ({self.train_itr} of {self.steps // self.hyper['batch']})")
 
-                if self.name == 'worker_0':
+                if self.is_main:
                     summary = tf.Summary()
                     summary.value.add(tag='Perf/Epsilon', simple_value=float(self.epsilon))
                     summary.value.add(tag='Perf/Value', simple_value=float(self.episode_mean_values[-1]))
