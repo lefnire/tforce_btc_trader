@@ -76,7 +76,7 @@ class AC_Network():
                     # Softmax policy loss function
                     # self.responsible_outputs = tf.reduce_sum(self.policy * self.action, [1])
                     # self.policy_loss = -tf.reduce_sum(tf.log(tf.maximum(self.responsible_outputs, 1e-12)) * self.advantages)
-                    self.policy_loss = -tf.reduce_sum(
+                    self.policy_loss = tf.reduce_sum(
                         tf.square(self.actions - self.policy)
                         * self.advantages
                     )
@@ -85,7 +85,7 @@ class AC_Network():
                     # self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
                     self.entropy = tf.constant(0.)
 
-                    self.loss = self.value_loss + self.policy_loss - self.entropy * 0.01
+                    self.loss = self.policy_loss - self.value_loss - self.entropy * 0.01
 
                     # Get gradients from local network using local losses
                     local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
