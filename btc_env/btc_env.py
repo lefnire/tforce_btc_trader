@@ -1,4 +1,4 @@
-import random, time, gym
+import random, time, gym, re
 from gym import spaces
 from gym.utils import seeding
 import numpy as np
@@ -48,7 +48,7 @@ class BitcoinEnv(gym.Env):
         self.log_states = log_states
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
-        if 'DQN' in agent_name or 'PPO' in agent_name:
+        if re.search('(DQN|PPO|A3C)', agent_name):
             gym_env.action_space = spaces.Discrete(4)
         else:
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
@@ -152,6 +152,9 @@ class BitcoinEnv(gym.Env):
 
     def _step(self, action):
         if type(self.gym_env.action_space) == spaces.Discrete:
+            if type(action) == list:
+                # A3C in softmax-mode
+                action = np.argmax(action)
             signal = {
                 0: -40,
                 1: 0,

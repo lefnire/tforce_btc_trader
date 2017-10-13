@@ -4,6 +4,14 @@ import numpy as np
 # Clipping ratio for gradients
 CLIP_NORM = 40.0
 
+#Used to initialize weights for policy and value output layers
+def normalized_columns_initializer(std=1.0):
+    def _initializer(shape, dtype=None, partition_info=None):
+        out = np.random.randn(*shape).astype(np.float32)
+        out *= std / np.sqrt(np.square(out).sum(axis=0, keepdims=True))
+        return tf.constant(out)
+    return _initializer
+
 class AC_Network():
     def __init__(self, s_size, a_size, scope, trainer, hyper, summary_level=1):
         with tf.variable_scope(scope):
@@ -54,7 +62,10 @@ class AC_Network():
                     net = tf.layers.dense(net, units, kernel_initializer=he_init, activation=tf.nn.elu, name=f'pol_act{i}')
                     net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name=f'pol_act_drop{i}')
                     if summary_level >= 2: tf.summary.histogram('act', net)
-                self.policy = tf.squeeze(tf.layers.dense(net, 1, kernel_initializer=he_init, name='pol_out'))
+                self.policy = tf.layers.dense(net, a_size, name='pol_out',
+                                              activation=tf.nn.softmax,
+                                              kernel_initializer=normalized_columns_initializer(0.01),
+                                              bias_initializer=None)
 
             # Value estimation
             with tf.name_scope('value'):
@@ -69,23 +80,31 @@ class AC_Network():
             if scope != 'global':
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, scope)
                 with tf.name_scope('losses'), tf.control_dependencies(update_ops):
-                    """ https://goo.gl/ZU2Z9a
+                    """ Original @https://goo.gl/ZU2Z9a, modified @https://github.com/liampetti/A3C-LSTM
                     NOTE! These loss functions have been altered dramatically, and may not be correct. See original
                     implementation at https://github.com/awjuliani/DeepRL-Agents/blob/master/A3C-Doom.ipynb:
                     
                     Value Loss: L = Σ(R - V(s))²
                     Policy Loss: L = -log(π(s)) * A(s) - β*H(π)
                     """
-                    self.actions = tf.placeholder(shape=[None], dtype=tf.float32, name='actions')
+                    self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32, name='actions')
                     self.target_v = tf.placeholder(shape=[None], dtype=tf.float32, name='target_v')
                     self.advantages = tf.placeholder(shape=[None], dtype=tf.float32, name='advantages')
 
-                    value_loss = tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
-                    policy_loss = tf.reduce_sum(
-                        tf.square(self.actions - self.policy)
-                        * self.advantages
-                    )
-                    loss = policy_loss - value_loss
+                    responsible_outputs = tf.reduce_sum(self.policy * self.actions, [1])
+
+                    # Value loss function
+                    value_loss = 0.5 * tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
+
+                    # Softmax policy loss function
+                    policy_loss = -tf.reduce_sum(
+                        tf.log(tf.maximum(responsible_outputs, 1e-12)) * self.advantages)
+
+                    # Softmax entropy function
+                    entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
+
+                    loss = 0.5 * value_loss + policy_loss - entropy * 0.01
+
 
                     # Get gradients from local network using local losses
                     local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)

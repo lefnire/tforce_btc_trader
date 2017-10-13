@@ -46,6 +46,7 @@ class Worker():
         self.train_itr = 0
         self.final_epsilon = 0. if self.is_main else [.2, .1][name % 2]
         self.steps = 2048*3 + (2048*3 // self.hyper['batch'])  # tack on some leg-room
+        self.actions = self.actions = np.identity(a_size, dtype=bool).tolist()
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
         summ_lev = SUMMARY_LEVEL if self.is_main else 0
@@ -94,7 +95,7 @@ class Worker():
             net.training: True,
             net.target_v: discounted_rewards,
             net.inputs: np.vstack(states),
-            net.actions: actions,
+            net.actions: np.vstack(actions),
             net.advantages: discounted_advantages,
             net.rnn_prev: np.transpose([np.asarray(state) for state in rnn_states], [1,2,0,3])
         }
@@ -138,9 +139,11 @@ class Worker():
                                                     net.rnn_prev: rnn_prev})
 
                     if self.is_test or random.random() > self.epsilon:
-                        a = a_dist  # Use maximum when testing
+                        a0 = np.argmax(a_dist[0])  # Use maximum when testing
                     else:
-                        a = random.randint(-100, 100)  # Use stochastic distribution sampling
+                        a0 = np.random.randint(self.a_size)
+                    a = np.zeros(self.a_size)
+                    a[a0] = 1
 
                     # s2, r, terminal, info = self.env.step(np.argmax(a))
                     s2, r, terminal = self.env.execute([a])

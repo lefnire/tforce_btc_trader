@@ -109,15 +109,15 @@ def main(_):
         h_epochs.append(h)
 
     # arr = [defaults] + h_batch + h_lr + h_mult + h_epochs
-    arr = [defaults] + h_mult
+    arr = [defaults]
     for i, hyper in enumerate(arr):
         hyper = Box(hyper)
-        agent_name = f"A3C_Le{hyper.lr}_Ba{hyper.batch}_Ar{hyper.arch}_Ep{hyper.epochs}_Sc{hyper.scale}"
+        agent_name = f"A3C_Le{hyper.lr}_Ba{hyper.batch}_Ar{hyper.arch}_Ep{hyper.epochs}_Sc{hyper.scale}Discrete"
         tf.reset_default_graph()
 
         btc_env = BitcoinEnvTforce(agent_name=agent_name, is_main=False)
         STATE_DIM = btc_env.states['shape'][0]
-        ACTION_DIM = btc_env.actions['shape'][0]
+        ACTION_DIM = btc_env.actions['num_actions']
 
         # with tf.device("/cpu:0"):
         np.random.seed(RANDOM_SEED)
