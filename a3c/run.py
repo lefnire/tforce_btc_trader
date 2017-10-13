@@ -56,7 +56,7 @@ def main(_):
         os.makedirs(MODEL_DIR)
 
     # TODO: indicators, reward_factor, peepholes, dropout, activations
-    defaults = dict(dropout=.4, lr=1e-8, batch=2048, epochs=25, net=0, scale=True)
+    defaults = dict(dropout=.4, lr=1e-8, batch=2048, epochs=25, net=0, scale=False)
 
     h_mult = []
     nets = [
@@ -87,10 +87,16 @@ def main(_):
             h = defaults.copy()
             h.update(arch=arch, net=net)
             h_mult.append(h)
+    h_drop = []
+    for drop in [.0, .4]:
+        if drop == defaults['dropout']: continue
+        h = defaults.copy()
+        h.update(dropout=drop)
+        h_drop.append(h)
 
     # TODO these 3 should be random or grid -searched
     h_batch = []
-    for batch in [256, 512, 1024, 4096]:
+    for batch in [256, 2048, 4096]:
         if batch == defaults['batch']: continue
         h = defaults.copy()
         h.update(batch=batch)
@@ -102,17 +108,24 @@ def main(_):
         h.update(lr=lr)
         h_lr.append(h)
     h_epochs = []
-    for epoch in [5, 20, 50]:
+    for epoch in [5, 25, 50]:
         if epoch == defaults['epochs']: continue
         h = defaults.copy()
         h.update(epochs=epoch)
         h_epochs.append(h)
 
-    # arr = [defaults] + h_batch + h_lr + h_mult + h_epochs
-    arr = [defaults]
+    h_scale = []
+    for scale in [True, False]:
+        if scale == defaults['scale']: continue
+        h = defaults.copy()
+        h.update(scale=scale)
+        h_scale.append(h)
+
+    arr = [defaults] + h_drop + h_scale + h_mult + h_batch + h_lr + h_epochs
+    # arr = [defaults]
     for i, hyper in enumerate(arr):
         hyper = Box(hyper)
-        agent_name = f"A3C_Le{hyper.lr}_Ba{hyper.batch}_Ar{hyper.arch}_Ep{hyper.epochs}_Sc{hyper.scale}Discrete"
+        agent_name = f"A3C_Le{hyper.lr}_Ba{hyper.batch}_Ar{hyper.arch}_Ep{hyper.epochs}_Sc{hyper.scale}Dr{hyper.dropout}"
         tf.reset_default_graph()
 
         btc_env = BitcoinEnvTforce(agent_name=agent_name, is_main=False)

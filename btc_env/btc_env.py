@@ -49,7 +49,7 @@ class BitcoinEnv(gym.Env):
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
         if re.search('(DQN|PPO|A3C)', agent_name):
-            gym_env.action_space = spaces.Discrete(4)
+            gym_env.action_space = spaces.Discrete(5)
         else:
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
         gym_env.observation_space = spaces.Box(*min_max_scaled) if scale_features else\
@@ -61,7 +61,7 @@ class BitcoinEnv(gym.Env):
         # self._seed()
         if is_main:
             self.sess = tf.Session(config=tf.ConfigProto(device_count={'GPU': 0}))
-            self.summary_writer = tf.summary.FileWriter(f"saves/{self.agent_name}")
+            self.summary_writer = tf.summary.FileWriter(f"saves/boards/{self.agent_name}")
             self.signals_placeholder = tf.placeholder(tf.float16, shape=(None,))
             tf.summary.histogram('buy_sell_signals', self.signals_placeholder, collections=['btc_env'])
             self.merged_summaries = tf.summary.merge_all('btc_env')
@@ -234,6 +234,7 @@ class BitcoinEnv(gym.Env):
             histos = self.sess.run(self.merged_summaries, feed_dict={self.signals_placeholder: self.signals})
             self.summary_writer.add_summary(histos, episode)
 
+        self.summary_writer.flush()
         print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tA:{common}(high={high},low={low})")
         return
 

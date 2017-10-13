@@ -12,6 +12,7 @@ def normalized_columns_initializer(std=1.0):
         return tf.constant(out)
     return _initializer
 
+
 class AC_Network():
     def __init__(self, s_size, a_size, scope, trainer, hyper, summary_level=1):
         with tf.variable_scope(scope):
@@ -20,14 +21,30 @@ class AC_Network():
             self.training = training = tf.placeholder_with_default(False, shape=(), name='training')
             self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32, name='inputs')
 
+            def reg():
+                if hyper.dropout: return dict()
+                return dict(
+                    kernel_regularizer=tf.contrib.layers.l1_l2_regularizer(
+                        scale_l1=.001,
+                        scale_l2=.005,
+                    ),
+                    bias_regularizer=tf.contrib.layers.l1_l2_regularizer(
+                        scale_l1=.001,
+                        scale_l2=.005,
+                    )
+                )
+
             net = self.inputs if self.inputs.get_shape().ndims == 3 else tf.expand_dims(self.inputs, [1])
-            net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name='input_drop')
+            if hyper.dropout:
+                net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name='input_drop')
 
             # 1st dense layer
             if hyper.net[0]:
                 with tf.name_scope('first_dense'):
-                    net = tf.layers.dense(net, hyper.net[0], kernel_initializer=he_init, activation=tf.nn.elu, name='first_act')
-                    net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name='first_act_drop')
+                    net = tf.layers.dense(net, hyper.net[0], kernel_initializer=he_init,
+                                          activation=tf.nn.elu, name='first_act', **reg())
+                    if hyper.dropout:
+                        net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name='first_act_drop')
                     if summary_level >= 2: tf.summary.histogram('act', net)
 
             # Recurrent network for temporal dependencies
@@ -36,8 +53,9 @@ class AC_Network():
             l_layers, l_units = len(hyper.net[1]), hyper.net[1][0]
             with tf.name_scope('lstm'):
                 cell = [tf.nn.rnn_cell.LSTMCell(l_units) for _ in range(l_layers)]
-                output_keep = tf.cond(self.training, lambda: 1 - hyper.dropout, lambda: 1.)
-                cell = [tf.nn.rnn_cell.DropoutWrapper(c, output_keep_prob=output_keep) for c in cell]
+                if hyper.dropout:
+                    output_keep = tf.cond(self.training, lambda: 1 - hyper.dropout, lambda: 1.)
+                    cell = [tf.nn.rnn_cell.DropoutWrapper(c, output_keep_prob=output_keep) for c in cell]
                 cell = tf.nn.rnn_cell.MultiRNNCell(cell)
 
                 self.rnn_prev = tf.placeholder(dtype=tf.float32, shape=[l_layers, 2, None, l_units], name="rnn_state")
@@ -59,8 +77,10 @@ class AC_Network():
             with tf.name_scope('policy'):
                 net = rnn
                 for i, units in enumerate(hyper.net[2]):
-                    net = tf.layers.dense(net, units, kernel_initializer=he_init, activation=tf.nn.elu, name=f'pol_act{i}')
-                    net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name=f'pol_act_drop{i}')
+                    net = tf.layers.dense(net, units, kernel_initializer=he_init, activation=tf.nn.elu,
+                                          name=f'pol_act{i}', **reg())
+                    if hyper.dropout:
+                        net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name=f'pol_act_drop{i}')
                     if summary_level >= 2: tf.summary.histogram('act', net)
                 self.policy = tf.layers.dense(net, a_size, name='pol_out',
                                               activation=tf.nn.softmax,
@@ -71,8 +91,10 @@ class AC_Network():
             with tf.name_scope('value'):
                 net = rnn
                 for i, units in enumerate(hyper.net[2]):
-                    net = tf.layers.dense(net, units, kernel_initializer=he_init, activation=tf.nn.elu, name=f'val_act{i}')
-                    net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name=f'val_act_drop{i}')
+                    net = tf.layers.dense(net, units, kernel_initializer=he_init, activation=tf.nn.elu,
+                                          name=f'val_act{i}', **reg())
+                    if hyper.dropout:
+                        net = tf.layers.dropout(net, rate=hyper.dropout, training=training, name=f'val_act_drop{i}')
                     if summary_level >= 2: tf.summary.histogram('act', net)
                 self.value = tf.layers.dense(net, 1, kernel_initializer=he_init, name='val_out')
 
@@ -101,7 +123,7 @@ class AC_Network():
                         tf.log(tf.maximum(responsible_outputs, 1e-12)) * self.advantages)
 
                     # Softmax entropy function
-                    entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
+                    entropy = -tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
 
                     loss = 0.5 * value_loss + policy_loss - entropy * 0.01
 

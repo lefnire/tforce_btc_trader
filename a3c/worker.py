@@ -7,7 +7,7 @@ from btc_env.btc_env import BitcoinEnvTforce
 
 REWARD_FACTOR = 0.001
 EPSILON_STEPS = .5e6
-HYPER_SWITCH = 200
+HYPER_SWITCH = 300
 SUMMARY_LEVEL = 1  # 0=off 1=scalars (grad/loss..) 2=histograms
 
 
@@ -21,6 +21,12 @@ def update_target_graph(from_scope,to_scope):
     for from_var,to_var in zip(from_vars,to_vars):
         op_holder.append(to_var.assign(from_var))
     return op_holder
+
+
+def weighted_pick(weights,n_picks):
+    t = np.cumsum(weights)
+    s = np.sum(weights)
+    return np.searchsorted(t,np.random.rand(n_picks)*s)
 
 
 # Discounting function used to calculate discounted returns.
@@ -44,7 +50,7 @@ class Worker():
         self.epsilon = 1
         self.hyper = hyper
         self.train_itr = 0
-        self.final_epsilon = 0. if self.is_main else [.2, .1][name % 2]
+        self.final_epsilon = 0. if self.is_main else [.4, .2][name % 2]
         self.steps = 2048*3 + (2048*3 // self.hyper['batch'])  # tack on some leg-room
         self.actions = self.actions = np.identity(a_size, dtype=bool).tolist()
 
@@ -114,7 +120,7 @@ class Worker():
         print("Starting worker " + str(self.number))
         with sess.as_default(), sess.graph.as_default():
             if self.is_main:
-                summary_writer = tf.summary.FileWriter(f"saves/{self.agent_name}", sess.graph)
+                summary_writer = tf.summary.FileWriter(f"saves/boards/{self.agent_name}", sess.graph)
                 self.get_env().summary_writer = summary_writer
 
             while not coord.should_stop():
@@ -141,7 +147,8 @@ class Worker():
                     if self.is_test or random.random() > self.epsilon:
                         a0 = np.argmax(a_dist[0])  # Use maximum when testing
                     else:
-                        a0 = np.random.randint(self.a_size)
+                        #a0 = np.random.randint(self.a_size)
+                        a0 = weighted_pick(a_dist[0], 1)  # Use stochastic distribution sampling
                     a = np.zeros(self.a_size)
                     a[a0] = 1
 
@@ -185,23 +192,23 @@ class Worker():
                     summary_writer.add_summary(net_summary, episode_count)
                     summary_writer.flush()
 
-                    if not self.is_test:
-                        if episode_count % 100 == 0:
-                            pass
-                            # saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
+                    if not self.is_test and episode_count % 100 == 0:
+                        pass
+                        # saver.save(sess, self.model_path + '/model', global_step=self.global_episodes)
 
-                        if episode_count >= HYPER_SWITCH:
-                            coord.request_stop()
+                    if episode_count >= HYPER_SWITCH:
+                        coord.request_stop()
 
                     sess.run(self.increment) # Next global episode
 
-                if self.should_stop_training(episode_count) and not self.is_test:
+                if not self.is_test and self.should_stop_training(episode_count):
                     print('Stopped training')
                     self.is_test = True
 
                 episode_count += 1
 
     def should_stop_training(self, episode):
+        if self.epsilon < .001: return True  # after MAIN is done, stop it's training, but not the other workers
         if not self.hyper.get('early_stop'): return False
         return episode >= 90
         # TODO ~90 is where it peaks currently. Want to use below, but will only be true of worker_0. How to communicate

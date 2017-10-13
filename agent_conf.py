@@ -43,7 +43,8 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
             optimizer_batch_size=1024,
             normalize_rewards=True,  # definite winner=True
             keep_last=True,
-            epochs=5
+            epochs=5,
+            learning_rate=1e-5,  # -8 better, but too slow to gauge experiments
             # gae_rewards winner=False
         )
     elif agent_class == agents.NAFAgent:

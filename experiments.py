@@ -1,4 +1,4 @@
-AGENT_TYPE = 'PPOAgent'
+AGENT_TYPE = 'DQNAgent'
 
 
 def baseline(**kwargs):
@@ -33,14 +33,6 @@ def network(layers, a='elu', d=None, l2=.001, l1=.005):
     return arr
 
 
-# TODO remove this
-def network_old(arch='DLLDD', n=512, d=.4, a='elu'):
-    return dict(network=network(
-        list(map(lambda l: (l, n), arch))
-        , d=d, a=a, l2=0., l1=0.
-    ))
-
-
 net1x = [('L', 64), ('d', 64)]
 net2x = [('L', 128), ('L', 128), ('d', 64)]
 net3x = [('L',256), ('L',256), ('d',192), ('d',128)]
@@ -53,7 +45,7 @@ if AGENT_TYPE in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         dict(k='main', v=[dict(k='-', v=dict())]),
         dict(k='learning_rate', v=[
             dict(k='1e-3', v=dict(learning_rate=1e-3)),
-            dict(k='1e-5', v=dict(learning_rate=1e-5)),
+            dict(k='1e-8', v=dict(learning_rate=1e-8)),
         ]),
         dict(k='batch', v=[
             dict(k='b4096.o2048', v=dict(batch_size=4096, optimizer_batch_size=2048)),
@@ -183,7 +175,6 @@ elif AGENT_TYPE in ['DQNAgent', 'DQNNstepAgent']:
     prio_replay_batch = 16
     confs = [
         dict(k='main', v=[
-            dict(k='-', v=dict()),
             dict(k='json', v=dict(
                 exploration=dict(
                     type="epsilon_anneal",
@@ -199,17 +190,13 @@ elif AGENT_TYPE in ['DQNAgent', 'DQNNstepAgent']:
                 update_target_weight=1.0,
                 clip_loss=1.0
             )),
+            dict(k='-', v=dict()),
         ]),
         dict(k="target_update_frequency", v=[
             dict(k='5000', v=dict(target_update_frequency=5000))
         ]),
         dict(k='update_target_weight', v=[
             dict(k='.001', v=dict(update_target_weight=.001)),
-        ]),
-        dict(k='activation', v=[
-            dict(k='tanh', v=dict(network=network(net3x, a='tanh'))),
-            dict(k='selu', v=dict(network=network(net3x, a='selu'))),
-            dict(k='relu', v=dict(network=network(net3x, a='relu')))
         ]),
         dict(k='dropout', v=[
             # dict(k='None(3x)', v=dict(network=network(net3x, d=None))),
@@ -222,6 +209,11 @@ elif AGENT_TYPE in ['DQNAgent', 'DQNNstepAgent']:
             # dict(k='3x', v=dict(network=network(net3x))),
             dict(k='2x', v=dict(network=network([('L', 128), ('L', 128), ('d', 64)]))),
             dict(k='1x', v=dict(network=network([('L', 64), ('d', 64)]))),
+        ]),
+        dict(k='activation', v=[
+            dict(k='tanh', v=dict(network=network(net3x, a='tanh'))),
+            dict(k='selu', v=dict(network=network(net3x, a='selu'))),
+            dict(k='relu', v=dict(network=network(net3x, a='relu')))
         ]),
         dict(k='batch_size', v=[
             dict(k='100', v=dict(batch_size=100))
