@@ -54,7 +54,7 @@ class BitcoinEnv(gym.Env):
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
         gym_env.observation_space = spaces.Box(*min_max_scaled) if scale_features else\
             spaces.Box(*min_max) if min_max else\
-            spaces.Box(low=-100, high=100, shape=(self.num_features(),))
+            spaces.Box(low=-1, high=1, shape=(self.num_features(),))
         if scale_features: print('using min_max', min_max_scaled)
         elif min_max: print('using min_max', min_max)
         
@@ -92,6 +92,7 @@ class BitcoinEnv(gym.Env):
 
     @staticmethod
     def _diff(arr):
+        return BitcoinEnv._pct_change(arr)
         return pd.Series(arr).diff()\
             .replace([np.inf, -np.inf], np.nan).ffill()\
             .fillna(0).values
@@ -189,8 +190,8 @@ class BitcoinEnv(gym.Env):
 
         self.timestep += 1
         next_state = np.append(self.observations[self.timestep], [
-            self.cash,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
-            self.value  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
+            self.cash/self.start_cap,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
+            self.value/self.start_cap  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
         ])
 
         # If we need to record a few thousand observations for use in scaling or determining min/max vals (turn off after)

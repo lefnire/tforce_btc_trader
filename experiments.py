@@ -1,4 +1,4 @@
-AGENT_TYPE = 'DQNAgent'
+AGENT_TYPE = 'PPOAgent'
 
 
 def baseline(**kwargs):
@@ -33,62 +33,50 @@ def network(layers, a='elu', d=None, l2=.001, l1=.005):
     return arr
 
 
-net1x = [('L', 64), ('d', 64)]
-net2x = [('L', 128), ('L', 128), ('d', 64)]
+net1x = [('L',64), ('L',64), ('d',64)]
+net2x = [('L',128), ('L',128), ('d',64)]
 net3x = [('L',256), ('L',256), ('d',192), ('d',128)]
-net4x = [('L',512), ('L',512), ('d',256), ('d',128)]
-net5x = [('L',192), ('L',512), ('L',512), ('d',256), ('d',128)]
+net4x = [('d',128), ('L',256), ('L',256), ('d',192), ('d',128)]
+net5x = [('L',512), ('L',512), ('d',256), ('d',128)]
+net6x = [('d',192), ('L',512), ('L',512), ('d',256), ('d',128)]
+net_default = net3x
 
 
 if AGENT_TYPE in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
     confs = [
         dict(k='main', v=[dict(k='-', v=dict())]),
-        dict(k='learning_rate', v=[
-            dict(k='1e-3', v=dict(learning_rate=1e-3)),
-            dict(k='1e-8', v=dict(learning_rate=1e-8)),
-        ]),
-        dict(k='batch', v=[
-            dict(k='b4096.o2048', v=dict(batch_size=4096, optimizer_batch_size=2048)),
-            dict(k='b2048.o512', v=dict(batch_size=2048, optimizer_batch_size=512)),
-            dict(k='b128.o64', v=dict(batch_size=128, optimizer_batch_size=64)),
-            dict(k='b2048.o64(ppo1)', v=dict(batch_size=2048, optimizer_batch_size=64)),
-            dict(k='b256.o128', v=dict(batch_size=256, optimizer_batch_size=128)),
-            dict(k='b1024.o256', v=dict(batch_size=1024, optimizer_batch_size=256)),
-        ]),
-        dict(k='dropout', v=[
-            dict(k='dropout', v=[
-                # dict(k='None(3x)', v=dict(network=network(net3x, d=None))),
-                dict(k='.2(3x)', v=dict(network=network(net3x, d=.2))),
-                dict(k='.5(4x)', v=dict(network=network(net4x, d=.5))),
-            ]),
-        ]),
-        dict(k='activation', v=[
-            dict(k='tanh', v=dict(network=network(net3x, a='tanh'))),
-            dict(k='selu', v=dict(network=network(net3x, a='selu'))),
-            dict(k='relu', v=dict(network=network(net3x, a='relu')))
-        ]),
         dict(k='epochs', v=[
             dict(k='1', v=dict(epochs=1)),
-            dict(k='10', v=dict(epochs=10)),
-            dict(k='20', v=dict(epochs=20)),
+            dict(k='5', v=dict(epochs=5)),  # >5 bad
+        ]),
+        dict(k='discount', v=[
+            dict(k='.95', v=dict(discount=.95)),
+            dict(k='.99', v=dict(discount=.99)),
+        ]),
+        dict(k='dropout', v=[
+            dict(k='.2', v=dict(network=network(net_default, d=.2))),
+            dict(k='.5', v=dict(network=network(net_default, d=.5))),
         ]),
         dict(k='network', v=[
+            dict(k='6x', v=dict(network=network(net6x))),
             dict(k='5x', v=dict(network=network(net5x))),
             dict(k='4x', v=dict(network=network(net4x))),
-            # dict(k='3x', v=dict(network=network(net3x))),
+            # (default)
             dict(k='2x', v=dict(network=network(net2x))),
             dict(k='1x', v=dict(network=network(net1x))),
         ]),
-        dict(k='baseline', v=[
-            dict(k='2x64', v=baseline(sizes=[64, 64])),
-            dict(k='2x256', v=baseline(sizes=[256, 256])),
-            dict(k='epochs5', v=baseline(epochs=5)),
-            dict(k='update_batch_size128', v=baseline(update_batch_size=128)),
-            dict(k='update_batch_size1024', v=baseline(update_batch_size=1024)),
-            dict(k='learning_rate.1e-6', v=baseline(learning_rate=1e-6)),
+        dict(k='activation', v=[
+            dict(k='tanh', v=dict(network=network(net_default, a='tanh'))),
+            dict(k='selu', v=dict(network=network(net_default, a='selu'))),
+            dict(k='relu', v=dict(network=network(net_default, a='relu')))
         ]),
-        dict(k='gae_rewards', v=[
-            dict(k='True', v=dict(gae_rewards=True)),  # winner=False
+        dict(k='learning_rate', v=[
+            dict(k='1e-7', v=dict(learning_rate=1e-7)),
+            dict(k='1e-5', v=dict(learning_rate=1e-5)),
+        ]),
+        dict(k='batch', v=[
+            dict(k='b2048.o1024', v=dict(batch_size=2048, optimizer_batch_size=1024)),
+            dict(k='b1024.o128', v=dict(batch_size=1024, optimizer_batch_size=128)),
         ]),
         dict(k='keep_last', v=[
             dict(k='False', v=dict(keep_last=False)),
@@ -96,16 +84,20 @@ if AGENT_TYPE in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
         dict(k='random_sampling', v=[
             dict(k='False', v=dict(random_sampling=False)),
         ]),
+        dict(k='gae_rewards', v=[
+            dict(k='True', v=dict(gae_rewards=True)),  # winner=False
+        ]),
         dict(k='optimizer', v=[
             dict(k='adam', v=dict(optimizer='adam')),
         ]),
-        dict(k='deterministic', v=[
-            dict(k='true', v=dict(deterministic=True))
-        ]),
-        dict(k='discount', v=[
-            dict(k='.95', v=dict(discount=.95)),
-            dict(k='.97', v=dict(discount=.97)),
-        ]),
+        # dict(k='baseline', v=[
+        #     dict(k='2x64', v=baseline(sizes=[64, 64])),
+        #     dict(k='2x256', v=baseline(sizes=[256, 256])),
+        #     dict(k='epochs5', v=baseline(epochs=5)),
+        #     dict(k='update_batch_size128', v=baseline(update_batch_size=128)),
+        #     dict(k='update_batch_size1024', v=baseline(update_batch_size=1024)),
+        #     dict(k='learning_rate.1e-6', v=baseline(learning_rate=1e-6)),
+        # ]),
     ]
 
 elif AGENT_TYPE in ['NAFAgent']:
@@ -174,23 +166,10 @@ elif AGENT_TYPE in ['NAFAgent']:
 elif AGENT_TYPE in ['DQNAgent', 'DQNNstepAgent']:
     prio_replay_batch = 16
     confs = [
-        dict(k='main', v=[
-            dict(k='json', v=dict(
-                exploration=dict(
-                    type="epsilon_anneal",
-                    epsilon=1.,
-                    epsilon_final=0.,
-                    epsilon_timesteps=1.5e6
-                ),
-                reward_preprocessing=[dict(type="clip", min=-1, max=1)],
-                batch_size=6,
-                repeat_update=1,
-                keep_last=True,
-                target_update_frequency=10000,
-                update_target_weight=1.0,
-                clip_loss=1.0
-            )),
-            dict(k='-', v=dict()),
+        dict(k='main', v=[dict(k='-', v=dict()),]),
+        dict(k='discount', v=[
+            dict(k='.95', v=dict(discount=.95)),
+            dict(k='.99', v=dict(discount=.99)),
         ]),
         dict(k="target_update_frequency", v=[
             dict(k='5000', v=dict(target_update_frequency=5000))
@@ -199,21 +178,21 @@ elif AGENT_TYPE in ['DQNAgent', 'DQNNstepAgent']:
             dict(k='.001', v=dict(update_target_weight=.001)),
         ]),
         dict(k='dropout', v=[
-            # dict(k='None(3x)', v=dict(network=network(net3x, d=None))),
-            dict(k='.2(3x)', v=dict(network=network(net3x, d=.2))),
-            dict(k='.5(4x)', v=dict(network=network(net4x, d=.5))),
+            dict(k='.2', v=dict(network=network(net_default, d=.2))),
+            dict(k='.5', v=dict(network=network(net_default, d=.5))),
         ]),
         dict(k='network', v=[
+            dict(k='6x', v=dict(network=network(net6x))),
             dict(k='5x', v=dict(network=network(net5x))),
             dict(k='4x', v=dict(network=network(net4x))),
-            # dict(k='3x', v=dict(network=network(net3x))),
-            dict(k='2x', v=dict(network=network([('L', 128), ('L', 128), ('d', 64)]))),
-            dict(k='1x', v=dict(network=network([('L', 64), ('d', 64)]))),
+            # (default)
+            dict(k='2x', v=dict(network=network(net2x))),
+            dict(k='1x', v=dict(network=network(net1x))),
         ]),
         dict(k='activation', v=[
-            dict(k='tanh', v=dict(network=network(net3x, a='tanh'))),
-            dict(k='selu', v=dict(network=network(net3x, a='selu'))),
-            dict(k='relu', v=dict(network=network(net3x, a='relu')))
+            dict(k='tanh', v=dict(network=network(net_default, a='tanh'))),
+            dict(k='selu', v=dict(network=network(net_default, a='selu'))),
+            dict(k='relu', v=dict(network=network(net_default, a='relu')))
         ]),
         dict(k='batch_size', v=[
             dict(k='100', v=dict(batch_size=100))

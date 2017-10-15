@@ -2,7 +2,7 @@ from tensorforce import Configuration, TensorForceError, agents, models
 from tensorforce.core.networks import layered_network_builder
 
 from btc_env.btc_env import BitcoinEnvTforce
-from experiments import network, net4x, net3x
+from experiments import network, net_default
 
 STEPS = 2048 * 3 + 3
 
@@ -21,7 +21,8 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
         tf_summary=None,
         tf_summary_level=0,
 
-        network=network(net3x),
+        network=network(net_default),
+        keep_last=True,
         learning_rate=1e-8,
         discount=.99,
         exploration=dict(
@@ -39,13 +40,13 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
         pass
     elif issubclass(agent_class.model, models.PolicyGradientModel):
         conf.update(
-            batch_size=2048,  # batch_size must be > optimizer_batch_size
-            optimizer_batch_size=1024,
+            batch_size=4096,  # batch_size must be > optimizer_batch_size
+            optimizer_batch_size=2048,
             normalize_rewards=True,  # definite winner=True
-            keep_last=True,
-            epochs=5,
-            learning_rate=1e-5,  # -8 better, but too slow to gauge experiments
-            # gae_rewards winner=False
+            epochs=3,
+            learning_rate=1e-6,  # -8 usually works better
+            discount=.97,
+            network=network(net_default, a='selu')
         )
     elif agent_class == agents.NAFAgent:
         conf.update(
@@ -64,8 +65,13 @@ def conf(overrides, agent_type, mods='main', env_args={}, no_agent=False):
         )
     elif agent_class == agents.DQNAgent:
         conf.update(
-            batch_size=8,
             double_dqn=True,
+
+            # seeming winners, more testing desired
+            # Wants network 4x or 5x, but maxes from mem-leak
+            network=network(net_default, a='tanh'),
+            batch_size=50,
+            target_update_frequency=5000
         )
     elif agent_class == agents.DQNNstepAgent:
         conf.update(batch_size=8)
