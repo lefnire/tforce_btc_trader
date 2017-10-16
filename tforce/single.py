@@ -1,9 +1,9 @@
 import tensorflow as tf
 from tensorforce.execution import Runner
 import agent_conf, data
-from experiments import confs, AGENT_TYPE
+from agent_conf import confs, AGENT_TYPE
 
-for conf in confs[3:]:
+for conf in confs[1:]:
     conf['conf'].update(
         tf_session_config=tf.ConfigProto(
             gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.41)
@@ -16,12 +16,10 @@ for conf in confs[3:]:
     )
     conf = agent_conf.conf(
         conf['conf'],
-        agent_type=AGENT_TYPE,
-        mods=conf['name'],
-        # env_args=dict(log_states=True, is_main=True),
-        env_args=dict(is_main=True, scale_features=False, indicators=False)
+        name=conf['name'],
+        env_args=dict(is_main=True)
     )
-    print(conf['agent_name'])
+    print(conf['name'])
     runner = Runner(agent=conf['agent'], environment=conf['env'])
     runner.run(episodes=350)
-    print(conf['agent_name'], 'done')
+    print(conf['name'], 'done')

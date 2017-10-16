@@ -10,7 +10,7 @@ import btc_env
 def main():
     seed = 1234
     # from baselines.ppo1 import mlp_policy, pposgd_simple
-    from my_baselines.ppo2 import mlp_policy, pposgd_simple
+    from blines.ppo2 import mlp_policy, pposgd_simple
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(seed)
     env = gym.make("BTC-v0")

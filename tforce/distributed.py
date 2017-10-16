@@ -8,7 +8,6 @@ from tensorforce.util import log_levels
 
 import agent_conf
 import data
-import experiments
 
 
 def main():
@@ -96,7 +95,7 @@ def main():
     cluster_spec = tf.train.ClusterSpec(cluster)
     device = ('/job:ps' if args.task_index == -1 else '/job:worker/task:{}'.format(args.task_index))
 
-    c = experiments.confs[args.experiment]
+    c = agent_conf.confs[args.experiment]
     c['conf'].update(
         distributed=True,
         cluster_spec=cluster_spec,
@@ -108,7 +107,7 @@ def main():
         tf_summary_level=0,
         preprocessing=None,
     )
-    conf = agent_conf.conf(c['conf'], 'PPOAgent', c['name'], env_args=dict(is_main=args.task_index == 0))
+    conf = agent_conf.conf(c['conf'], c['name'], env_args=dict(is_main=args.task_index == 0))
 
     logger = logging.getLogger(__name__)
     logger.setLevel(log_levels[conf['conf'].log_level])

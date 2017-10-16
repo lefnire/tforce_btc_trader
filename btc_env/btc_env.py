@@ -14,6 +14,8 @@ from tensorforce.contrib.openai_gym import OpenAIGym
 from tensorforce import util, TensorForceError
 from tensorforce.environments import Environment
 
+ALLOW_SEED = False
+
 import data
 from data import conn
 
@@ -35,27 +37,30 @@ class BitcoinEnv(gym.Env):
     # Calling gym.make(ID) doesn't allow passing in params, so we make then initialize separately
     # def __init__(self):
 
-    def init(self, gym_env, steps=2048*5+5, agent_name='A3C|main', scale_features=False,
-             indicators=False, start_cap=1e3, is_main=True, log_states=False):
+    def init(self, gym_env, steps=2048*3+3, name='DQNAgent|main', scale=False, indicators=False, is_main=True,
+             log_states=False, conv2d=False, diff='percent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.gym_env = gym_env
         self.steps = steps
-        self.agent_name = agent_name
-        self.scale_features = scale_features
+        self.agent_name = name
+        self.scale_features = scale
         self.indicators = indicators
-        self.start_cap = start_cap
+        self.start_cap = 1e3
         self.is_main = is_main
         self.log_states = log_states
+        self.conv2d = conv2d
+        self.diff = diff
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
-        if re.search('(DQN|PPO|A3C)', agent_name):
+        if re.search('(DQN|PPO|A3C)', name):
             gym_env.action_space = spaces.Discrete(5)
         else:
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
-        gym_env.observation_space = spaces.Box(*min_max_scaled) if scale_features else\
+        default_min_max = 1 if diff == 'percent' else 1
+        gym_env.observation_space = spaces.Box(*min_max_scaled) if scale else\
             spaces.Box(*min_max) if min_max else\
-            spaces.Box(low=-1, high=1, shape=(self.num_features(),))
-        if scale_features: print('using min_max', min_max_scaled)
+            spaces.Box(low=-default_min_max, high=default_min_max, shape=(self.num_features(),))
+        if scale: print('using min_max', min_max_scaled)
         elif min_max: print('using min_max', min_max)
         
         # self._seed()
@@ -65,12 +70,13 @@ class BitcoinEnv(gym.Env):
             self.signals_placeholder = tf.placeholder(tf.float16, shape=(None,))
             tf.summary.histogram('buy_sell_signals', self.signals_placeholder, collections=['btc_env'])
             self.merged_summaries = tf.summary.merge_all('btc_env')
-            data.wipe_rows(agent_name)
+            data.wipe_rows(name)
 
     def __str__(self): return 'BitcoinEnv'
     def _close(self): pass
     def _render(self, mode='human', close=False): pass
     def _seed(self, seed=None):
+        if not ALLOW_SEED: return
         # self.np_random, seed = seeding.np_random(seed)
         # return [seed]
         random.seed(seed)
@@ -85,14 +91,13 @@ class BitcoinEnv(gym.Env):
         num += 2  # [self.cash, self.value]
         return num
 
-    @staticmethod
-    def _pct_change(arr):
+    def _pct_change(self, arr):
         return pd.Series(arr).pct_change()\
             .replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
 
-    @staticmethod
-    def _diff(arr):
-        return BitcoinEnv._pct_change(arr)
+    def _diff(self, arr):
+        if self.diff == 'percent':
+            return self._pct_change(arr)
         return pd.Series(arr).diff()\
             .replace([np.inf, -np.inf], np.nan).ffill()\
             .fillna(0).values
@@ -258,9 +263,7 @@ class BitcoinEnv(gym.Env):
 class BitcoinEnvTforce(OpenAIGym):
     def __init__(self, **kwargs):
         super(BitcoinEnvTforce, self).__init__('BTC-v0')
-        if 'Nstep' not in kwargs['agent_name']:
-            print('seeding')
-            self.gym.env.seed(1234)
+        if ALLOW_SEED: self.gym.env.seed(1234)
         self.gym.env.init(self.gym, **kwargs)
 
 

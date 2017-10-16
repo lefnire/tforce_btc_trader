@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorforce.agents import agents as AgentsDictionary
 from tensorforce.execution import ThreadedRunner
 
-import experiments, agent_conf
+import agent_conf
 
 WORKERS = 7
 
@@ -14,13 +14,13 @@ def main():
     args = parser.parse_args()
 
     # exp = experiments.confs[args.experiment]
-    for exp in experiments.confs[0:]:
+    for exp in agent_conf.confs[0:]:
         exp['conf'].update(tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.41)))
 
         main_agent = None
         agents, envs = [], []
         for i in range(WORKERS):
-            setup = agent_conf.conf(exp['conf'], experiments.AGENT_TYPE, exp['name'], env_args=dict(is_main=i == 0), no_agent=True)
+            setup = agent_conf.conf(exp['conf'], exp['name'], env_args=dict(is_main=i == 0), no_agent=True)
             conf = setup['conf']
             env = setup['env']
             # optionally overwrite epsilon final values
@@ -35,10 +35,11 @@ def main():
 
             if i == 0:
                 # let the first agent create the model, then create agents with a shared model
-                main_agent = agent = AgentsDictionary[experiments.AGENT_TYPE](config=conf)
+                main_agent = agent = AgentsDictionary[agent_conf.AGENT_TYPE](config=conf)
+                print(setup['name'])
             else:
                 conf.default(dict(states=envs[0].states, actions=envs[0].actions))
-                agent = AgentsDictionary[experiments.AGENT_TYPE](config=conf, model=main_agent.model)
+                agent = AgentsDictionary[agent_conf.AGENT_TYPE](config=conf, model=main_agent.model)
             agents.append(agent)
             envs.append(env)
 
