@@ -40,16 +40,30 @@ def network(layers, a='elu', d=None, l2=.001, l1=.005):
 
 
 nets = {
-    '1x': [('L',64), ('L',64), ('d',64)],
-    '2x': [('L',128), ('L',128), ('d',64)],
-    '3x': [('L',256), ('L',256), ('d',192), ('d',128)],
-    '4x': [('d',128), ('L',256), ('L',256), ('d',192), ('d',128)],
+    '8x': [('d',256), ('L',640), ('L',640), ('L',512), ('d',256), ('d',128)],
+    # Switch-back style looking at high/low architectures
+    '9x': [('d',256), ('L',768), ('L',768), ('L',768), ('d',512), ('d',256), ('d',128)],
     '5x': [('L',512), ('L',512), ('d',256), ('d',128)],
+
+    '12x': [('d',128), ('d',256), ('d',512), ('L',1024), ('L',1024), ('L',1024), ('L',1024), ('d',512), ('d',256), ('d',128)],
+    '2x': [('L',128), ('L',128), ('d',64)],
+
+    '11x': [('d',256), ('d',512), ('L',868), ('L',868), ('L',868), ('L',868), ('d',512), ('d',256), ('d',128)],
+    '3x': [('L',256), ('L',256), ('d',192), ('d',128)],
+
+    '10x': [('d',256), ('d',512), ('L',868), ('L',868), ('L',868), ('d',512), ('d',256), ('d',128)],
+    '4x': [('d',128), ('L',256), ('L',256), ('d',192), ('d',128)],
+
     '6x': [('d',192), ('L',512), ('L',512), ('d',256), ('d',128)],
+    '7x': [('d',256), ('L',640), ('L',640), ('d',256), ('d',128)],
+    # '1x': [('L',64), ('L',64), ('d',64)],
 }
 net_default = nets['3x']
-del nets['3x']
-network_experiments = dict(k='network', v=[{'k': k, 'v': {'network': v}} for k, v in nets.items()])
+# del nets['3x']
+network_experiments = dict(k='network', v=[
+    dict(k=k, v=dict(network=network(v)))
+    for k, v in nets.items()
+])
 dropout_experiments = dict(k='dropout', v=[
     dict(k='.2', v=dict(network=network(net_default, d=.2))),
     dict(k='.5', v=dict(network=network(net_default, d=.5))),
@@ -63,38 +77,57 @@ main_experiment = dict(k='main', v=[dict(k='-', v=dict())])
 
 if AGENT_TYPE in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
     confs = [
-        main_experiment,
+        # main_experiment,
+        dict(k='network', v=[
+            dict(k=k+'lr3', v=dict(network=network(v, a='selu', d=.5)))
+            for k, v in nets.items()
+        ]),
+        # dict(k='learning_rate', v=[
+        #     dict(k='1e-3', v=dict(learning_rate=1e-3)),
+        #     dict(k='1e-5', v=dict(learning_rate=1e-5)),
+        # ]),
+        dict(k='dropout', v=[
+            dict(k='None', v=dict(network=network(nets['9x'], a='selu', d=None))),
+            dict(k='.2', v=dict(network=network(nets['9x'], a='selu', d=.2))),
+        ]),
         dict(k='epochs', v=[
-            dict(k='1', v=dict(epochs=1)),
+            # dict(k='10', v=dict(epochs=10)),
             dict(k='5', v=dict(epochs=5)),  # >5 bad
+            dict(k='1', v=dict(epochs=1)),
         ]),
         dict(k='discount', v=[
-            dict(k='.95', v=dict(discount=.95)),
             dict(k='.99', v=dict(discount=.99)),
-        ]),
-        dropout_experiments,
-        network_experiments,
-        activation_experiments,
-        dict(k='learning_rate', v=[
-            dict(k='1e-7', v=dict(learning_rate=1e-7)),
-            dict(k='1e-5', v=dict(learning_rate=1e-5)),
+            dict(k='.95', v=dict(discount=.95)),
         ]),
         dict(k='batch', v=[
             dict(k='b2048.o1024', v=dict(batch_size=2048, optimizer_batch_size=1024)),
             dict(k='b1024.o128', v=dict(batch_size=1024, optimizer_batch_size=128)),
         ]),
-        dict(k='keep_last', v=[
-            dict(k='False', v=dict(keep_last=False)),
-        ]),
-        dict(k='random_sampling', v=[
-            dict(k='False', v=dict(random_sampling=False)),
-        ]),
-        dict(k='gae_rewards', v=[
-            dict(k='True', v=dict(gae_rewards=True)),  # winner=False
-        ]),
-        dict(k='optimizer', v=[
-            dict(k='adam', v=dict(optimizer='adam')),
-        ]),
+        dict(k='activation', v=[
+            dict(k='tanh', v=dict(network=network(nets['9x'], d=.5, a='tanh'))),
+            dict(k='elu', v=dict(network=network(nets['9x'], d=.5, a='elu'))),
+            dict(k='relu', v=dict(network=network(nets['9x'], d=.5, a='relu')))
+        ])
+        # activation_experiments,
+        # dropout_experiments,  # 2
+        # dict(k='network', v=[
+        #     dict(k=k, v=dict(network=network(v, a='selu')))
+        #     for k, v in nets.items()
+        # ]),
+        # dict(k='keep_last', v=[
+        #     dict(k='False', v=dict(keep_last=False)),
+        # ]),
+        # dict(k='random_sampling', v=[
+        #     dict(k='False', v=dict(random_sampling=False)),
+        # ]),
+        # dict(k='gae_rewards', v=[
+        #     dict(k='True', v=dict(gae_rewards=True)),  # winner=False
+        # ]),
+        # dict(k='optimizer', v=[
+        #     dict(k='adam', v=dict(optimizer='adam')),
+        # ]),
+
+        ## Foregoing baselines for now
         # dict(k='baseline', v=[
         #     dict(k='2x64', v=baseline(sizes=[64, 64])),
         #     dict(k='2x256', v=baseline(sizes=[256, 256])),
@@ -299,10 +332,14 @@ def conf(overrides, name='main', env_args={}, no_agent=False):
             batch_size=4096,  # batch_size must be > optimizer_batch_size
             optimizer_batch_size=2048,
             normalize_rewards=True,  # definite winner=True
-            epochs=3,
-            learning_rate=1e-6,  # -8 usually works better
             discount=.97,
-            network=network(net_default, a='selu')
+        #     epochs=3,
+        #     learning_rate=1e-6,  # -8 usually works better
+        #     network=network(net_default, a='selu')
+        # )
+            epochs=7,
+            learning_rate=1e-4,
+            network=network(nets['9x'], a='selu', d=.5)
         )
     elif agent_class == agents.NAFAgent:
         conf.update(
