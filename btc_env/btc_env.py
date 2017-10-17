@@ -13,6 +13,7 @@ import tensorflow as tf
 from tensorforce.contrib.openai_gym import OpenAIGym
 from tensorforce import util, TensorForceError
 from tensorforce.environments import Environment
+import pdb
 
 ALLOW_SEED = False
 
@@ -46,22 +47,34 @@ class BitcoinEnv(gym.Env):
         self.scale_features = scale
         self.indicators = indicators
         self.start_cap = 1e3
+        self.window = 150
         self.is_main = is_main
         self.log_states = log_states
         self.conv2d = conv2d
         self.diff = diff
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
+        # Action space
         if re.search('(DQN|PPO|A3C)', name):
             gym_env.action_space = spaces.Discrete(5)
         else:
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
+
+        # Observation space
         default_min_max = 1 if diff == 'percent' else 1
-        gym_env.observation_space = spaces.Box(*min_max_scaled) if scale else\
-            spaces.Box(*min_max) if min_max else\
-            spaces.Box(low=-default_min_max, high=default_min_max, shape=(self.num_features(),))
-        if scale: print('using min_max', min_max_scaled)
-        elif min_max: print('using min_max', min_max)
+        if conv2d:
+            obs_shape = (
+                self.window,  # width is window width (150 time-steps)
+                9, # self.num_features() // len(data.tables) # height = num_features, but one layer for each table
+                len(data.tables)  # channels is number of tables (each table is a "layer" of features
+            )
+            gym_env.observation_space = spaces.Box(-default_min_max, default_min_max, shape=obs_shape)
+        else:
+            gym_env.observation_space = spaces.Box(*min_max_scaled) if scale else\
+                spaces.Box(*min_max) if min_max else\
+                spaces.Box(low=-default_min_max, high=default_min_max, shape=(self.num_features(),))
+            if scale: print('using min_max', min_max_scaled)
+            elif min_max: print('using min_max', min_max)
         
         # self._seed()
         if is_main:
@@ -140,7 +153,7 @@ class BitcoinEnv(gym.Env):
     def _reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
-        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
         self.total_reward = 0
@@ -151,9 +164,18 @@ class BitcoinEnv(gym.Env):
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self._pct_change(self.prices)
 
-        first_state = np.append(self.observations[start_timestep], [0., 0.])
-        if self.scale_features:
-            first_state = scaler.transform([first_state])[0]
+        if self.conv2d:
+            window = self.observations[self.timestep - self.window:self.timestep]
+            # TODO adapt to more than 2 tables
+            # for now add cash/value to each channel - figure out later
+            first_state = np.transpose([
+                np.hstack([window[:, 0:7], np.tile([0.,0.], (150, 1))]),
+                np.hstack([window[:, 7:], np.tile([0., 0.], (150, 1))]),
+            ], (1,2,0))
+        else:
+            first_state = np.append(self.observations[start_timestep], [0., 0.])
+            if self.scale_features:
+                first_state = scaler.transform([first_state])[0]
         return first_state
 
     def _step(self, action):
@@ -194,10 +216,17 @@ class BitcoinEnv(gym.Env):
         reward = total - before['total']  # Relative reward (seems to work better)
 
         self.timestep += 1
-        next_state = np.append(self.observations[self.timestep], [
-            self.cash/self.start_cap,  # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
-            self.value/self.start_cap  # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
-        ])
+        # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
+        # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
+        cash_scaled, val_scaled = self.cash / self.start_cap,  self.value / self.start_cap
+        if self.conv2d:
+            window = self.observations[self.timestep - self.window:self.timestep]
+            next_state = np.transpose([
+                np.hstack([window[:, 0:7], np.tile([cash_scaled, val_scaled], (150, 1))]),
+                np.hstack([window[:, 7:], np.tile([cash_scaled, val_scaled], (150, 1))]),
+            ], (1,2,0))
+        else:
+            next_state = np.append(self.observations[self.timestep], [cash_scaled, val_scaled])
 
         # If we need to record a few thousand observations for use in scaling or determining min/max vals (turn off after)
         if self.log_states:
