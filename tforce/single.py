@@ -3,10 +3,10 @@ from tensorforce.execution import Runner
 import agent_conf, data
 from agent_conf import confs, AGENT_TYPE
 
-for conf in confs:
+for conf in confs[0:]:
     conf['conf'].update(
         tf_session_config=tf.ConfigProto(
-            gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.41)
+            gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)
         ),
     )
     conf = agent_conf.conf(
@@ -16,5 +16,5 @@ for conf in confs:
     )
     print(conf['name'])
     runner = Runner(agent=conf['agent'], environment=conf['env'])
-    runner.run(episodes=300)
+    runner.run()
     print(conf['name'], 'done')

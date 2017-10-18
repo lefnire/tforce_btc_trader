@@ -55,7 +55,7 @@ class BitcoinEnv(gym.Env):
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
         # Action space
-        if re.search('(DQN|PPO|A3C)', name):
+        if re.search('(dqn|ppo|a3c)', name, re.IGNORECASE):
             gym_env.action_space = spaces.Discrete(5)
         else:
             gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
@@ -63,15 +63,12 @@ class BitcoinEnv(gym.Env):
         # Observation space
         default_min_max = 1 if diff == 'percent' else 1
         if conv2d:
-            # obs_shape = (
-            #     self.window,  # width is window width (150 time-steps)
-            #     7, # self.num_features() // len(data.tables) # height = num_features, but one layer for each table
-            #     len(data.tables)  # channels is number of tables (each table is a "layer" of features
-            # )
-            # gym_env.observation_space = spaces.Box(-default_min_max, default_min_max, shape=obs_shape)
+            # width = window width (150 time-steps)
+            # height = num_features, but one layer for each table
+            # channels is number of tables (each table is a "layer" of features
             gym_env.observation_space = spaces.Tuple((
-                spaces.Box(-1, 1, shape=(150,7,2)),
-                spaces.Box(-1, 1, shape=(2,))
+                spaces.Box(-1, 1, shape=(150,7,2)),  # "image"
+                spaces.Box(-1, 1, shape=(2,))  # money
             ))
         else:
             gym_env.observation_space = spaces.Box(*min_max_scaled) if scale else\
@@ -158,10 +155,11 @@ class BitcoinEnv(gym.Env):
     def _reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
+        self.cash_true = self.value_true = self.start_cap
         start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
-        self.total_reward = 0
+        self.total_reward = self.total_reward_true = 0
 
         # Fetch random slice of rows from the database (based on limit)
         offset = random.randint(0, data.count_rows() - self.steps)
@@ -184,26 +182,26 @@ class BitcoinEnv(gym.Env):
 
     def _step(self, action):
         if type(self.gym_env.action_space) == spaces.Discrete:
-            if type(action) == list:
-                # A3C in softmax-mode
-                action = np.argmax(action)
-            signal = {
+            if type(action) != list: action = [action, action]
+            signals = {
                 0: -40,
                 1: 0,
                 2: 1,
                 3: 5,
                 4: 20
-            }[int(action)]
+            }
+            signal = signals[int(action[0])]
+            signal_true = signals[int(action[1])]
         else:
             signal = action[0]
             # gdax requires a minimum .01BTC (~$40) sale. As we're learning a probability distribution, don't separate
             # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
             if signal < 0: signal -= 40
-        self.signals.append(signal)
+        self.signals.append(signal_true)
 
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
         abs_sig = abs(signal)
-        before = dict(cash=self.cash, value=self.value, total=self.cash+self.value)
+        before = self.cash + self.value
         if signal > 0:
             if self.cash >= abs_sig:
                 self.value += abs_sig - abs_sig*fee
@@ -213,12 +211,26 @@ class BitcoinEnv(gym.Env):
                 self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
+        before_true = self.cash_true + self.value_true
+        abs_sig_true = abs(signal_true)
+        if signal_true > 0:
+            if self.cash_true >= abs_sig_true:
+                self.value_true += abs_sig_true - abs_sig_true*fee
+            self.cash_true -= abs_sig_true
+        elif signal_true < 0:
+            if self.value_true >= abs_sig_true:
+                self.cash_true += abs_sig_true - abs_sig_true*fee
+            self.value_true -= abs_sig_true
+
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         diff_loc = self.timestep if self.conv2d else self.timestep + 1
         pct_change = self.prices_diff[diff_loc]
         self.value += pct_change * self.value
+        self.value_true += pct_change * self.value_true
         total = self.value + self.cash
-        reward = total - before['total']  # Relative reward (seems to work better)
+        total_true = self.value_true + self.cash_true
+        reward = total - before  # Relative reward (seems to work better)
+        reward_true = total_true - before_true
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -244,13 +256,14 @@ class BitcoinEnv(gym.Env):
             next_state = scaler.transform([next_state])[0]
 
         self.total_reward += reward
+        self.total_reward_true += reward_true
 
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
             self.episode_results['cash'].append(self.cash)
             self.episode_results['values'].append(self.value)
-            self.episode_results['rewards'].append(self.total_reward)
+            self.episode_results['rewards'].append(self.total_reward_true)
             self.time = round(time.time() - self.time)
             if self.is_main:
                 self.write_results()
@@ -260,12 +273,13 @@ class BitcoinEnv(gym.Env):
     def write_results(self):
         res = self.episode_results
         episode = len(res['cash'])
-        reward, cash, value = float(self.total_reward), float(self.cash), float(self.value)
+        reward, cash, value = float(self.total_reward_true), float(self.cash), float(self.value)
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)
 
         scalar = tf.Summary()
         scalar.value.add(tag='perf/time', simple_value=self.time)
+        scalar.value.add(tag='perf/reward_eps', simple_value=float(self.total_reward))
         scalar.value.add(tag='perf/reward', simple_value=reward)
         scalar.value.add(tag='perf/reward50avg', simple_value=np.mean(res['rewards'][-50:]))
         self.summary_writer.add_summary(scalar, episode)
