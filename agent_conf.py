@@ -1,5 +1,6 @@
+import tensorflow as tf
 from tensorforce import Configuration, TensorForceError, agents, models
-from tensorforce.core.networks import layered_network_builder
+from tensorforce.core.networks import layered_network_builder, layers as tforce_layers
 
 from btc_env.btc_env import BitcoinEnvTforce
 
@@ -19,10 +20,15 @@ def baseline(**kwargs):
     return b
 
 
-def network(layers, a='elu', d=None, l2=.001, l1=.005):
+def network(layers, a='elu', d=None, l2=.00001, l1=.00005, b=False):
     arr = []
     if d: arr.append(dict(type='dropout', dropout=d))
-    for type, size in layers:
+    for l in layers:
+        conv_args = {}
+        type = l[0]
+        if len(l)>1: size = l[1]
+        if len(l)>2: conv_args['window'] = l[2]
+        if len(l)>3: conv_args['stride'] = l[3]
         if type == 'D':
             arr.append(dict(type='dense2', size=size, dropout=d, activation=a))
         elif type == 'd':
@@ -36,106 +42,116 @@ def network(layers, a='elu', d=None, l2=.001, l1=.005):
             if d: arr.append(dict(type='dropout', dropout=d))
         elif type == 'L':
             arr.append(dict(type='lstm', size=size, dropout=d))
+        elif type == 'C':
+            arr.append(dict(type='conv2d', size=size, bias=b, **conv_args))
+        elif type == 'F':
+            arr.append(dict(type='flatten'))
     return arr
 
 
+def custom_net(layers, **kwargs2):
+    layers = network(layers, **kwargs2)
+    def network_builder(inputs, **kwargs):
+        image = inputs['state0']  # 150x9x2-dim, float
+        money = inputs['state1']  # 1x2-dim, float
+
+        x = image
+        i = 0
+        with tf.variable_scope('cnn'):
+            while layers[i]['type'] == 'conv2d':
+                layer = dict(bias=True, l2_regularization=.00001)  # defaults
+                layer.update(kwargs)
+                layer.update(layers[i])
+                size, type = layer.pop('size'), layer.pop('type')
+                x = tforce_layers[type](x, size, scope=f'cnn{i}', **layer)
+                i += 1
+
+            x = tforce_layers['flatten'](x)
+
+        with tf.variable_scope('dense'):
+            x = tf.concat([x, money], axis=1)  # TODO explore which dense layer ot put this (esp last)
+            while i < len(layers):
+                layer = dict(l2_regularization=.00001, l1_regularization=.00005)  # defaults
+                layer.update(kwargs)
+                layer.update(layers[i])
+                size, type = layer.pop('size'), layer.pop('type')
+                x = tforce_layers[type](x, size, scope=f'dense{i}', **layer)
+                i += 1
+
+        return x
+    return network_builder
+
 nets = {
-    '8x': [('d',256), ('L',640), ('L',640), ('L',512), ('d',256), ('d',128)],
-    # Switch-back style looking at high/low architectures
-    '9x': [('d',256), ('L',768), ('L',768), ('L',768), ('d',512), ('d',256), ('d',128)],
-    '5x': [('L',512), ('L',512), ('d',256), ('d',128)],
-
-    '12x': [('d',128), ('d',256), ('d',512), ('L',1024), ('L',1024), ('L',1024), ('L',1024), ('d',512), ('d',256), ('d',128)],
-    '2x': [('L',128), ('L',128), ('d',64)],
-
-    '11x': [('d',256), ('d',512), ('L',868), ('L',868), ('L',868), ('L',868), ('d',512), ('d',256), ('d',128)],
-    '3x': [('L',256), ('L',256), ('d',192), ('d',128)],
-
-    '10x': [('d',256), ('d',512), ('L',868), ('L',868), ('L',868), ('d',512), ('d',256), ('d',128)],
-    '4x': [('d',128), ('L',256), ('L',256), ('d',192), ('d',128)],
-
-    '6x': [('d',192), ('L',512), ('L',512), ('d',256), ('d',128)],
-    '7x': [('d',256), ('L',640), ('L',640), ('d',256), ('d',128)],
-    # '1x': [('L',64), ('L',64), ('d',64)],
+    '3x': [('C',32,8,4), ('C',64,4,2), ('C',64,3,1), ('d',512), ('d',256), ('d',128)],
+    '2x': [('C',32,8,4), ('C',64,4,2), ('C',64,3,1), ('d',512), ('d',256)],
+    '1x': [('C',32), ('C',64), ('d',256)],
 }
 net_default = nets['3x']
-# del nets['3x']
+del nets['3x']
 network_experiments = dict(k='network', v=[
-    dict(k=k, v=dict(network=network(v)))
+    dict(k=k, v=dict(network=custom_net(v)))
     for k, v in nets.items()
 ])
 dropout_experiments = dict(k='dropout', v=[
-    dict(k='.2', v=dict(network=network(net_default, d=.2))),
-    dict(k='.5', v=dict(network=network(net_default, d=.5))),
+    dict(k='.2', v=dict(network=custom_net(net_default, d=.2))),
+    dict(k='.5', v=dict(network=custom_net(net_default, d=.5))),
 ])
 activation_experiments = dict(k='activation', v=[
-    dict(k='tanh', v=dict(network=network(net_default, a='tanh'))),
-    dict(k='selu', v=dict(network=network(net_default, a='selu'))),
-    dict(k='relu', v=dict(network=network(net_default, a='relu')))
+    dict(k='tanh', v=dict(network=custom_net(net_default, a='tanh'))),
+    dict(k='selu', v=dict(network=custom_net(net_default, a='selu'))),
+    dict(k='relu', v=dict(network=custom_net(net_default, a='relu')))
 ])
 main_experiment = dict(k='main', v=[dict(k='-', v=dict())])
 
+
 if AGENT_TYPE in ['PPOAgent', 'VPGAgent', 'TRPOAgent']:
     confs = [
-        # main_experiment,
-        dict(k='network', v=[
-            dict(k=k+'lr3', v=dict(network=network(v, a='selu', d=.5)))
-            for k, v in nets.items()
-        ]),
-        # dict(k='learning_rate', v=[
-        #     dict(k='1e-3', v=dict(learning_rate=1e-3)),
-        #     dict(k='1e-5', v=dict(learning_rate=1e-5)),
-        # ]),
-        dict(k='dropout', v=[
-            dict(k='None', v=dict(network=network(nets['9x'], a='selu', d=None))),
-            dict(k='.2', v=dict(network=network(nets['9x'], a='selu', d=.2))),
-        ]),
-        dict(k='epochs', v=[
-            # dict(k='10', v=dict(epochs=10)),
-            dict(k='5', v=dict(epochs=5)),  # >5 bad
-            dict(k='1', v=dict(epochs=1)),
+        main_experiment,
+        dict(k='bias', v=[
+            dict(k='True', v=dict(network=custom_net(net_default, b=True)))
         ]),
         dict(k='discount', v=[
             dict(k='.99', v=dict(discount=.99)),
             dict(k='.95', v=dict(discount=.95)),
         ]),
+        dict(k='regularization', v=[
+           dict(k='l2.001l1.005', v=dict(network=custom_net(net_default, l2=.001, l1=.005))),
+           dict(k='l2.00001l10', v=dict(network=custom_net(net_default, l2=.00001, l1=0.))),
+        ]),
+        activation_experiments,
+        dict(k='learning_rate', v=[
+            dict(k='1e-6', v=dict(learning_rate=1e-6)),  # 5-min
+        ]),
+        dict(k='keep_last', v=[
+            dict(k='True', v=dict(keep_last=True)),
+        ]),
+        dict(k='epochs', v=[
+            # dict(k='10', v=dict(epochs=10)),
+            dict(k='5', v=dict(epochs=5)),
+            dict(k='1', v=dict(epochs=1)),
+        ]),
+        network_experiments,
+        # dropout_experiments,
+        # ----------
         dict(k='batch', v=[
             dict(k='b2048.o1024', v=dict(batch_size=2048, optimizer_batch_size=1024)),
             dict(k='b1024.o128', v=dict(batch_size=1024, optimizer_batch_size=128)),
         ]),
-        dict(k='activation', v=[
-            dict(k='tanh', v=dict(network=network(nets['9x'], d=.5, a='tanh'))),
-            dict(k='elu', v=dict(network=network(nets['9x'], d=.5, a='elu'))),
-            dict(k='relu', v=dict(network=network(nets['9x'], d=.5, a='relu')))
-        ])
-        # activation_experiments,
-        # dropout_experiments,  # 2
-        # dict(k='network', v=[
-        #     dict(k=k, v=dict(network=network(v, a='selu')))
-        #     for k, v in nets.items()
-        # ]),
-        # dict(k='keep_last', v=[
-        #     dict(k='False', v=dict(keep_last=False)),
-        # ]),
-        # dict(k='random_sampling', v=[
-        #     dict(k='False', v=dict(random_sampling=False)),
-        # ]),
-        # dict(k='gae_rewards', v=[
-        #     dict(k='True', v=dict(gae_rewards=True)),  # winner=False
-        # ]),
-        # dict(k='optimizer', v=[
-        #     dict(k='adam', v=dict(optimizer='adam')),
-        # ]),
-
-        ## Foregoing baselines for now
-        # dict(k='baseline', v=[
-        #     dict(k='2x64', v=baseline(sizes=[64, 64])),
-        #     dict(k='2x256', v=baseline(sizes=[256, 256])),
-        #     dict(k='epochs5', v=baseline(epochs=5)),
-        #     dict(k='update_batch_size128', v=baseline(update_batch_size=128)),
-        #     dict(k='update_batch_size1024', v=baseline(update_batch_size=1024)),
-        #     dict(k='learning_rate.1e-6', v=baseline(learning_rate=1e-6)),
-        # ]),
+        dict(k='gae_rewards', v=[
+            dict(k='True', v=dict(gae_rewards=True)),  # winner=False
+        ]),
+        dict(k='optimizer', v=[
+            dict(k='adam', v=dict(optimizer='adam')),  # winner=Nadam
+        ]),
+        # Foregoing baselines for now
+        dict(k='baseline', v=[
+            dict(k='2x64', v=baseline(sizes=[64, 64])),
+            dict(k='2x256', v=baseline(sizes=[256, 256])),
+            dict(k='epochs5', v=baseline(epochs=5)),
+            dict(k='update_batch_size128', v=baseline(update_batch_size=128)),
+            dict(k='update_batch_size1024', v=baseline(update_batch_size=1024)),
+            dict(k='learning_rate.1e-6', v=baseline(learning_rate=1e-6)),
+        ]),
     ]
 
 elif AGENT_TYPE in ['NAFAgent']:
@@ -292,14 +308,14 @@ confs = [
 
 
 def conf(overrides, name='main', env_args={}, no_agent=False):
-    name = AGENT_TYPE + '|' + name
+    name = AGENT_TYPE + '_conv|' + name
     agent_class = agents.agents[AGENT_TYPE]
 
     if 'env_args' in overrides:
         env_args.update(overrides['env_args'])
         del overrides['env_args']
 
-    env = BitcoinEnvTforce(steps=STEPS, name=name, **env_args)
+    env = BitcoinEnvTforce(steps=STEPS, name=name, conv2d=True, **env_args)
 
     conf = dict(
         tf_session_config=None,
@@ -307,8 +323,13 @@ def conf(overrides, name='main', env_args={}, no_agent=False):
         # tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
         log_level="info",
         tf_saver=False,
-        tf_summary=None,
-        tf_summary_level=0,
+        # tf_saver="saves",
+
+        # tf_summary=None,
+        # tf_summary_level=0,
+        tf_summary=f"saves/boards/tforce/{name}",
+        tf_summary_level=3,
+        tf_summary_interval=5,
 
         network=network(net_default),
         keep_last=True,
@@ -333,13 +354,10 @@ def conf(overrides, name='main', env_args={}, no_agent=False):
             optimizer_batch_size=2048,
             normalize_rewards=True,  # definite winner=True
             discount=.97,
-        #     epochs=3,
-        #     learning_rate=1e-6,  # -8 usually works better
-        #     network=network(net_default, a='selu')
-        # )
-            epochs=7,
-            learning_rate=1e-4,
-            network=network(nets['9x'], a='selu', d=.5)
+            epochs=10,
+            learning_rate=1e-5,  # -8 usually works better
+            keep_last=False,  # False seems winner for conv2d - try again
+            network=custom_net(net_default)
         )
     elif agent_class == agents.NAFAgent:
         conf.update(
@@ -372,7 +390,7 @@ def conf(overrides, name='main', env_args={}, no_agent=False):
 
 
     conf.update(overrides)
-    conf['network'] = layered_network_builder(conf['network'])
+    # conf['network'] = layered_network_builder(conf['network'])
     conf = Configuration(**conf)
 
     return dict(

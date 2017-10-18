@@ -7,6 +7,7 @@ from tensorforce.execution import ThreadedRunner
 import agent_conf
 
 WORKERS = 7
+# WORKERS = 4
 
 def main():
     parser = argparse.ArgumentParser()
@@ -14,8 +15,8 @@ def main():
     args = parser.parse_args()
 
     # exp = experiments.confs[args.experiment]
-    for exp in agent_conf.confs[0:]:
-        exp['conf'].update(tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.41)))
+    for exp in agent_conf.confs:
+        # exp['conf'].update(tf_session_config=tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.42)))
 
         main_agent = None
         agents, envs = [], []
@@ -27,10 +28,11 @@ def main():
             if "exploration" in conf and "epsilon" in conf.exploration.type:
                 # epsilon annealing is based on the global step so divide by the total workers
                 # conf.exploration.epsilon_timesteps = conf.exploration.epsilon_timesteps // WORKERS
+                conf.exploration.epsilon_timesteps = conf.exploration.epsilon_timesteps // 2
                 if i != 0:  # for the worker which logs, let it expire
                     # epsilon final values are [0.5, 0.1, 0.01] with probabilities [0.3, 0.4, 0.3]
                     # epsilon_final = np.random.choice([0.5, 0.1, 0.01], p=[0.3, 0.4, 0.3])
-                    epsilon_final = [.5, .1][i % 2]
+                    epsilon_final = [.4, .1][i % 2]
                     conf.exploration.epsilon_final = epsilon_final
 
             if i == 0:
@@ -46,7 +48,7 @@ def main():
         # When ready, look at original threaded_ale for save/load & summaries
         def summary_report(r): pass
         threaded_runner = ThreadedRunner(agents, envs)
-        threaded_runner.run(episodes=300*WORKERS, summary_interval=1000, summary_report=summary_report)
+        threaded_runner.run(episodes=250*WORKERS, summary_interval=1000, summary_report=summary_report)
         [e.close() for e in envs]
 
 

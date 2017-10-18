@@ -63,12 +63,16 @@ class BitcoinEnv(gym.Env):
         # Observation space
         default_min_max = 1 if diff == 'percent' else 1
         if conv2d:
-            obs_shape = (
-                self.window,  # width is window width (150 time-steps)
-                9, # self.num_features() // len(data.tables) # height = num_features, but one layer for each table
-                len(data.tables)  # channels is number of tables (each table is a "layer" of features
-            )
-            gym_env.observation_space = spaces.Box(-default_min_max, default_min_max, shape=obs_shape)
+            # obs_shape = (
+            #     self.window,  # width is window width (150 time-steps)
+            #     7, # self.num_features() // len(data.tables) # height = num_features, but one layer for each table
+            #     len(data.tables)  # channels is number of tables (each table is a "layer" of features
+            # )
+            # gym_env.observation_space = spaces.Box(-default_min_max, default_min_max, shape=obs_shape)
+            gym_env.observation_space = spaces.Tuple((
+                spaces.Box(-1, 1, shape=(150,7,2)),
+                spaces.Box(-1, 1, shape=(2,))
+            ))
         else:
             gym_env.observation_space = spaces.Box(*min_max_scaled) if scale else\
                 spaces.Box(*min_max) if min_max else\
@@ -84,6 +88,7 @@ class BitcoinEnv(gym.Env):
             tf.summary.histogram('buy_sell_signals', self.signals_placeholder, collections=['btc_env'])
             self.merged_summaries = tf.summary.merge_all('btc_env')
             data.wipe_rows(name)
+
 
     def __str__(self): return 'BitcoinEnv'
     def _close(self): pass
@@ -167,13 +172,12 @@ class BitcoinEnv(gym.Env):
         if self.conv2d:
             window = self.observations[self.timestep - self.window:self.timestep]
             # TODO adapt to more than 2 tables
-            # for now add cash/value to each channel - figure out later
-            first_state = np.transpose([
-                np.hstack([window[:, 0:7], np.tile([0.,0.], (150, 1))]),
-                np.hstack([window[:, 7:], np.tile([0., 0.], (150, 1))]),
-            ], (1,2,0))
+            first_state = dict(
+                state0=np.transpose([window[:, 0:7], window[:, 7:]], (1,2,0)),
+                state1=np.array([1., 1.])
+            )
         else:
-            first_state = np.append(self.observations[start_timestep], [0., 0.])
+            first_state = np.append(self.observations[start_timestep], [1., 1.])
             if self.scale_features:
                 first_state = scaler.transform([first_state])[0]
         return first_state
@@ -209,8 +213,9 @@ class BitcoinEnv(gym.Env):
                 self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
-
-        pct_change = self.prices_diff[self.timestep + 1]  # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        diff_loc = self.timestep if self.conv2d else self.timestep + 1
+        pct_change = self.prices_diff[diff_loc]
         self.value += pct_change * self.value
         total = self.value + self.cash
         reward = total - before['total']  # Relative reward (seems to work better)
@@ -221,10 +226,11 @@ class BitcoinEnv(gym.Env):
         cash_scaled, val_scaled = self.cash / self.start_cap,  self.value / self.start_cap
         if self.conv2d:
             window = self.observations[self.timestep - self.window:self.timestep]
-            next_state = np.transpose([
-                np.hstack([window[:, 0:7], np.tile([cash_scaled, val_scaled], (150, 1))]),
-                np.hstack([window[:, 7:], np.tile([cash_scaled, val_scaled], (150, 1))]),
-            ], (1,2,0))
+            next_state = dict(
+                state0=np.transpose([window[:, 0:7], window[:, 7:]], (1,2,0)),
+                state1=np.array([cash_scaled, val_scaled])
+            )
+
         else:
             next_state = np.append(self.observations[self.timestep], [cash_scaled, val_scaled])
 
