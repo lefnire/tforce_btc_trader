@@ -265,8 +265,7 @@ class BitcoinEnv(gym.Env):
             self.episode_results['values'].append(self.value)
             self.episode_results['rewards'].append(self.total_reward_true)
             self.time = round(time.time() - self.time)
-            if self.is_main:
-                self.write_results()
+            self.write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, reward, terminal, {}
 
@@ -276,6 +275,8 @@ class BitcoinEnv(gym.Env):
         reward, cash, value = float(self.total_reward_true), float(self.cash), float(self.value)
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tA:{common}(high={high},low={low})")
+        if not self.is_main: return
 
         scalar = tf.Summary()
         scalar.value.add(tag='perf/time', simple_value=self.time)
@@ -290,7 +291,6 @@ class BitcoinEnv(gym.Env):
             self.summary_writer.add_summary(histos, episode)
 
         self.summary_writer.flush()
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tA:{common}(high={high},low={low})")
         return
 
         # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
