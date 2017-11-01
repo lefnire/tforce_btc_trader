@@ -1,4 +1,4 @@
-from hypersearch import get_hypers, episode_finished, generate_and_save_hypers
+from hypersearch import get_hypers, run_finished, generate_and_save_hypers
 from tensorforce import Configuration, agents as agents_dict
 from tensorforce.execution import Runner
 
@@ -16,7 +16,5 @@ runner = Runner(
     agent=agent,
     environment=env
 )
-runner.run(
-    episodes=300,
-    episode_finished=episode_finished(flat)
-)
+runner.run(episodes=300)
+run_finished(env, flat)

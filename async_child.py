@@ -3,7 +3,7 @@ import tensorflow as tf
 from tensorforce.execution import Runner
 from tensorforce import Configuration, agents as agents_dict
 
-from hypersearch import get_hypers, episode_finished
+from hypersearch import get_hypers, run_finished
 
 
 if __name__ == '__main__':
@@ -54,8 +54,8 @@ if __name__ == '__main__':
     )
     runner.run(
         episodes=300 if args.mode == 'random' else None,
-        episode_finished=episode_finished(flat)
     )
+    run_finished(env, flat)
 
     # First to it kills the others
     from async import restart

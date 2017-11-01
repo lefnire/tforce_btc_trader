@@ -320,18 +320,11 @@ def generate_and_save_hypers(rand=True):
     conn.execute(text(sql), hypers=json.dumps(flat), flag=flag)
 
 
-def episode_finished(flat):
-    handle = {'id': None}  # hack because global run_id giving error
-    def ep_fin(r):
-        if not r.episode_rewards: return True
-        # Call every time, it'll overwrite w/ latest values
-        reward = np.mean(r.episode_rewards[-100:])
-        if handle['id'] is None:
-            # when done, save reward to database
-            sql = "insert into runs (hypers, reward) values (:hypers, :reward) returning id"
-            handle['id'] = conn.execute(text(sql), reward=reward, hypers=json.dumps(flat)).fetchone().id
-        else:
-            sql = "update runs set reward=:reward where id=:id"
-            conn.execute(text(sql), reward=reward, id=handle['id'])
-        return True
-    return ep_fin
+def run_finished(env, flat):
+    # when done, save reward to database
+    rewards = env.gym.env.episode_results['rewards']
+    print('rewards', rewards)
+    if len(rewards) < 150: return
+    reward = np.mean(rewards[-100:])
+    sql = "insert into runs (hypers, reward) values (:hypers, :reward)"
+    conn.execute(text(sql), reward=reward, hypers=json.dumps(flat))
