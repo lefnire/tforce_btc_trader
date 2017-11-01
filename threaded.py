@@ -5,7 +5,7 @@ from tensorforce import Configuration
 from tensorforce.agents import agents as agents_dict
 from tensorforce.execution import ThreadedRunner
 from tensorforce.execution.threaded_runner import WorkerAgent
-from hypersearch import get_hypers, run_finished, generate_and_save_hypers, env_from_flat
+from hypersearch import get_hypers, generate_and_save_hypers, create_env
 
 AGENT_K = 'ppo_agent'  # FIXME
 
@@ -26,7 +26,7 @@ def main():
         hydrated['tf_session_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_fraction))
 
     for i in range(args.workers):
-        envs.append(env_from_flat(flat))
+        envs.append(create_env(flat))
 
         conf = hydrated.copy()
         # optionally overwrite epsilon final values
@@ -69,7 +69,7 @@ def main():
         summary_report=summary_report
     )
     for e in envs:
-        run_finished(e, flat)
+        e.gym.env.run_finished()
         e.close()
     main_agent.model.close()
 

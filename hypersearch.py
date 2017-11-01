@@ -18,7 +18,6 @@ from data import conn
 
 # TODO make these part of the hyper search
 AGENT_K = 'ppo_agent'
-NET_TYPE = 'conv2d'
 
 def layers2net(layers, a, d, l2, l1=0., b=True):
     arr = []
@@ -148,12 +147,15 @@ batch_hypers = {
     'optimizer.type': ['nadam', 'adam'],
 
     # Special handling
+    'net_type': ['conv2d'],
+    'indicators': [False],
+    'scale': [False],
     'network': [4, 3, 2],
     'activation': ['elu', 'tanh', 'relu', 'selu'],
     'dropout': [.5, .2, None],
     'l2': [1e-5, 1e-4, 1e-3, 1e-2],
     'diff': ['percent', 'absolute'],
-    'steps': [2048*2+2, 2048*3+3],
+    'steps': [2048*3+3],
 }
 memory_hypers = {
     'memory_capacity': [50000, 1000000],  # STEPS*2
@@ -271,14 +273,14 @@ def get_hypers(from_db=False, rand=True, just_flat=False, overrides={}):
     hydrated = hydrated.to_dict()
 
     # Will be manually handling certain attributes (not passed to Config()). Pop those off so they don't get in the way
-    extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps']
+    extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps', 'net_type', 'indicators']
     extra = {k: hydrated.pop(k) for k in extra_keys}
 
 
-    net_spec = net_specs[NET_TYPE][extra['network']]
-    network = custom_net(net_spec, NET_TYPE, a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
+    net_spec = net_specs[extra['net_type']][extra['network']]
+    network = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
     if hydrated['baseline_mode']:
-        hydrated['baseline']['network_spec'] = custom_net(net_spec, NET_TYPE, a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
+        hydrated['baseline']['network_spec'] = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
 
     print('--- Flat ---')
     pprint(flat)
@@ -288,12 +290,9 @@ def get_hypers(from_db=False, rand=True, just_flat=False, overrides={}):
     return flat, hydrated, network
 
 
-def env_from_flat(flat):
+def create_env(flat):
     # name = f"{agent_k}_{hyper_k}_{hyper_v}"
-    name = AGENT_K
-    # TODO bundle hypers arg & unpack in env
-    return BitcoinEnvTforce(name=name, conv2d=True, is_main=False, diff=flat['diff'], steps=flat['steps'])
-
+    return BitcoinEnvTforce(name=AGENT_K, hypers=flat)
 
 
 def generate_and_save_hypers(rand=True):
@@ -318,13 +317,3 @@ def generate_and_save_hypers(rand=True):
     insert into runs (reward, hypers, flag) values (0, :hypers, :flag)
     """
     conn.execute(text(sql), hypers=json.dumps(flat), flag=flag)
-
-
-def run_finished(env, flat):
-    # when done, save reward to database
-    rewards = env.gym.env.episode_results['rewards']
-    print('rewards', rewards)
-    if len(rewards) < 150: return
-    reward = np.mean(rewards[-100:])
-    sql = "insert into runs (hypers, reward) values (:hypers, :reward)"
-    conn.execute(text(sql), reward=reward, hypers=json.dumps(flat))
