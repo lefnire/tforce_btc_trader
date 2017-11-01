@@ -23,6 +23,7 @@ celery_args = {
 }
 app = Celery('async_mq', **celery_args)
 
+# TODO generate random in database here `returning id`, pass id as arg to children
 
 @app.task
 def restart():

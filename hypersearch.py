@@ -4,9 +4,8 @@
   a. Then grab all from db, linear regression, cross-join attrs, predict, take attrs w/ max prediction
   b. set as new default params, print
 """
-import pdb, json
+import pdb, json, random
 from pprint import pprint
-from random import choice
 import numpy as np
 import tensorflow as tf
 from sqlalchemy.sql import text
@@ -18,6 +17,7 @@ from data import conn
 
 # TODO make these part of the hyper search
 AGENT_K = 'ppo_agent'
+
 
 def layers2net(layers, a, d, l2, l1=0., b=True):
     arr = []
@@ -151,7 +151,7 @@ batch_hypers = {
     'indicators': [False],
     'scale': [False],
     'network': [4, 3, 2],
-    'activation': ['elu', 'tanh', 'relu', 'selu'],
+    'activation': ['elu', 'relu', 'selu', 'tanh'],
     'dropout': [.5, .2, None],
     'l2': [1e-5, 1e-4, 1e-3, 1e-2],
     'diff': ['percent', 'absolute'],
@@ -169,7 +169,7 @@ memory_hypers = {
 hypers = {}
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **batch_hypers,
-    'gae_lambda': [None, .95, .97, .99],
+    'gae_lambda': [.99, .97, .95, None],
     'optimization_steps': [20, 5, 10],
     'baseline_optimizer.optimizer.learning_rate': [5e-5, 1e-5, 1e-6],
     'baseline_optimizer.num_steps': [20, 5, 10],
@@ -177,7 +177,7 @@ hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
 
     # I don't know what values to use besides the defaults, just guessing. Look into
     'entropy_regularization': [1e-2, 1e-1, 1e-3],
-    'likelihood_ratio_clipping': [.01, .2, .9],
+    'likelihood_ratio_clipping': [.2, .01, .9],
 
     # Special handling
     'baseline_mode': ['states', None],
@@ -206,6 +206,19 @@ hypers['naf_agent'] = {
     'clip_loss': [0., .5, 1.]  # TODO this still relevant?
     # TODO exploration (ornstein_uhlenbeck_no_params, epsilon_decay)
 }
+
+
+def ensure_table():
+    conn.execute("""
+        --create type if not exists run_flag as enum ('random', 'winner');
+        create table if not exists runs
+        (
+            id SERIAL,
+            hypers json not null,
+            reward double precision,
+            flag varchar(16) -- run_flag
+        );
+    """)
 
 
 class DotDict(object):
@@ -237,27 +250,24 @@ class DotDict(object):
         return self._data
 
 
-def get_hypers(from_db=False, rand=True, just_flat=False, overrides={}):
+def get_hypers():
+    ensure_table()
     # We'll return two versions of hypers. Flat (w/ dot-separated keys, for saving in db & computing w/ randomForest)
     # and hydrated (the real hypers to pass to the agent). Generate hydated from flat
-    flat = None
-    if from_db:
-        flag = 'random' if rand else 'winner'
-        flat = conn.execute(text('select hypers from runs where flag=:flag'), flag=flag).fetchone().hypers
+    ct = conn.execute('select count(*) as ct from runs').fetchone().ct
+    if ct > 20:  # give random hypers a shot for a while
+        flat = conn.execute('select * from runs where flag is null order by reward desc limit 1').fetchone()
+        print(f'Using conf.id={flat.id}, reward={flat.reward}')
+        flat = flat.hypers
     else:
-        if rand:
-            flat = hypers[AGENT_K].copy()
-            for k, v in flat.items():
-                flat[k] = choice(v)
-        else:
-            # TODO return winner from randomForest
-            pass
-
-    if flat['baseline_mode'] is None:
-        flat['gae_lambda'] = None
-        flat['baseline'] = None
-        flat['baseline_optimizer'] = None
-    if just_flat: return flat
+        # Priority-pick winning attrs. Remember to order attrs in hypers dict best-to-worst.
+        flat = {k: v[0] for k, v in hypers[AGENT_K].items()}
+        print('Using in-code flat')
+    # After electing current winning attrs, now random-permute them with some prob - like evolution.
+    # TODO use np.choice(p=[..]) to weight best-to-worst (left-to-right)
+    for k in list(flat):
+        if random.random() > .3:
+            flat[k] = random.choice(hypers[AGENT_K][k])
 
     hydrated = DotDict({
         # 'tf_session_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
@@ -267,15 +277,20 @@ def get_hypers(from_db=False, rand=True, just_flat=False, overrides={}):
         'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': 'nadam'}},
     })
 
-    # change all a.b=c to {a:{b:c}}
+    # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
     for k, v in flat.items():
         hydrated[k] = v
     hydrated = hydrated.to_dict()
 
+    if flat['baseline_mode'] is None:
+        flat['gae_lambda'] = hydrated['gae_lambda'] = None
+        # TODO need to do anything w/ flat['baseline*'], or will DecisionTree know to ignore when baseline_mode=None?
+        hydrated['baseline'] = None
+        hydrated['baseline_optimizer'] = None
+
     # Will be manually handling certain attributes (not passed to Config()). Pop those off so they don't get in the way
     extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps', 'net_type', 'indicators']
     extra = {k: hydrated.pop(k) for k in extra_keys}
-
 
     net_spec = net_specs[extra['net_type']][extra['network']]
     network = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
@@ -296,21 +311,9 @@ def create_env(flat):
 
 
 def generate_and_save_hypers(rand=True):
-    # Create table
-    sql = """
-    --create type if not exists run_flag as enum ('random', 'winner');
-    create table if not exists runs
-    (
-        id SERIAL,
-        hypers json not null,
-        reward double precision,
-        flag varchar(16) -- run_flag
-    );
-    """
-    conn.execute(sql)
-
-    # Insert row
-    flat = get_hypers(from_db=False, rand=rand, just_flat=True)
+    # Insert row. TODO deprecated. Change async to unify config by generating/fetching then passing .id as arg
+    # (maybe this fn will still be needed for that)
+    flat, _, _ = get_hypers(from_db=False, rand=rand)
     flag = 'random' if rand else 'winner'
     sql = """
     delete from runs where flag=:flag;

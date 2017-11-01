@@ -17,11 +17,9 @@ args = parser.parse_args()
 
 
 def main():
-    generate_and_save_hypers()
-
     main_agent = None
     agents, envs = [], []
-    flat, hydrated, network = get_hypers(rand=True, from_db=False)
+    flat, hydrated, network = get_hypers()
     if args.gpu_fraction:
         hydrated['tf_session_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_fraction))
 

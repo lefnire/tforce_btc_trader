@@ -15,12 +15,9 @@ FOREST = False
 PREDICT_PERMUTATIONS = False
 
 # Now, if there are recorded runs in the database, use a random forest to find the best combo
-runs = conn.execute('select * from runs').fetchall()
+runs = conn.execute('select * from runs where flag is null').fetchall()
 runs = [{**r.hypers, 'target': r.reward} for r in runs]
 runs = pd.DataFrame(runs)
-
-# FIXME these shouldn't be in flat, only hydrated
-runs.drop(['baseline', 'baseline_optimizer'], axis=1, inplace=True)
 
 # Impute numerical values if possible
 runs['dropout'].fillna(0., inplace=True)
@@ -38,6 +35,11 @@ for cat in [
 ]:
     onehot = pd.get_dummies(runs[cat], prefix=cat)
     runs = runs.drop(cat, 1).join(onehot)
+
+# Drop columns that only have one value
+for col in runs.columns:
+    if len(runs[col].unique()) == 1:
+        runs.drop(col, 1, inplace=True)
 
 X, y = runs.drop('target', 1), runs['target']
 
