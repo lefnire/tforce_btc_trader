@@ -317,9 +317,9 @@ class BitcoinEnv(gym.Env):
         # when done, save reward to database
         rewards = self.episode_results['rewards']
         if len(rewards) < min_len: return
-        reward = np.mean(rewards[-100:])
-        sql = "insert into runs (hypers, reward) values (:hypers, :reward)"
-        conn.execute(text(sql), reward=reward, hypers=json.dumps(self.hypers.to_dict()))
+        reward_avg = np.mean(rewards[-100:])
+        sql = "insert into runs (hypers, reward_avg, rewards) values (:hypers, :reward_avg, :rewards)"
+        conn.execute(text(sql), hypers=json.dumps(self.hypers.to_dict()), reward_avg=reward_avg, rewards=rewards)
 
 
 class BitcoinEnvTforce(OpenAIGym):

@@ -4,10 +4,11 @@
   a. Then grab all from db, linear regression, cross-join attrs, predict, take attrs w/ max prediction
   b. set as new default params, print
 """
+import tensorflow as tf
 import pdb, json, random
 from pprint import pprint
 import numpy as np
-import tensorflow as tf
+import pandas as pd
 from sqlalchemy.sql import text
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
@@ -215,7 +216,8 @@ def ensure_table():
         (
             id SERIAL,
             hypers json not null,
-            reward double precision,
+            reward_avg double precision not null,
+            rewards double precision[] not null,
             flag varchar(16) -- run_flag
         );
     """)
@@ -256,8 +258,8 @@ def get_hypers():
     # and hydrated (the real hypers to pass to the agent). Generate hydated from flat
     ct = conn.execute('select count(*) as ct from runs').fetchone().ct
     if ct > 20:  # give random hypers a shot for a while
-        flat = conn.execute('select * from runs where flag is null order by reward desc limit 1').fetchone()
-        print(f'Using conf.id={flat.id}, reward={flat.reward}')
+        flat = conn.execute('select * from runs where flag is null order by reward_avg desc limit 1').fetchone()
+        print(f'Using conf.id={flat.id}, reward={flat.reward_avg}')
         flat = flat.hypers
     else:
         # Priority-pick winning attrs. Remember to order attrs in hypers dict best-to-worst.
