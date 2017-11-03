@@ -9,5 +9,5 @@ PATH = f'{os.path.dirname(os.path.realpath(__file__))}/runs.csv'
 SELECT = "select hypers, reward_avg, rewards from runs where flag is null"
 
 if __name__ == '__main__':
-    pg_copy = f"\COPY ({SELECT}) TO '{path}' DELIMITER ',' CSV HEADER;"
+    pg_copy = f"\COPY ({SELECT}) TO '{PATH}' DELIMITER ',' CSV HEADER;"
     os.system(f'psql kaggle -c "{pg_copy}"')

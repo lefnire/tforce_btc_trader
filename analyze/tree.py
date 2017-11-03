@@ -5,8 +5,9 @@ import os, pdb, json, argparse
 import numpy as np
 from sqlalchemy.sql import text
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error
 from sklearn.tree import export_graphviz
 from data import conn
@@ -14,8 +15,9 @@ from analyze.dump_runs import SELECT
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--mode', type=str, default='predict', help="(predict|export) Use this file to predict via scikitlearn? Or just export cleaned data to csv for R?")
-parser.add_argument('-a', '--algo', type=str, default='forest', help="(tree|forest) Which regressor to use (todo add more)")
+parser.add_argument('-a', '--algo', type=str, default='forest', help="(tree|forest|boost|svr) Which regressor to use (todo add more)")
 parser.add_argument('--permute', action="store_true", help="Predict against all permutations of attributes.")
+parser.add_argument('--no-test', action="store_true", help="Train on full dataset.")
 args = parser.parse_args()
 
 
@@ -39,7 +41,7 @@ def get_clean_data(onehot=True, df=None):
 
     # Impute numerical values if possible
     clean['dropout'].fillna(0., inplace=True)
-    clean['gae_lambda'].fillna(1., inplace=True)
+    clean['gae_lambda'].fillna(0., inplace=True)
     for binary in ['keep_last_timestep', 'indicators', 'scale', 'normalize_rewards']:
         clean[binary] = clean[binary].astype(int)
 
@@ -73,28 +75,42 @@ def predict():
 
     # Create model
     tree_hypers = {
-        'max_features': ['auto', 'sqrt', 'log2'],
-        'max_depth': [None, 10, 20, 50, 70]
+        'max_features': [None, 'sqrt', 'log2'],
+        'max_depth': [None, 10, 20]
     }
     if args.algo == 'forest':
-        model = RandomForestRegressor()
+        model = RandomForestRegressor(bootstrap=True, oob_score=True)
         hypers = {
             **tree_hypers,
-            'n_estimators': [100, 200, 300],  # [10, 20, 50, 100],
-            'warm_start': [True, False],
-            # 'bootstrap': [True, False],
-            'oob_score': [True, False]
+            'n_estimators': [100, 200, 300],
         }
     elif args.algo == 'tree':
         model = DecisionTreeRegressor()
         hypers = tree_hypers
+    elif args.algo == 'boost':
+        model = GradientBoostingRegressor()
+        hypers = {
+            **tree_hypers,
+            'n_estimators': [100, 200, 300],
+        }
     elif args.algo == 'xgboost':
-        # TODO (https://machinelearningmastery.com/visualize-gradient-boosting-decision-trees-xgboost-python/)
-        pass
+        # https://jessesw.com/XG-Boost/
+        import xgboost as xgb
+        model = xgb.XGBRegressor()
+        hypers = {'max_depth': [3,5,7], 'min_child_weight': [1,3,5]}
+    elif args.algo == 'svr':
+        model = SVR()
+        hypers = {'C': [1, 10, 15]}
+
 
     # Train model w/ cross-val on hypers
-    model = GridSearchCV(model, param_grid=hypers, scoring='neg_mean_squared_error', cv=5, n_jobs=-1)
-    model.fit(X.values, y.values)
+    if args.no_test:
+        print('no test')
+        X_train, X_test, y_train, y_test = X, X, y, y
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=.8)
+    model = GridSearchCV(model, param_grid=hypers, cv=5, scoring='neg_mean_squared_error', n_jobs=-1)
+    model.fit(X_train, y_train)
 
     # Show scores
     cvres = model.cv_results_
@@ -102,20 +118,25 @@ def predict():
     for mean_score, params in zipped:
         print(np.sqrt(-mean_score), params)
 
-    train_pred = model.predict(X)
-    print('Train Error', np.sqrt(mean_squared_error(y, train_pred)))
+    test_pred = model.predict(X_test)
+    print('Test Error', np.sqrt(mean_squared_error(y_test, test_pred)))
 
-    # https://stackoverflow.com/a/40178961/362790
-    tree = model.best_estimator_.estimators_[1] if args.algo == 'forest' else model.best_estimator_
+    if args.algo == 'forest':
+        print('OOB Score', model.best_estimator_.oob_score_)
 
-    feature_imp = sorted(zip(model.best_estimator_.feature_importances_, X.columns.values), key=lambda x: x[0], reverse=True)
-    print(feature_imp)
 
-    export_graphviz(tree,
-                    feature_names=X.columns,
-                    filled=True,
-                    rounded=True)
-    os.system('dot -Tpng tree.dot -o tree.png')
+    if args.algo in ('forest', 'tree'):
+        # https://stackoverflow.com/a/40178961/362790
+        tree = model.best_estimator_.estimators_[1] if args.algo == 'forest' else model.best_estimator_
+
+        feature_imp = sorted(zip(model.best_estimator_.feature_importances_, X.columns.values), key=lambda x: x[0], reverse=True)
+        print(feature_imp)
+
+        export_graphviz(tree,
+                        feature_names=X.columns,
+                        filled=True,
+                        rounded=True)
+        os.system('dot -Tpng tree.dot -o tree.png')
 
     if args.permute:
         """
@@ -139,17 +160,22 @@ def predict():
             a+=1;A+=1
         sorted_attrs = [f'"{k}"' for k in sorted(ppo_hypers.keys())]
         sql = "SELECT " + ', '.join(sql_select) \
-              + " FROM " + ' CROSS JOIN '.join(sql_body) \
-              + " ORDER BY " + ', '.join(sorted_attrs)
+              + " FROM " + ' CROSS JOIN '.join(sql_body)
+              # + " ORDER BY " + ', '.join(sorted_attrs)
 
-        # 201M rows! Find another approach
-        offset, buff_size = 0, int(1e4)
+        cartesian_size = 201e6  # TODO actually calculate
+        buff_size = int(1e5)
+        cartesian = conn.execution_options(stream_results=True).execute(sql)
+        print('SQL executed')
         best = None
+        i = 1
         while True:
-            cartesian = conn.execute(sql + f' LIMIT {buff_size} OFFSET {offset*buff_size}').fetchall()
-            if not cartesian: break
+            chunk = cartesian.fetchmany(buff_size)
+            if i % 20 == 0:
+                print(f'SQL fetched {round(i*buff_size/cartesian_size*100, 2)}%')
+            if not chunk: break
 
-            df = pd.DataFrame([{**r, 'reward': 0} for r in cartesian])
+            df = pd.DataFrame([{**r, 'reward': 0} for r in chunk])
 
             # in order to account for all possible attr values (which effects #one-hot-encoded cols), tag on the
             # training data, then remove it after the xform.
@@ -164,9 +190,10 @@ def predict():
             max_i = np.argmax(pred)
             if not best or pred[max_i] > best[0]:
                 best = (pred[max_i], X.iloc[max_i])
-            print('offset', offset, 'reward', best[0])
-            print(best[1])
-            offset += 1
+                print('reward', best[0])
+                print(best[1])
+                print()
+            i += 1
 
 
 def export():
