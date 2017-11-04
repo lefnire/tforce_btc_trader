@@ -16,6 +16,20 @@ from btc_env.btc_env import BitcoinEnvTforce
 from data import conn
 
 
+# Ensure table
+conn.execute("""
+    --create type if not exists run_flag as enum ('random', 'winner');
+    create table if not exists runs
+    (
+        id SERIAL,
+        hypers jsonb not null,
+        reward_avg double precision not null,
+        rewards double precision[] not null,
+        flag varchar(16) -- run_flag
+    );
+""")
+
+
 # TODO make these part of the hyper search
 AGENT_K = 'ppo_agent'
 
@@ -141,20 +155,22 @@ net_specs = {
 }
 
 batch_hypers = {
-    'batch_size': [512, 1024, 256, 128, 8],
-    'discount': [.99, .95, .97],
-    'keep_last_timestep': [True, False],
-    'optimizer.learning_rate': [5e-5, 1e-5, 1e-6],
-    'optimizer.type': ['nadam', 'adam'],
+    'batch_size': [8, 32, 64, 128, 256],
+    'discount': [.97, .95, .99],
+    'keep_last_timestep': [False, True],
+    'optimizer.learning_rate': [1e-5, 5e-5, 1e-6],
+    'optimizer.type': ['adam', 'nadam'],
+    'optimization_steps': [10, 20],
 
     # Special handling
     'net_type': ['conv2d'],
     'indicators': [False],
     'scale': [False],
-    'network': [4, 3, 2],
-    'activation': ['elu', 'relu', 'selu', 'tanh'],
-    'dropout': [.5, .2, None],
-    'l2': [1e-5, 1e-4, 1e-3, 1e-2],
+    'penalize_inaction': [True, False],
+    'network': [3, 4, 2],
+    'activation': ['tanh', 'elu', 'relu'],
+    'dropout': [.4, None],
+    'l2': [1e-3, 1e-4, 1e-5],
     'diff': ['percent', 'absolute'],
     'steps': [2048*3+3],
 }
@@ -170,18 +186,17 @@ memory_hypers = {
 hypers = {}
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **batch_hypers,
-    'gae_lambda': [.99, .97, .95, None],
-    'optimization_steps': [20, 5, 10],
-    'baseline_optimizer.optimizer.learning_rate': [5e-5, 1e-5, 1e-6],
-    'baseline_optimizer.num_steps': [20, 5, 10],
-    'normalize_rewards': [True, False],  # TODO True=winner, should I take this out?
+    'gae_lambda': [None, .99, .95],
+    'baseline_optimizer.optimizer.learning_rate': [5e-5, 1e-6, 1e-5],
+    'baseline_optimizer.num_steps': [20, 10],
+    'normalize_rewards': [True],  # True is definite winner
 
     # I don't know what values to use besides the defaults, just guessing. Look into
-    'entropy_regularization': [1e-2, 1e-1, 1e-3],
-    'likelihood_ratio_clipping': [.2, .01, .9],
+    'entropy_regularization': [1e-1, 1e-3, 1e-2],
+    'likelihood_ratio_clipping': [.01, .2, .9],
 
     # Special handling
-    'baseline_mode': ['states', None],
+    'baseline_mode': ['states'],
 
     # TODO
     # variable_noise
@@ -207,20 +222,6 @@ hypers['naf_agent'] = {
     'clip_loss': [0., .5, 1.]  # TODO this still relevant?
     # TODO exploration (ornstein_uhlenbeck_no_params, epsilon_decay)
 }
-
-
-def ensure_table():
-    conn.execute("""
-        --create type if not exists run_flag as enum ('random', 'winner');
-        create table if not exists runs
-        (
-            id SERIAL,
-            hypers json not null,
-            reward_avg double precision not null,
-            rewards double precision[] not null,
-            flag varchar(16) -- run_flag
-        );
-    """)
 
 
 class DotDict(object):
@@ -252,24 +253,36 @@ class DotDict(object):
         return self._data
 
 
-def get_hypers():
-    ensure_table()
+def get_hypers(deterministic=False):
     # We'll return two versions of hypers. Flat (w/ dot-separated keys, for saving in db & computing w/ randomForest)
     # and hydrated (the real hypers to pass to the agent). Generate hydated from flat
-    ct = conn.execute('select count(*) as ct from runs').fetchone().ct
-    if ct > 20:  # give random hypers a shot for a while
-        flat = conn.execute('select * from runs where flag is null order by reward_avg desc limit 1').fetchone()
-        print(f'Using conf.id={flat.id}, reward={flat.reward_avg}')
-        flat = flat.hypers
-    else:
-        # Priority-pick winning attrs. Remember to order attrs in hypers dict best-to-worst.
+    if deterministic:
+        # first item in each list is the winner (remember to update these)
         flat = {k: v[0] for k, v in hypers[AGENT_K].items()}
-        print('Using in-code flat')
-    # After electing current winning attrs, now random-permute them with some prob - like evolution.
-    # TODO use np.choice(p=[..]) to weight best-to-worst (left-to-right)
-    for k in list(flat):
-        if random.random() > .3:
-            flat[k] = random.choice(hypers[AGENT_K][k])
+    else:
+        if conn.execute('select count(*) as ct from runs').fetchone().ct > 20:  # give random hypers a shot for a while
+            # flat = conn.execute('select * from runs where flag is null order by reward_avg desc limit 1').fetchone()
+
+            # TODO handle this elsewhere
+            runs = conn.execute('select * from runs where array_length(rewards,1)>200').fetchall()
+            flat, gt0 = None, -1e6
+            for run in runs:
+                gt0_curr = (np.array(run.rewards[-50:])>0).sum()
+                if  gt0_curr > gt0:
+                    flat, gt0 = run, gt0_curr
+
+            print(f'Using conf.id={flat.id}, reward={flat.reward_avg}')
+            flat = flat.hypers
+        else:
+            # Priority-pick winning attrs. Remember to order attrs in hypers dict best-to-worst.
+            flat = {k: v[0] for k, v in hypers[AGENT_K].items()}
+            print('Using in-code flat')
+        # After electing current winning attrs, now random-permute them with some prob - like evolution.
+        # TODO use np.choice(p=[..]) to weight best-to-worst (left-to-right)
+        for k in list(flat):
+            if random.random() > .3:
+                flat[k] = random.choice(hypers[AGENT_K][k])
+    flat['penalize_inaction'] = True  # FIXME add this as missing attr in hypers psql json
 
     hydrated = DotDict({
         # 'tf_session_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
@@ -291,7 +304,7 @@ def get_hypers():
         hydrated['baseline_optimizer'] = None
 
     # Will be manually handling certain attributes (not passed to Config()). Pop those off so they don't get in the way
-    extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps', 'net_type', 'indicators']
+    extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps', 'net_type', 'indicators', 'penalize_inaction']
     extra = {k: hydrated.pop(k) for k in extra_keys}
 
     net_spec = net_specs[extra['net_type']][extra['network']]

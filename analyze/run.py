@@ -8,17 +8,24 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.svm import SVR
+from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.tree import export_graphviz
+import scipy.stats
 from data import conn
 from analyze.dump_runs import SELECT
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--mode', type=str, default='predict', help="(predict|export) Use this file to predict via scikitlearn? Or just export cleaned data to csv for R?")
 parser.add_argument('-a', '--algo', type=str, default='forest', help="(tree|forest|boost|svr) Which regressor to use (todo add more)")
+parser.add_argument('-r', '--reward-mode', type=str, default='avg', help="(avg|gt0) Should we sort runs by last-50 reward-averages? Or by the number of net-gain episodes (> 0).")
 parser.add_argument('--permute', action="store_true", help="Predict against all permutations of attributes.")
-parser.add_argument('--no-test', action="store_true", help="Train on full dataset.")
 args = parser.parse_args()
+
+
+def parse_rewards_json(r):
+    r = r.replace('{','[').replace('}',']')
+    return json.loads(r)
 
 
 def get_clean_data(onehot=True, df=None):
@@ -28,14 +35,47 @@ def get_clean_data(onehot=True, df=None):
     else:
         # sql = 'select hypers, reward_avg from runs where flag is null and array_length(rewards, 1)>250'
         dirty = pd.concat([
-            pd.read_sql(SELECT, conn),
-            pd.read_csv('runs1.csv', converters={'hypers': json.loads}),
-            pd.read_csv('runs2.csv', converters={'hypers': json.loads}),
+            pd.read_sql('select * from runs where flag is null', conn),
+            pd.read_csv('runs1.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
+            pd.read_csv('runs2.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
         ])
 
-        # Expand the hypers dict column to individual columns
-        dirty = pd.DataFrame([{**r.hypers, 'reward': r.reward_avg} for r in dirty.itertuples()])
+        # Expand the hypers dict to individual columns. Use more flexible avg
+        reward_avg = pd.DataFrame([
+            {**d.hypers, 'reward': np.mean(d.rewards[-50:])}
+            for d in dirty.itertuples()
+            if len(d.rewards) > 150
+        ])
+        gt0 = pd.DataFrame([
+            {**d.hypers, 'reward': (np.array(d.rewards[-50:]) > 0).sum()}
+            for d in dirty.itertuples()
+            if len(d.rewards) > 150
+        ])
+        dirty = reward_avg if args.reward_mode == 'avg' else gt0
+
         print(f"{dirty.shape[0]} rows")
+        top_avg = reward_avg.sort_values('reward', ascending=False).iloc[:20]
+        top_gt0 = gt0.sort_values('reward', ascending=False).iloc[:20]
+        f = open('out.txt', 'w')
+
+        f.write('# Top')
+        f.write('\n## Avg\n')
+        f.write(top_avg.iloc[0].to_string())
+        f.write('\n## > 0\n')
+        f.write(top_gt0.iloc[0].to_string())
+
+        f.write('\n\n# Top[:10]')
+        f.write('\n## Avg\n')
+        f.write(top_avg.to_string())
+        f.write('\n## > 0\n')
+        f.write(top_gt0.to_string())
+
+        f.write('\n\n# Mode')
+        f.write('\n## Avg\n')
+        f.write(top_avg.mode().iloc[0:2].fillna('-').to_string())
+        f.write('\n## >0\n')
+        f.write(top_gt0.mode().iloc[0:2].fillna('-').to_string())
+        f.close()
 
     clean = dirty.copy()
 
@@ -101,11 +141,16 @@ def predict():
     elif args.algo == 'svr':
         model = SVR()
         hypers = {'C': [1, 10, 15]}
+    elif args.algo == 'dnn':
+        model = MLPRegressor()
+        hypers = {
+            'hidden_layer_sizes': [(32, 16, 8), (64, 32, 16), (64, 32, 16, 8)],
+            'max_iter': [800, 2000]
+        }
 
 
     # Train model w/ cross-val on hypers
-    if args.no_test:
-        print('no test')
+    if args.permute:
         X_train, X_test, y_train, y_test = X, X, y, y
     else:
         X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=.8)
@@ -126,17 +171,19 @@ def predict():
 
 
     if args.algo in ('forest', 'tree'):
+        feature_imp = sorted(zip(model.best_estimator_.feature_importances_, X.columns.values), key=lambda x: x[0], reverse=True)
+        f = open('out.txt', 'a')
+        f.write('\n\n--- Feature Importances ---\n')
+        f.write(', '.join([f'{x[1]}: {round(x[0],4)}' for x in feature_imp]))
+        f.close()
+
         # https://stackoverflow.com/a/40178961/362790
         tree = model.best_estimator_.estimators_[1] if args.algo == 'forest' else model.best_estimator_
-
-        feature_imp = sorted(zip(model.best_estimator_.feature_importances_, X.columns.values), key=lambda x: x[0], reverse=True)
-        print(feature_imp)
-
         export_graphviz(tree,
                         feature_names=X.columns,
                         filled=True,
                         rounded=True)
-        os.system('dot -Tpng tree.dot -o tree.png')
+        os.system('dot -Tpng tree.dot -o tree.png;rm tree.dot')
 
     if args.permute:
         """
@@ -194,6 +241,10 @@ def predict():
                 print(best[1])
                 print()
             i += 1
+        f = open('out.txt', 'a')
+        f.write('\n\n# Top Predicted\n')
+        f.write(best[1].to_string())
+        f.close()
 
 
 def export():

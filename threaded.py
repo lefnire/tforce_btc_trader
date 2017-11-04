@@ -13,13 +13,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-e', '--experiment', type=int, default=0, help="Show debug outputs")
 parser.add_argument('-w', '--workers', type=int, default=5, help="Number of workers")
 parser.add_argument('-g', '--gpu-fraction', type=float, default=0., help="GPU memory fraction (.41, .28, etc)")
+parser.add_argument('--deterministic', action="store_true", help="Now test for real (winning hypers).")
 args = parser.parse_args()
 
 
 def main():
     main_agent = None
     agents, envs = [], []
-    flat, hydrated, network = get_hypers()
+    flat, hydrated, network = get_hypers(deterministic=args.deterministic)
     if args.gpu_fraction:
         hydrated['tf_session_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_fraction))
 
@@ -62,7 +63,7 @@ def main():
     def summary_report(x): pass
     threaded_runner = ThreadedRunner(agents, envs)
     threaded_runner.run(
-        episodes=300 * (args.workers-1),
+        episodes=-1 if args.deterministic else 300 * (args.workers-1),
         summary_interval=2000,
         summary_report=summary_report
     )

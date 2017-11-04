@@ -36,7 +36,7 @@ DEFAULT_HYPERS = {
     'indicators': False,
     'steps': 2048*3+3,
     'net_type': 'conv2d',
-    'diff': 'percent'  # absolute
+    'diff': 'percent',  # absolute
 }
 
 class BitcoinEnv(gym.Env):
@@ -258,6 +258,9 @@ class BitcoinEnv(gym.Env):
 
         if self.hypers.scale:
             next_state = scaler.transform([next_state])[0]
+
+        if self.hypers.penalize_inaction and (np.array(self.signals[-100:]) == 0).all():
+            reward *= 2  # up the ante (TODO reconsider logic)
 
         self.total_reward += reward
         self.total_reward_true += reward_true
