@@ -1,5 +1,6 @@
 # import tensorflow  # this has to be imported _before_ pandas even if not used
 from hypersearch import hypers as hypers_dict # actually, handle the ordering in hypersearch.py & import that here
+from functools import reduce
 import pandas as pd
 import os, pdb, json, argparse
 import numpy as np
@@ -17,7 +18,7 @@ from analyze.dump_runs import SELECT
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--mode', type=str, default='predict', help="(predict|export) Use this file to predict via scikitlearn? Or just export cleaned data to csv for R?")
-parser.add_argument('-a', '--algo', type=str, default='forest', help="(tree|forest|boost|svr) Which regressor to use (todo add more)")
+parser.add_argument('-a', '--algo', type=str, default='boost', help="(tree|forest|boost|svr) Which regressor to use (todo add more)")
 parser.add_argument('-r', '--reward-mode', type=str, default='avg', help="(avg|gt0) Should we sort runs by last-50 reward-averages? Or by the number of net-gain episodes (> 0).")
 parser.add_argument('--permute', action="store_true", help="Predict against all permutations of attributes.")
 args = parser.parse_args()
@@ -38,6 +39,7 @@ def get_clean_data(onehot=True, df=None):
             pd.read_sql('select * from runs where flag is null', conn),
             pd.read_csv('runs1.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
             pd.read_csv('runs2.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
+            pd.read_csv('runs3.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
         ])
 
         # Expand the hypers dict to individual columns. Use more flexible avg
@@ -54,8 +56,8 @@ def get_clean_data(onehot=True, df=None):
         dirty = reward_avg if args.reward_mode == 'avg' else gt0
 
         print(f"{dirty.shape[0]} rows")
-        top_avg = reward_avg.sort_values('reward', ascending=False).iloc[:20]
-        top_gt0 = gt0.sort_values('reward', ascending=False).iloc[:20]
+        top_avg = reward_avg.sort_values('reward', ascending=False).iloc[:10]
+        top_gt0 = gt0.sort_values('reward', ascending=False).iloc[:10]
         f = open('out.txt', 'w')
 
         f.write('# Top')
@@ -77,12 +79,24 @@ def get_clean_data(onehot=True, df=None):
         f.write(top_gt0.mode().iloc[0:2].fillna('-').to_string())
         f.close()
 
+        df_avg = top_avg if args.reward_mode == 'avg' else top_gt0
+        mode_json = df_avg.drop('reward',1).mode().iloc[0].to_json()
+        conn.execute("delete from runs where flag='mode'")
+        conn.execute(text(
+            "insert into runs (hypers, reward_avg, rewards, flag) values (:hypers, :reward_avg, :rewards, 'mode')"),
+                     hypers=mode_json, reward_avg=np.mean(df_avg['reward']), rewards=[])
+
+    for possible_missing_col in ['cryptowatch']:
+        if possible_missing_col not in dirty:
+            missing_col = pd.DataFrame(np.expand_dims(np.zeros(dirty.shape[0]), 1), columns=[possible_missing_col])
+            dirty = pd.concat([dirty, missing_col], 1)
+
     clean = dirty.copy()
 
     # Impute numerical values if possible
-    clean['dropout'].fillna(0., inplace=True)
-    clean['gae_lambda'].fillna(0., inplace=True)
-    for binary in ['keep_last_timestep', 'indicators', 'scale', 'normalize_rewards']:
+    for to_0 in ['dropout', 'gae_lambda', 'penalize_inaction', 'cryptowatch']:
+        clean[to_0].fillna(0., inplace=True)
+    for binary in ['keep_last_timestep', 'indicators', 'scale', 'normalize_rewards', 'cryptowatch', 'penalize_inaction']:
         clean[binary] = clean[binary].astype(int)
 
     if onehot:
@@ -98,10 +112,10 @@ def get_clean_data(onehot=True, df=None):
             clean = pd.concat([clean.drop(cat, 1), ohc], axis=1)
 
     # # Drop columns that only have one value
-    for col in clean.columns:
-        if len(clean[col].unique()) == 1:
-            clean.drop(col, 1, inplace=True)
-    # clean.fillna(0, inplace=True)
+    # for col in clean.columns:
+    #     if len(clean[col].unique()) == 1:
+    #         clean.drop(col, 1, inplace=True)
+    clean.fillna(0, inplace=True)
 
     # Sort columns by column-name. This way we can be sure when we predict later w/ different data, the columns align.
     clean.sort_index(axis=1, inplace=True)
@@ -210,41 +224,43 @@ def predict():
               + " FROM " + ' CROSS JOIN '.join(sql_body)
               # + " ORDER BY " + ', '.join(sorted_attrs)
 
-        cartesian_size = 201e6  # TODO actually calculate
-        buff_size = int(1e5)
+        cartesian_size = reduce((lambda m, vals: len(vals) * m), ppo_hypers.values(), 1)
         cartesian = conn.execution_options(stream_results=True).execute(sql)
-        print('SQL executed')
-        best = None
-        i = 1
+        buff_size, i = int(1e5), 1
+        best = {'reward': -1e6, 'flat': None}
         while True:
             chunk = cartesian.fetchmany(buff_size)
-            if i % 20 == 0:
-                print(f'SQL fetched {round(i*buff_size/cartesian_size*100, 2)}%')
+            if i % 10 == 0:
+                print(str(round(i*buff_size/cartesian_size*100, 2)) + '%')
             if not chunk: break
 
-            df = pd.DataFrame([{**r, 'reward': 0} for r in chunk])
+            df = pd.DataFrame([dict(r) for r in chunk])
 
             # in order to account for all possible attr values (which effects #one-hot-encoded cols), tag on the
             # training data, then remove it after the xform.
-            df = pd.concat([df, dirty])
-            X, _ = get_clean_data(df=df)
-            X = X.iloc[0:buff_size].drop('reward', 1)
+            df = pd.concat([df, dirty.drop('reward',1)])
+            X_test, _ = get_clean_data(df=df)
+            X_test = X_test.iloc[0:buff_size]
 
-            # print(set(X.columns.values) - set(dirty.columns.values))
-            # print(set(dirty.columns.values) - set(X.columns.values))
-            pred = model.predict(X)
+            # print(set(X_test.columns.values) - set(X.columns.values))
+            # print(set(X.columns.values) - set(X_test.columns.values))
+            pred = model.predict(X_test)
             pred[pred == 0] = -1e6  # fixme better way to handle zeros? that means the tree's unsure, right?
             max_i = np.argmax(pred)
-            if not best or pred[max_i] > best[0]:
-                best = (pred[max_i], X.iloc[max_i])
-                print('reward', best[0])
-                print(best[1])
+            if pred[max_i] > best['reward']:
+                best['flat'], best['reward'] = df.iloc[max_i], pred[max_i]
                 print()
+                print('Reward', best['reward'])
+                print(best['flat'])
             i += 1
         f = open('out.txt', 'a')
         f.write('\n\n# Top Predicted\n')
-        f.write(best[1].to_string())
+        f.write(best['flat'].to_string())
         f.close()
+
+        conn.execute("delete from runs where flag='winner'")
+        conn.execute(text("insert into runs (hypers, reward_avg, rewards, flag) values (:hypers, :reward_avg, :rewards, 'winner')"),
+                     hypers=best['flat'].to_json(), reward_avg=best['reward'], rewards=[])
 
 
 def export():

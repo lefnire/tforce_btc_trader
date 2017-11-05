@@ -20,6 +20,7 @@ ALLOW_SEED = False
 
 import data
 from data import conn
+NCOL = len(data.columns)
 
 try:
     scaler = joblib.load('saves/scaler.pkl')
@@ -72,7 +73,7 @@ class BitcoinEnv(gym.Env):
             # height = num_features, but one layer for each table
             # channels is number of tables (each table is a "layer" of features
             gym_env.observation_space = spaces.Tuple((
-                spaces.Box(-1, 1, shape=(150,7,2)),  # "image"
+                spaces.Box(-1, 1, shape=(150,NCOL,2)),  # "image"
                 spaces.Box(-1, 1, shape=(2,))  # money
             ))
         else:
@@ -175,7 +176,7 @@ class BitcoinEnv(gym.Env):
             window = self.observations[self.timestep - self.window:self.timestep]
             # TODO adapt to more than 2 tables
             first_state = dict(
-                state0=np.transpose([window[:, 0:7], window[:, 7:]], (1,2,0)),
+                state0=np.transpose([window[:, 0:NCOL], window[:, NCOL:]], (1,2,0)),
                 state1=np.array([1., 1.])
             )
         else:
@@ -243,7 +244,7 @@ class BitcoinEnv(gym.Env):
         if self.conv2d:
             window = self.observations[self.timestep - self.window:self.timestep]
             next_state = dict(
-                state0=np.transpose([window[:, 0:7], window[:, 7:]], (1,2,0)),
+                state0=np.transpose([window[:, 0:NCOL], window[:, NCOL:]], (1,2,0)),
                 state1=np.array([cash_scaled, val_scaled])
             )
 
@@ -280,16 +281,17 @@ class BitcoinEnv(gym.Env):
         res = self.episode_results
         episode = len(res['cash'])
         reward, cash, value = float(self.total_reward_true), float(self.cash), float(self.value)
+        avg50 = round(np.mean(res['rewards'][-50:]))
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tA:{common}(high={high},low={low})")
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tavg50:{avg50}\tA:{common}(high={high},low={low})")
 
         if self.write_graph:
             scalar = tf.Summary()
             scalar.value.add(tag='perf/time', simple_value=self.time)
             scalar.value.add(tag='perf/reward_eps', simple_value=float(self.total_reward))
             scalar.value.add(tag='perf/reward', simple_value=reward)
-            scalar.value.add(tag='perf/reward50avg', simple_value=np.mean(res['rewards'][-50:]))
+            scalar.value.add(tag='perf/reward50avg', simple_value=avg50)
             self.summary_writer.add_summary(scalar, episode)
 
             # Every so often, record signals distribution
@@ -320,7 +322,7 @@ class BitcoinEnv(gym.Env):
         # when done, save reward to database
         rewards = self.episode_results['rewards']
         if len(rewards) < min_len: return
-        reward_avg = np.mean(rewards[-100:])
+        reward_avg = np.mean(rewards[-50:])
         sql = "insert into runs (hypers, reward_avg, rewards) values (:hypers, :reward_avg, :rewards)"
         conn.execute(text(sql), hypers=json.dumps(self.hypers.to_dict()), reward_avg=reward_avg, rewards=rewards)
 

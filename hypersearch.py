@@ -1,8 +1,10 @@
 """
-1. Create a list of configs to recurse over
-2. After 300, save all the attrs used
-  a. Then grab all from db, linear regression, cross-join attrs, predict, take attrs w/ max prediction
-  b. set as new default params, print
+TODO
+* add DQN
+* make into class
+* __init__ takes custom{}
+* hyper-vals can be dict{requires:{str or dict}}. str='baseline_mode', dict={'baseline_mode':['states','network']}
+  * properly order requires to ensure "off" vals (None comes last?)
 """
 import tensorflow as tf
 import pdb, json, random
@@ -14,20 +16,6 @@ from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
 from btc_env.btc_env import BitcoinEnvTforce
 from data import conn
-
-
-# Ensure table
-conn.execute("""
-    --create type if not exists run_flag as enum ('random', 'winner');
-    create table if not exists runs
-    (
-        id SERIAL,
-        hypers jsonb not null,
-        reward_avg double precision not null,
-        rewards double precision[] not null,
-        flag varchar(16) -- run_flag
-    );
-""")
 
 
 # TODO make these part of the hyper search
@@ -159,15 +147,16 @@ batch_hypers = {
     'discount': [.97, .95, .99],
     'keep_last_timestep': [False, True],
     'optimizer.learning_rate': [1e-5, 5e-5, 1e-6],
-    'optimizer.type': ['adam', 'nadam'],
+    'optimizer.type': ['nadam', 'adam'],
     'optimization_steps': [10, 20],
 
     # Special handling
     'net_type': ['conv2d'],
     'indicators': [False],
+    'cryptowatch': [False],  # for now must be set manually in data.py
     'scale': [False],
     'penalize_inaction': [True, False],
-    'network': [3, 4, 2],
+    'network': [4, 3],
     'activation': ['tanh', 'elu', 'relu'],
     'dropout': [.4, None],
     'l2': [1e-3, 1e-4, 1e-5],
@@ -188,7 +177,7 @@ hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **batch_hypers,
     'gae_lambda': [None, .99, .95],
     'baseline_optimizer.optimizer.learning_rate': [5e-5, 1e-6, 1e-5],
-    'baseline_optimizer.num_steps': [20, 10],
+    'baseline_optimizer.num_steps': [10, 20],
     'normalize_rewards': [True],  # True is definite winner
 
     # I don't know what values to use besides the defaults, just guessing. Look into
@@ -253,12 +242,19 @@ class DotDict(object):
         return self._data
 
 
-def get_hypers(deterministic=False):
+def get_hypers(use_winner=False):
     # We'll return two versions of hypers. Flat (w/ dot-separated keys, for saving in db & computing w/ randomForest)
     # and hydrated (the real hypers to pass to the agent). Generate hydated from flat
-    if deterministic:
+    if use_winner:
         # first item in each list is the winner (remember to update these)
-        flat = {k: v[0] for k, v in hypers[AGENT_K].items()}
+        winner = conn.execute(text("select hypers from runs where flag=:flag"), flag=use_winner).fetchone()
+        print(winner)
+        if winner:
+            print('Using winner from database')
+            flat = winner.hypers
+        else:
+            print('Using winner from dict')
+            flat = {k: v[0] for k, v in hypers[AGENT_K].items()}
     else:
         if conn.execute('select count(*) as ct from runs').fetchone().ct > 20:  # give random hypers a shot for a while
             # flat = conn.execute('select * from runs where flag is null order by reward_avg desc limit 1').fetchone()
@@ -280,9 +276,8 @@ def get_hypers(deterministic=False):
         # After electing current winning attrs, now random-permute them with some prob - like evolution.
         # TODO use np.choice(p=[..]) to weight best-to-worst (left-to-right)
         for k in list(flat):
-            if random.random() > .3:
+            if random.random() > .1:
                 flat[k] = random.choice(hypers[AGENT_K][k])
-    flat['penalize_inaction'] = True  # FIXME add this as missing attr in hypers psql json
 
     hydrated = DotDict({
         # 'tf_session_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
@@ -304,7 +299,8 @@ def get_hypers(deterministic=False):
         hydrated['baseline_optimizer'] = None
 
     # Will be manually handling certain attributes (not passed to Config()). Pop those off so they don't get in the way
-    extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps', 'net_type', 'indicators', 'penalize_inaction']
+    extra_keys = ['network', 'activation', 'l2', 'dropout', 'diff', 'steps', 'net_type', 'indicators',
+                  'penalize_inaction', 'scale', 'cryptowatch']
     extra = {k: hydrated.pop(k) for k in extra_keys}
 
     net_spec = net_specs[extra['net_type']][extra['network']]

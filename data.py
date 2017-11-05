@@ -69,18 +69,27 @@ def count_rows():
     return row_count
 
 
-def _db_to_dataframe_ohlc(limit='ALL', offset=0):
+def _db_to_dataframe_ohlc(limit='ALL', offset=0, just_count=False):
     # 600, 300, 1800
+    if just_count:
+        select = 'select count(*) over () '
+        limit, offset = 1, 0
+    else:
+        select = """
+        select 
+          g.open_price as g_open, g.high_price as g_high, g.low_price as g_low, g.close_price as g_close, g.volume as g_volume,
+          o.open_price as o_open, o.high_price as o_high, o.low_price as o_low, o.close_price as o_close, o.volume as o_volume"""
     query = f"""
-    select 
-      g.open_price as g_open, g.high_price as g_high, g.low_price as g_low, g.close_price as g_close, g.volume as g_volume,
-      o.open_price as o_open, o.high_price as o_high, o.low_price as o_low, o.close_price as o_close, o.volume as o_volume
+    {select}
     from ohlc_gdax as g 
     inner join ohlc_okcoin as o on g.close_time=o.close_time
     where g.period='60' and o.period='60'
     order by g.close_time::integer desc
     limit {limit} offset {offset}
     """
+    if just_count:
+        return conn.execute(query).fetchone()[0]
+
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
 
@@ -123,5 +132,18 @@ def _db_to_dataframe_main(limit='ALL', offset=0, just_count=False):
 def db_to_dataframe(limit='ALL', offset=0, just_count=False):
     global mode, train_test_split
     offset = offset + train_test_split if mode == 'TEST' else offset
-    return _db_to_dataframe_ohlc(limit=limit, offset=offset) if DB == 'coins2'\
+    return _db_to_dataframe_ohlc(limit=limit, offset=offset, just_count=just_count) if DB == 'coins2'\
         else _db_to_dataframe_main(limit=limit, offset=offset, just_count=just_count)
+
+def setup_runs_table():
+    conn.execute("""
+        --create type if not exists run_flag as enum ('random', 'winner');
+        create table if not exists runs
+        (
+            id SERIAL,
+            hypers jsonb not null,
+            reward_avg double precision not null,
+            rewards double precision[] not null,
+            flag varchar(16) -- run_flag
+        );
+    """)
