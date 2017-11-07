@@ -25,7 +25,9 @@ def main():
         hydrated['tf_session_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/args.gpu_split))
 
     for i in range(args.workers):
-        env = BitcoinEnvTforce(name=args.agent, hypers=flat)
+        write_graph = False  # i == 0 and args.use_winner
+        name = f'{args.agent}_{hs.run_id}' if write_graph else args.agent
+        env = BitcoinEnvTforce(name=name, hypers=flat, write_graph=write_graph)
         envs.append(env)
 
         conf = hydrated.copy()

@@ -12,15 +12,13 @@ from sklearn.svm import SVR
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.tree import export_graphviz
-import scipy.stats
 from data import conn
-from analyze.dump_runs import SELECT
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-m', '--mode', type=str, default='predict', help="(predict|export) Use this file to predict via scikitlearn? Or just export cleaned data to csv for R?")
-parser.add_argument('-a', '--algo', type=str, default='boost', help="(tree|forest|boost|svr) Which regressor to use (todo add more)")
+parser.add_argument('-a', '--agent', type=str, default='ppo_agent', help="(ppo_agent|dqn_agent) agent to use")
+parser.add_argument('-m', '--model', type=str, default='boost', help="(tree|forest|boost|svr) Which regressor to use (todo add more)")
 parser.add_argument('-r', '--reward-mode', type=str, default='avg', help="(avg|gt0) Should we sort runs by last-50 reward-averages? Or by the number of net-gain episodes (> 0).")
-parser.add_argument('--permute', action="store_true", help="Predict against all permutations of attributes.")
+parser.add_argument('--predict', action="store_true", help="Predict against all permutations of attributes.")
 args = parser.parse_args()
 
 
@@ -36,11 +34,13 @@ def get_clean_data(onehot=True, df=None):
     else:
         # sql = 'select hypers, reward_avg from runs where flag is null and array_length(rewards, 1)>250'
         dirty = pd.concat([
-            pd.read_sql('select * from runs where flag is null', conn),
+            pd.read_sql('select hypers, reward_avg, rewards, agent from runs', conn),
             pd.read_csv('runs1.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
             pd.read_csv('runs2.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
             pd.read_csv('runs3.csv', converters={'hypers': json.loads, 'rewards': parse_rewards_json}),
         ])
+
+        # dirty = dirty[dirty.agent == 'ppo_agent']
 
         # Expand the hypers dict to individual columns. Use more flexible avg
         reward_avg = pd.DataFrame([
@@ -94,10 +94,15 @@ def get_clean_data(onehot=True, df=None):
     clean = dirty.copy()
 
     # Impute numerical values if possible
+    for to_false in ['indicators', 'scale']:
+        clean[to_false].fillna(False, inplace=True)
     for to_0 in ['dropout', 'gae_lambda', 'penalize_inaction', 'cryptowatch']:
         clean[to_0].fillna(0., inplace=True)
     for binary in ['keep_last_timestep', 'indicators', 'scale', 'normalize_rewards', 'cryptowatch', 'penalize_inaction']:
-        clean[binary] = clean[binary].astype(int)
+        try:
+            clean[binary] = clean[binary].astype(int)
+        except Exception as e:
+            pdb.set_trace()
 
     if onehot:
         # one-hot encode categorical values
@@ -132,30 +137,30 @@ def predict():
         'max_features': [None, 'sqrt', 'log2'],
         'max_depth': [None, 10, 20]
     }
-    if args.algo == 'forest':
+    if args.model == 'forest':
         model = RandomForestRegressor(bootstrap=True, oob_score=True)
         hypers = {
             **tree_hypers,
             'n_estimators': [100, 200, 300],
         }
-    elif args.algo == 'tree':
+    elif args.model == 'tree':
         model = DecisionTreeRegressor()
         hypers = tree_hypers
-    elif args.algo == 'boost':
+    elif args.model == 'boost':
         model = GradientBoostingRegressor()
         hypers = {
             **tree_hypers,
             'n_estimators': [100, 200, 300],
         }
-    elif args.algo == 'xgboost':
+    elif args.model == 'xgboost':
         # https://jessesw.com/XG-Boost/
         import xgboost as xgb
         model = xgb.XGBRegressor()
         hypers = {'max_depth': [3,5,7], 'min_child_weight': [1,3,5]}
-    elif args.algo == 'svr':
+    elif args.model == 'svr':
         model = SVR()
         hypers = {'C': [1, 10, 15]}
-    elif args.algo == 'dnn':
+    elif args.model == 'dnn':
         model = MLPRegressor()
         hypers = {
             'hidden_layer_sizes': [(32, 16, 8), (64, 32, 16), (64, 32, 16, 8)],
@@ -164,7 +169,7 @@ def predict():
 
 
     # Train model w/ cross-val on hypers
-    if args.permute:
+    if args.predict:
         X_train, X_test, y_train, y_test = X, X, y, y
     else:
         X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=.8)
@@ -180,11 +185,11 @@ def predict():
     test_pred = model.predict(X_test)
     print('Test Error', np.sqrt(mean_squared_error(y_test, test_pred)))
 
-    if args.algo == 'forest':
+    if args.model == 'forest':
         print('OOB Score', model.best_estimator_.oob_score_)
 
 
-    if args.algo in ('forest', 'tree'):
+    if args.model in ('forest', 'tree'):
         feature_imp = sorted(zip(model.best_estimator_.feature_importances_, X.columns.values), key=lambda x: x[0], reverse=True)
         f = open('out.txt', 'a')
         f.write('\n\n--- Feature Importances ---\n')
@@ -192,14 +197,14 @@ def predict():
         f.close()
 
         # https://stackoverflow.com/a/40178961/362790
-        tree = model.best_estimator_.estimators_[1] if args.algo == 'forest' else model.best_estimator_
+        tree = model.best_estimator_.estimators_[1] if args.model == 'forest' else model.best_estimator_
         export_graphviz(tree,
                         feature_names=X.columns,
                         filled=True,
                         rounded=True)
         os.system('dot -Tpng tree.dot -o tree.png;rm tree.dot')
 
-    if args.permute:
+    if args.predict:
         """
         Predict over cross-joined attr/value combos. Doing so in SQL simpler, see https://stackoverflow.com/a/6683506/362790
         SELECT A AS number, B AS letter FROM
@@ -207,11 +212,16 @@ def predict():
         CROSS JOIN
         (VALUES ('A'), ('B'), ('C')) b(B)
         """
-        ppo_hypers = hypers_dict['ppo_agent'].copy()
+        hypers = hypers_dict[args.agent].copy()
+        # Get rid of dependencies structure (flatten)
+        for k, v in hypers.items():
+            if type(v) is dict:
+                hypers[k] = v['$vals']
+        hypers.update(hypers_dict['custom'])
 
         a, A = 97, 65
         sql_select, sql_body = [], []
-        for k, arr in ppo_hypers.items():
+        for k, arr in hypers.items():
             sql_select.append(f'{chr(A)} as "{k}"')
             vals_ = []
             for v in arr:
@@ -219,12 +229,11 @@ def predict():
             vals_ = ', '.join([f"({v})" for v in vals_])
             sql_body.append(f"(VALUES {vals_}) {chr(a)}({chr(A)})")
             a+=1;A+=1
-        sorted_attrs = [f'"{k}"' for k in sorted(ppo_hypers.keys())]
         sql = "SELECT " + ', '.join(sql_select) \
               + " FROM " + ' CROSS JOIN '.join(sql_body)
-              # + " ORDER BY " + ', '.join(sorted_attrs)
 
-        cartesian_size = reduce((lambda m, vals: len(vals) * m), ppo_hypers.values(), 1)
+        cartesian_size = reduce((lambda m, vals: len(vals) * m), hypers.values(), 1)
+        # stream_results is key - lets us fetchmany() w/o storing all results in mem, and w/o requiring LIMIT/OFFSET + ORDER BY
         cartesian = conn.execution_options(stream_results=True).execute(sql)
         buff_size, i = int(1e5), 1
         best = {'reward': -1e6, 'flat': None}
@@ -258,20 +267,12 @@ def predict():
         f.write(best['flat'].to_string())
         f.close()
 
-        conn.execute("delete from runs where flag='winner'")
-        conn.execute(text("insert into runs (hypers, reward_avg, rewards, flag) values (:hypers, :reward_avg, :rewards, 'winner')"),
+        conn.execute("delete from runs where flag='predicted'")
+        conn.execute(text("insert into runs (hypers, reward_avg, rewards, flag) values (:hypers, :reward_avg, :rewards, 'predicted')"),
                      hypers=best['flat'].to_json(), reward_avg=best['reward'], rewards=[])
 
 
-def export():
-    runs = get_clean_data(onehot=False)
-    runs.to_csv('runs_out.csv', index=False)
-
-
 def main():
-    if args.mode == 'export':
-        export()
-        return 0
     predict()
 
 

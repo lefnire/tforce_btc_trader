@@ -6,7 +6,7 @@ import os
 
 PATH = f'{os.path.dirname(os.path.realpath(__file__))}/runs.csv'
 # SELECT = "select hypers, reward_avg, rewards from runs where flag is null and array_length(rewards, 1)>250"
-SELECT = "select hypers, reward_avg, rewards from runs where flag is null"
+SELECT = "select hypers, reward_avg, rewards, agent from runs where flag is null"
 
 if __name__ == '__main__':
     pg_copy = f"\COPY ({SELECT}) TO '{PATH}' DELIMITER ',' CSV HEADER;"

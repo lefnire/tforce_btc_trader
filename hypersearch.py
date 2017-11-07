@@ -1,7 +1,5 @@
 """
 TODO
-* hyper-vals can be dict{requires:{str or dict}}. str='baseline_mode', dict={'baseline_mode':['states','network']}
-  * properly order requires to ensure "off" vals (None comes last?)
 * vals can be dict {5: [{type=dense}]..}
 * separate out & release open-source
 * agent (ppo v dqn) part of randomization, not specified up front
@@ -41,6 +39,8 @@ def layers2net(layers, a, d, l2, l1=0., b=True):
             arr.append(dict(type='conv2d', size=size, bias=b, **conv_args))
         elif type == 'F':
             arr.append(dict(type='flatten'))
+        elif type == 'U':
+            arr.append(dict(type='dueling', size=size, activation='none'))
     return arr
 
 
@@ -142,7 +142,7 @@ explorations = {
         "type": "epsilon_decay",
         "epsilon": 1.0,
         "epsilon_final": 0.1,
-        "epsilon_timesteps": 1e10
+        "epsilon_timesteps": 1e9
     },
 }
 
@@ -153,12 +153,15 @@ hypers['agent'] = {
 }
 hypers['memory_agent'] = {
     'batch_size': [8, 32, 64],
-    'memory.type': ['replay', 'prioritized_replay'],
-    'memory.random_sampling': [True, False],
-    'memory.capacity': [10000, 100000],
-    'first_update': [500, 10000],
-    'update_frequency': [4, 1],
-    'repeat_update': [4, 1]
+    'memory.type': ['prioritized_replay', 'replay'],
+    'memory.random_sampling': {
+        '$requires': {'memory.type': 'replay'},
+        '$vals': [True, False]
+    },
+    'memory.capacity': [100000, 10000],
+    'first_update': [10000, 1000],
+    'update_frequency': [4, 20],
+    'repeat_update': [1, 4]
 }
 hypers['batch_agent'] = {
     'batch_size': [8, 32, 64, 128, 256],
@@ -166,7 +169,7 @@ hypers['batch_agent'] = {
 }
 hypers['model'] = {
     'optimizer.type': ['nadam', 'adam'],  # TODO rmsprop
-    'optimizer.learning_rate': [1e-5, 5e-5, 1e-6],
+    'optimizer.learning_rate': [5e-5, 1e-5, 1e-6],
     'optimization_steps': [10, 20],
     'discount': [.97, .95, .99],
     'normalize_rewards': [True],  # True is definite winner
@@ -177,17 +180,26 @@ hypers['distribution_model'] = {
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
 hypers['pg_model'] = {
-    'gae_lambda': [None, .99, .95],
     'baseline_mode': ['states'],
-    'baseline_optimizer.optimizer.learning_rate': [5e-5, 1e-6, 1e-5],
-    'baseline_optimizer.num_steps': [10, 20],
+    'gae_lambda': {
+        '$requires': 'baseline_mode',
+        '$vals': [None, .99, .95]
+    },
+    'baseline_optimizer.optimizer.learning_rate': {
+        '$requires': 'baseline_mode',
+        '$vals': [5e-5, 1e-6, 1e-5]
+    },
+    'baseline_optimizer.num_steps': {
+        '$requires': 'baseline_mode',
+        '$vals': [10, 20]
+    },
 }
 hypers['pg_prob_ration_model'] = {
     # I don't know what values to use besides the defaults, just guessing. Look into
     'likelihood_ratio_clipping': [.01, .2, .9],
 }
 hypers['q_model'] = {
-    'target_sync_frequency': [20, 10000],  # STEPS
+    'target_sync_frequency': [10000, 100000],  # This effects speed the most - make it a high value
     'target_update_weight': [.001, 1.],
     'double_q_model': [True, False],
     'huber_loss': [None, .5, 1.]
@@ -211,20 +223,22 @@ hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
 }
 hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('optimizer.learning_rate')
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
+del hypers['ppo_agent']['exploration']
 
 # TODO pass this as __init__ arg
 hypers['custom'] = {
     'net_type': ['conv2d'],
     'indicators': [False],
-    'cryptowatch': [False],  # for now must be set manually in data.py
     'scale': [False],
+    'cryptowatch': [False],
     'penalize_inaction': [True, False],
     'network': [4, 3, 2],
     'activation': ['tanh', 'elu', 'relu'],
-    'dropout': [.4, None],
+    'dropout': [None, .4],
     'l2': [1e-3, 1e-4, 1e-5],
     'diff': ['percent', 'absolute'],
     'steps': [2048*3+3],
+    'dueling': [True, False]
 }
 
 
@@ -262,23 +276,30 @@ class HyperSearch(object):
         self.agent = agent
         self.debug = debug
 
+    def _flat_defaults(self, h):
+        flat = {}
+        for k, v in h.items():
+            vals = v if type(v) is list else v['$vals']
+            flat[k] = vals[0]
+        return flat
+
     def get_hypers(self, use_winner=False):
         hypers_ = hypers[self.agent].copy()
         hypers_.update(hypers['custom'])
-        if self.agent == 'ppo_agent':
-            del hypers_['exploration']
+        if self.agent == 'ppo_agent': del hypers_['dueling']
 
         # We'll return two versions of hypers. Flat (w/ dot-separated keys, for saving in db & computing w/ randomForest)
         # and hydrated (the real hypers to pass to the agent). Generate hydated from flat
         if use_winner:
             # first item in each list is the winner (remember to update these)
-            sql = "select hypers from runs where flag=:flag and agent=:agent"
+            sql = "select id, hypers from runs where flag=:flag and agent=:agent"
             winner = conn.execute(text(sql), flag=use_winner, agent=self.agent).fetchone()
             if winner:
                 if self.debug: print('Using winner from database')
+                self.run_id = winner.id
                 flat = winner.hypers
             else:
-                flat = {k: v[0] for k, v in hypers_.items()}
+                flat = self._flat_defaults(hypers_)
                 if self.debug: print('Using winner from dict')
         else:
             sql = 'select count(*) as ct from runs where agent=:agent'
@@ -298,13 +319,28 @@ class HyperSearch(object):
                 flat = flat.hypers
             else:
                 # Priority-pick winning attrs. Remember to order attrs in hypers dict best-to-worst.
-                flat = {k: v[0] for k, v in hypers_.items()}
+                flat = self._flat_defaults(hypers_)
                 print('Using in-code flat')
-            # After electing current winning attrs, now random-permute them with some prob - like evolution.
-            # TODO use np.choice(p=[..]) to weight best-to-worst (left-to-right)
+            # After selecting current winning attrs, now random-permute them with some prob - like evolution.
             for k in list(flat):
+                hyper = hypers_[k]
                 if random.random() > .1:
-                    flat[k] = random.choice(hypers_[k])
+                    vals = hyper if type(hyper) is list else hyper['$vals']
+                    flat[k] = random.choice(vals)
+
+        # Ensure dependencies (do after above to make sure the randos have "settled")
+        for k in list(flat):
+            hyper = hypers_[k]
+            if not (type(hyper) is dict and '$requires' in hyper): continue
+            req = hyper['$requires']
+            # Requirement is a string (require the value's not None). TODO handle nested deps.
+            if type(req) is str:
+                if not flat[req]: del flat[k]
+                continue
+            # Requirement is a dict of type {key: value_it_must_equal}. TODO handle multiple deps
+            dep_k, dep_v = list(req.items())[0]
+            if flat[dep_k] != dep_v:
+                del flat[k]
 
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
@@ -325,21 +361,14 @@ class HyperSearch(object):
 
         extra = {k: v for k, v in flat.items() if k in hypers['custom']}
         net_spec = net_specs[extra['net_type']][extra['network']]
+        if extra.get('dueling', False):
+            net_spec = net_spec + [('U',16)]
         network = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
 
-        if self.agent == 'ppo_agent':
-            if flat['baseline_mode'] is None:
-                flat['gae_lambda'] = hydrated['gae_lambda'] = None
-                # TODO need to do anything w/ flat['baseline*'], or will DecisionTree know to ignore when baseline_mode=None?
-                hydrated['baseline'] = None
-                hydrated['baseline_optimizer'] = None
-            else:
-                hydrated['baseline']['network_spec'] = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
-        else:
+        if flat.get('baseline_mode', None):
+            hydrated['baseline']['network_spec'] = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
+        if self.agent != 'ppo_agent':
             hydrated['exploration'] = explorations[flat['exploration']]
-            if flat['memory.type'] == 'prioritized_replay':
-                del flat['memory.random_sampling']
-                del hydrated['memory']['random_sampling']
 
         self.flat = flat
         if self.debug:

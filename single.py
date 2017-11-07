@@ -27,7 +27,7 @@ def main():
         config=Configuration(**hydrated)
     )
 
-    episodes = None if args.use_winner else 350
+    episodes = None if args.use_winner else 300
     # Note: unlike threaded which requires we close the env manually (good), single-runner closes automatically -
     # so need to do run_finished in last episode_finished()
     def ep_fin(r):
