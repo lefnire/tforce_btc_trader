@@ -153,13 +153,13 @@ hypers['agent'] = {
 }
 hypers['memory_agent'] = {
     'batch_size': [8, 32, 64],
-    'memory.type': ['prioritized_replay', 'replay'],
+    'memory.type': ['replay'],  # prioritized_replay - bring back, currently causing "Trying to replace unseen observations: Memory is at capacity and contains only unseen observations"
     'memory.random_sampling': {
         '$requires': {'memory.type': 'replay'},
         '$vals': [True, False]
     },
-    'memory.capacity': [100000, 10000],
-    'first_update': [10000, 1000],
+    'memory.capacity': [100000],
+    'first_update': [10000],
     'update_frequency': [4, 20],
     'repeat_update': [1, 4]
 }
@@ -199,7 +199,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': [.01, .2, .9],
 }
 hypers['q_model'] = {
-    'target_sync_frequency': [10000, 100000],  # This effects speed the most - make it a high value
+    'target_sync_frequency': [10000],  # This effects speed the most - make it a high value
     'target_update_weight': [.001, 1.],
     'double_q_model': [True, False],
     'huber_loss': [None, .5, 1.]

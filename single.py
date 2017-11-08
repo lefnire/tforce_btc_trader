@@ -28,16 +28,11 @@ def main():
     )
 
     episodes = None if args.use_winner else 300
-    # Note: unlike threaded which requires we close the env manually (good), single-runner closes automatically -
-    # so need to do run_finished in last episode_finished()
-    def ep_fin(r):
-        nonlocal episodes
-        if episodes and r.agent.episode >= episodes - 1:
-            hs.run_finished(r.environment.gym.env.episode_results['rewards'])
-            return False
-        return True
     runner = Runner(agent=agent, environment=env)
-    runner.run(episodes=episodes, episode_finished=ep_fin)
+    runner.run(episodes=episodes)
+    hs.run_finished(runner.environment.gym.env.episode_results['rewards'])
+    runner.agent.close()
+    runner.environment.close()
 
 
 if __name__ == '__main__':
