@@ -27,9 +27,10 @@ def main():
         config=Configuration(**hydrated)
     )
 
-    episodes = None if args.use_winner else 300
     runner = Runner(agent=agent, environment=env)
-    runner.run(episodes=episodes)
+    runner.run(episodes=300)
+    if args.use_winner:
+        runner.run(deterministic=bool(args.use_winner))
     hs.run_finished(runner.environment.gym.env.episode_results['rewards'])
     runner.agent.close()
     runner.environment.close()

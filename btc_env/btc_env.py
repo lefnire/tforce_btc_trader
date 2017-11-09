@@ -185,9 +185,9 @@ class BitcoinEnv(gym.Env):
                 first_state = scaler.transform([first_state])[0]
         return first_state
 
-    def _step(self, action):
+    def _step(self, actions):
+        assert type(actions) == dict  # revisit, but for now requiring 'action' and 'deterministic' (which explore & assess respectively)
         if type(self.gym_env.action_space) == spaces.Discrete:
-            if type(action) != list: action = [action, action]
             signals = {
                 0: -40,
                 1: 0,
@@ -195,10 +195,10 @@ class BitcoinEnv(gym.Env):
                 3: 5,
                 4: 20
             }
-            signal = signals[int(action[0])]
-            signal_true = signals[int(action[1])]
+            signal = signals[int(actions['action'])]
+            signal_true = signals[int(actions['deterministic'])]
         else:
-            signal = action[0]
+            signal = actions['action']
             # gdax requires a minimum .01BTC (~$40) sale. As we're learning a probability distribution, don't separate
             # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
             if signal < 0: signal -= 40
@@ -280,6 +280,7 @@ class BitcoinEnv(gym.Env):
     def write_results(self):
         res = self.episode_results
         episode = len(res['cash'])
+        if episode % 30 != 0: return  # TODO temporary
         reward, cash, value = float(self.total_reward_true), float(self.cash), float(self.value)
         avg50 = round(np.mean(res['rewards'][-50:]))
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))

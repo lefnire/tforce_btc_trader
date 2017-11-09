@@ -3,6 +3,7 @@ TODO
 * vals can be dict {5: [{type=dense}]..}
 * separate out & release open-source
 * agent (ppo v dqn) part of randomization, not specified up front
+* use RL for random search
 """
 import tensorflow as tf
 import pdb, json, random
@@ -54,7 +55,7 @@ def custom_net(layers, net_type, **kwargs):
         def __init__(self, **kwargs):
             super(ConvNetwork, self).__init__(layers_spec, **kwargs)
 
-        def tf_apply(self, x, internals=(), return_internals=False, training=None):
+        def tf_apply(self, x, internals, update, return_internals=False):
             image = x['state0']  # 150x7x2-dim, float
             money = x['state1']  # 1x2-dim, float
             x = image
@@ -68,7 +69,7 @@ def custom_net(layers, net_type, **kwargs):
                 if isinstance(self.layers, Dense) and not money_applied:
                     x = tf.concat([x, money], axis=1)
                     money_applied = True
-                x = layer.apply(x, *layer_internals, training=training)
+                x = layer.apply(x, update, *layer_internals)
 
                 if not isinstance(x, tf.Tensor):
                     internal_outputs.extend(x[1])
