@@ -12,25 +12,18 @@ python -c 'from async import restart; restart.delay()'
 tmux attach
 """
 
-import inspect, os, sys, pdb
-
-from celery import Celery
+import inspect, os, sys, pdb, argparse
 from six.moves import xrange, shlex_quote
 
-celery_args = {
-    'url': 'pyamqp://',  # amqp://localhost pyamqp://guest@localhost//
-    'backend': 'rpc://'
-}
-app = Celery('async_mq', **celery_args)
+parser = argparse.ArgumentParser()
+parser.add_argument('-w', '--workers', type=int, default=4, help="Number of worker agents")
+args = parser.parse_args()
 
-# TODO generate random in database here `returning id`, pass id as arg to children
-
-@app.task
-def restart():
-    workers = 4
+if __name__ == '__main__':
+    workers = args.workers  # 4
     shell = '/bin/bash'
     port = 12222
-    sess_name = 'btc'
+    sess_name = 'async'
 
     # Kill first (so nobody's straggling w/ database writes)
     kill_cmds = [
@@ -39,10 +32,6 @@ def restart():
     ]
     print("\n".join(kill_cmds))
     os.system("\n".join(kill_cmds))
-
-    # Setup new experiment (re-import here, else pg connection is killed & get error)
-    from hypersearch import generate_and_save_hypers
-    generate_and_save_hypers(rand=True)
 
     # start up child processes
     target_script = os.path.abspath(inspect.stack()[0][1]).replace('.py', '_child.py')
@@ -56,7 +45,7 @@ def restart():
         cmd_args = [
             # 'CUDA_VISIBLE_DEVICES=',
             sys.executable, target_script,
-            '--num-workers', workers,
+            '--workers', workers,
             '--task-index', index,
         ]
         if ps:

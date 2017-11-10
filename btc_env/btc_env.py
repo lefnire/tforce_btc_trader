@@ -280,7 +280,7 @@ class BitcoinEnv(gym.Env):
     def write_results(self):
         res = self.episode_results
         episode = len(res['cash'])
-        if episode % 30 != 0: return  # TODO temporary
+        if episode % 10 != 0: return  # TODO temporary
         reward, cash, value = float(self.total_reward_true), float(self.cash), float(self.value)
         avg50 = round(np.mean(res['rewards'][-50:]))
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))

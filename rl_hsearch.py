@@ -1,5 +1,5 @@
 import tensorflow as tf
-import pdb, json, random, argparse
+import pdb, json, random, argparse, math
 from pprint import pprint
 import numpy as np
 import pandas as pd
@@ -13,11 +13,6 @@ from tensorforce.agents import agents as agents_dict
 from btc_env.btc_env import BitcoinEnvTforce
 from tensorforce.execution import Runner, ThreadedRunner
 from tensorforce.execution.threaded_runner import WorkerAgent
-
-parser = argparse.ArgumentParser()
-parser.add_argument('-a', '--agent', type=str, default='ppo_agent', help="(ppo_agent|dqn_agent) agent to use")
-parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
-args = parser.parse_args()
 
 
 def layers2net(layers, a, d, l2, l1=0., b=True):
@@ -300,9 +295,9 @@ hypers['custom'] = {
         'type': 'bool',
     },
     'network': {
-        'type': 'int',  # TODO handle this as bounded
+        'type': 'bounded',
         'vals': lookups['nets']['conv2d'],
-        # 'hook': lambda x: 2 if x < 3 else 3 if x < 4 else 4
+        'hook': lambda x: math.floor(x)
     },
     'activation': {
         'type': 'int',
@@ -311,7 +306,7 @@ hypers['custom'] = {
     'dropout': {
         'type': 'bounded',
         'vals': [0., .5],
-        'hook': lambda x: None if x < .01 else x
+        'hook': lambda x: None if x < .1 else x
     },
     'l2': {
         'type': 'bounded',
@@ -355,6 +350,7 @@ class DotDict(object):
 
     def to_dict(self):
         return self._data
+
 
 class HSearchEnv(Environment):
     def __init__(self, agent='ppo_agent'):
@@ -483,7 +479,7 @@ class HSearchEnv(Environment):
         ep_results = runner.environment.gym.env.episode_results
         reward = np.mean(ep_results['rewards'][-n_test:])
         sql = "insert into runs (hypers, reward_avg, rewards, agent) values (:hypers, :reward_avg, :rewards, :agent)"
-        conn.execute(text(sql), hypers=json.dumps(flat), reward_avg=reward, rewards=ep_results['rewards'], agent=args.agent)
+        conn.execute(text(sql), hypers=json.dumps(flat), reward_avg=reward, rewards=ep_results['rewards'], agent='ppo_agent')
         print(flat, f"\nReward={reward}\n\n")
 
         runner.agent.close()
@@ -494,14 +490,18 @@ class HSearchEnv(Environment):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
+    args = parser.parse_args()
+
     network_spec = [
-        {'type': 'dense', 'size': 32},
-        {'type': 'dense', 'size': 32},
+        {'type': 'dense', 'size': 64},
+        {'type': 'dense', 'size': 64},
     ]
     config = Configuration(
         tf_session_config=None,
         batch_size=4,
-        batched_observe=None,
+        batched_observe=0,
         discount=0.
     )
     if args.workers == 1:
