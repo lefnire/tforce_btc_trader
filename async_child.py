@@ -9,6 +9,7 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--workers', type=int, default=4, help="Number of worker agents")
     parser.add_argument('-P', '--parameter-server', action='store_true', help="Parameter server")
     parser.add_argument('-i', '--task-index', type=int, default=0, help="Task index")
+    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
     args = parser.parse_args()
 
     is_main = args.task_index == 0
@@ -41,7 +42,9 @@ if __name__ == '__main__':
             task_index=args.task_index,
             device=device,
             local_model=(not args.parameter_server),
-        )
+        ),
+        saver_spec = dict(directory='saves/model', load=args.load)
+
     )
 
     env = HSearchEnv()

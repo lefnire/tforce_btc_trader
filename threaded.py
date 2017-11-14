@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-a', '--agent', type=str, default='ppo_agent', help="(ppo_agent|dqn_agent) agent to use")
 parser.add_argument('-w', '--workers', type=int, default=5, help="Number of workers")
 parser.add_argument('-g', '--gpu-split', type=int, default=0, help="Num ways we'll split the GPU (how many tabs you running?)")
+parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
 parser.add_argument('--use-winner', type=str, help="(mode|predicted) Don't random-search anymore, use the winner (w/ either statistical-mode or ML-prediced hypers)")
 args = parser.parse_args()
 
@@ -41,23 +42,30 @@ def main():
                 # epsilon_final = np.random.choice([0.5, 0.1, 0.01], p=[0.3, 0.4, 0.3])
                 epsilon_final = [.4, .1][i % 2]
                 conf['exploration']['epsilon_final'] = epsilon_final
-        conf = Configuration(**conf)
 
         if i == 0:
             # let the first agent create the model, then create agents with a shared model
+            conf.update(
+                saver_spec = dict(
+                    directory='saves/model',
+                    seconds=60,
+                    load=args.load
+                )
+            )
             main_agent = agent = agents_dict[args.agent](
                 states_spec=envs[0].states,
                 actions_spec=envs[0].actions,
                 network_spec=network,
-                config=conf
+                config=Configuration(**conf)
             )
         else:
-            conf.default(main_agent.default_config)
+            conf_ = Configuration(**conf)
+            conf_.default(main_agent.default_config)
             agent = WorkerAgent(
                 states_spec=envs[0].states,
                 actions_spec=envs[0].actions,
                 network_spec=network,
-                config=conf,
+                config=conf_,
                 model=main_agent.model
             )
         agents.append(agent)

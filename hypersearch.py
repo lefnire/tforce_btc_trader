@@ -100,7 +100,7 @@ net_specs = {
         #     ('d', 128),
         #     ('d', 64)
         # ],
-        4: [
+        3: [
             ('C', 64, (8, 3), (4, 1)),
             ('C', 96, (4, 2), (2, 1)),
             ('C', 96, (3, 2), 1),
@@ -110,7 +110,7 @@ net_specs = {
             ('d', 128),
             ('d', 64)
         ],
-        3: [
+        2: [
             ('C',32,(8,3),(4,2)),
             ('C',64,(4,2),(2,1)),
             ('C',64,(3,2),1),
@@ -119,7 +119,7 @@ net_specs = {
             ('d',256),
             ('d',128)
         ],
-        2: [
+        1: [
             ('C', 32, (8, 3), (4, 2)),
             ('C', 64, (4, 2), (2, 1)),
             ('C', 64, (3, 2), 1),
@@ -128,7 +128,7 @@ net_specs = {
             ('d',128),
             ('d',64)
         ],
-        1: [  # loser
+        0: [  # loser
             ('C',32,(8,3),(4,2)),
             ('C',64,(4,2),(2,1)),
             ('F'),
@@ -239,7 +239,7 @@ hypers['custom'] = {
     'l2': [1e-3, 1e-4, 1e-5],
     'diff': ['percent', 'absolute'],
     'steps': [2048*3+3],
-    'dueling': [True, False]
+    # 'dueling': [True, False]
 }
 
 
@@ -287,14 +287,18 @@ class HyperSearch(object):
     def get_hypers(self, use_winner=False):
         hypers_ = hypers[self.agent].copy()
         hypers_.update(hypers['custom'])
-        if self.agent == 'ppo_agent': del hypers_['dueling']
+        # if self.agent == 'ppo_agent': del hypers_['dueling']
 
         # We'll return two versions of hypers. Flat (w/ dot-separated keys, for saving in db & computing w/ randomForest)
         # and hydrated (the real hypers to pass to the agent). Generate hydated from flat
         if use_winner:
             # first item in each list is the winner (remember to update these)
-            sql = "select id, hypers from runs where flag=:flag and agent=:agent"
-            winner = conn.execute(text(sql), flag=use_winner, agent=self.agent).fetchone()
+            if use_winner == 'top':
+                sql = "select id, hypers from runs where flag is null and agent=:agent order by reward_avg desc limit 1"
+                winner = conn.execute(text(sql), agent=self.agent).fetchone()
+            else:
+                sql = "select id, hypers from runs where flag=:flag and agent=:agent"
+                winner = conn.execute(text(sql), flag=use_winner, agent=self.agent).fetchone()
             if winner:
                 if self.debug: print('Using winner from database')
                 self.run_id = winner.id

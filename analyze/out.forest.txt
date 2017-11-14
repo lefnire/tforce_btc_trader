@@ -1,0 +1,92 @@
+# Top
+## Avg
+activation                                        elu
+baseline_mode                                  states
+baseline_optimizer.num_steps                       10
+baseline_optimizer.optimizer.learning_rate      1e-06
+batch_size                                         64
+cryptowatch                                     False
+diff                                          percent
+discount                                         0.99
+dropout                                           NaN
+entropy_regularization                           0.01
+gae_lambda                                       0.95
+indicators                                      False
+keep_last_timestep                               True
+l2                                             0.0001
+likelihood_ratio_clipping                        0.01
+net_type                                       conv2d
+network                                             4
+normalize_rewards                                True
+optimization_steps                                 20
+penalize_inaction                                True
+reward                                       -0.15367
+scale                                           False
+step_optimizer.learning_rate                    1e-05
+step_optimizer.type                             nadam
+steps                                            6147
+## > 0
+activation                                          tanh
+baseline_mode                                     states
+baseline_optimizer.num_steps                          12
+baseline_optimizer.optimizer.learning_rate    0.00715369
+batch_size                                           144
+cryptowatch                                          NaN
+diff                                             percent
+discount                                        0.958015
+dropout                                         0.167514
+entropy_regularization                          0.554117
+gae_lambda                                      0.981482
+indicators                                         False
+keep_last_timestep                                 False
+l2                                             0.0132334
+likelihood_ratio_clipping                       0.230079
+net_type                                          conv2d
+network                                                1
+normalize_rewards                                   True
+optimization_steps                                    15
+penalize_inaction                                  False
+reward                                                32
+scale                                              False
+step_optimizer.learning_rate                  0.00685856
+step_optimizer.type                                 adam
+steps                                               6147
+
+# Top[:10]
+## Avg
+    activation baseline_mode  baseline_optimizer.num_steps  baseline_optimizer.optimizer.learning_rate  batch_size cryptowatch      diff  discount   dropout  entropy_regularization  gae_lambda  indicators  keep_last_timestep        l2  likelihood_ratio_clipping net_type  network  normalize_rewards  optimization_steps  penalize_inaction    reward  scale  step_optimizer.learning_rate step_optimizer.type  steps
+189        elu        states                            10                                    0.000001          64       False   percent  0.990000       NaN                0.010000    0.950000       False                True  0.000100                   0.010000   conv2d        4               True                  20               True -0.153670  False                      0.000010               nadam   6147
+116       tanh        states                            12                                    0.007154         144         NaN   percent  0.958015  0.167514                0.554117    0.981482       False               False  0.013233                   0.230079   conv2d        1               True                  15              False -0.942506  False                      0.006859                adam   6147
+194       tanh        states                            20                                    0.000050         256       False   percent  0.990000       NaN                0.010000         NaN       False                True  0.000010                   0.200000   conv2d        4               True                  10              False -1.540294  False                      0.000010                adam   6147
+23        tanh        states                            19                                    0.006170         240         NaN   percent  0.967263  0.182341                0.712909    0.978533       False                True  0.026631                   0.257076   conv2d        0               True                   7               True -1.714073  False                      0.008975                adam   6147
+193       tanh        states                            10                                    0.000010           8       False  absolute  0.970000  0.400000                0.001000         NaN       False                True  0.000100                   0.010000   conv2d        4               True                  10              False -2.438383  False                      0.000050                adam   6147
+33        selu        states                             9                                    0.007313         152         NaN   percent  0.962388  0.110913                0.553234    0.950315       False               False  0.046175                   0.811944   conv2d        2               True                  11              False -2.830739  False                      0.003167               nadam   6147
+144       relu        states                            14                                    0.001493         144         NaN   percent  0.977122  0.138515                0.757140    0.951978       False               False  0.072438                   0.235323   conv2d        2               True                   7              False -4.424634  False                      0.006625                adam   6147
+107        elu        states                            12                                    0.004006         184         NaN   percent  0.967435  0.289011                0.651417    0.958439       False               False  0.012967                   0.758796   conv2d        1               True                   5              False -4.825592  False                      0.001011               nadam   6147
+97        tanh        states                             9                                    0.005676         240         NaN  absolute  0.984079  0.480775                0.522593    0.951782       False               False  0.019242                   0.716937   conv2d        2               True                   6               True -5.429701  False                      0.006021               nadam   6147
+50        selu        states                            12                                    0.009789         160         NaN   percent  0.980246  0.256871                0.132881    0.973306       False               False  0.074747                   0.687073   conv2d        2               True                   6               True -5.602475  False                      0.007510               nadam   6147
+## > 0
+    activation baseline_mode  baseline_optimizer.num_steps  baseline_optimizer.optimizer.learning_rate  batch_size cryptowatch      diff  discount   dropout  entropy_regularization  gae_lambda  indicators  keep_last_timestep        l2  likelihood_ratio_clipping net_type  network  normalize_rewards  optimization_steps  penalize_inaction  reward  scale  step_optimizer.learning_rate step_optimizer.type  steps
+116       tanh        states                            12                                    0.007154         144         NaN   percent  0.958015  0.167514                0.554117    0.981482       False               False  0.013233                   0.230079   conv2d        1               True                  15              False      32  False                      0.006859                adam   6147
+171       relu        states                            20                                    0.000050          64       False   percent  0.990000  0.400000                0.100000    0.990000       False                True  0.000010                   0.010000   conv2d        4               True                  10               True      31  False                      0.000050               nadam   6147
+152        elu        states                            13                                    0.009354         136         NaN   percent  0.954255  0.214363                0.324800    0.973227       False               False  0.061720                   0.164243   conv2d        0               True                   8              False      30  False                      0.007173               nadam   6147
+91        selu        states                            16                                    0.006873         144         NaN   percent  0.975006  0.411447                0.244623         NaN       False               False  0.017500                   0.619128   conv2d        1               True                  15               True      30  False                      0.006123               nadam   6147
+193       tanh        states                            10                                    0.000010           8       False  absolute  0.970000  0.400000                0.001000         NaN       False                True  0.000100                   0.010000   conv2d        4               True                  10              False      29  False                      0.000050                adam   6147
+37        tanh        states                            19                                    0.003437         128         NaN  absolute  0.955264  0.438573                0.581633    0.973821       False                True  0.074297                   0.214264   conv2d        2               True                  15              False      29  False                      0.005326               nadam   6147
+100       relu        states                            10                                    0.006352          56         NaN  absolute  0.952203  0.125545                0.661532    0.959227       False               False  0.052750                   0.325581   conv2d        2               True                  13              False      29  False                      0.004775               nadam   6147
+144       relu        states                            14                                    0.001493         144         NaN   percent  0.977122  0.138515                0.757140    0.951978       False               False  0.072438                   0.235323   conv2d        2               True                   7              False      28  False                      0.006625                adam   6147
+175       tanh        states                            20                                    0.000001         128       False  absolute  0.990000  0.400000                0.001000         NaN       False                True  0.001000                   0.010000   conv2d        4               True                  20               True      28  False                      0.000010                adam   6147
+107        elu        states                            12                                    0.004006         184         NaN   percent  0.967435  0.289011                0.651417    0.958439       False               False  0.012967                   0.758796   conv2d        1               True                   5              False      28  False                      0.001011               nadam   6147
+
+# Mode
+## Avg
+  activation baseline_mode baseline_optimizer.num_steps  baseline_optimizer.optimizer.learning_rate  batch_size cryptowatch     diff discount   dropout entropy_regularization  gae_lambda indicators keep_last_timestep      l2 likelihood_ratio_clipping net_type network normalize_rewards  optimization_steps penalize_inaction    reward  scale step_optimizer.learning_rate step_optimizer.type steps
+0       tanh        states                           12                                    0.000001       144.0       False  percent     0.99  0.110913                   0.01    0.950000      False              False  0.0001                      0.01   conv2d       2              True                 6.0             False -5.602475  False                        1e-05                adam  6147
+1          -             -                            -                                    0.000010       240.0           -        -        -  0.138515                      -    0.950315          -                  -       -                         -        -       -                 -                 7.0                 - -5.429701      -                            -               nadam     -
+## >0
+  activation baseline_mode  baseline_optimizer.num_steps  baseline_optimizer.optimizer.learning_rate batch_size cryptowatch     diff discount dropout entropy_regularization  gae_lambda indicators keep_last_timestep       l2 likelihood_ratio_clipping net_type  network normalize_rewards optimization_steps penalize_inaction  reward  scale step_optimizer.learning_rate step_optimizer.type steps
+0       tanh        states                          10.0                                    0.000001        144       False  percent     0.99     0.4                  0.001    0.951978      False              False  0.00001                      0.01   conv2d      1.0              True                 15             False    28.0  False                        5e-05               nadam  6147
+1          -             -                          12.0                                    0.000010          -           -        -        -       -                      -    0.958439          -                  -  0.00010                         -        -      2.0                 -                  -                 -    29.0      -                            -                   -     -
+
+--- Feature Importances ---
+step_optimizer.learning_rate: 0.1059, entropy_regularization: 0.094, l2: 0.0883, likelihood_ratio_clipping: 0.0834, discount: 0.077, gae_lambda: 0.0685, batch_size: 0.0654, dropout: 0.0654, baseline_optimizer.optimizer.learning_rate: 0.0638, baseline_optimizer.num_steps: 0.0606, optimization_steps: 0.0492, network: 0.0353, activation_tanh: 0.0238, activation_selu: 0.0209, step_optimizer.type_adam: 0.0158, diff_absolute: 0.0154, diff_percent: 0.0142, keep_last_timestep: 0.0131, activation_elu: 0.0114, activation_relu: 0.0113, step_optimizer.type_nadam: 0.0097, penalize_inaction: 0.0078

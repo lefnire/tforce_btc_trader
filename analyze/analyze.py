@@ -44,12 +44,12 @@ def get_clean_data(onehot=True, df=None):
 
         # Expand the hypers dict to individual columns. Use more flexible avg
         reward_avg = pd.DataFrame([
-            {**d.hypers, 'reward': np.mean(d.rewards[-50:])}
+            {**d.hypers, 'reward': np.mean(d.rewards[-20:])}
             for d in dirty.itertuples()
             if len(d.rewards) > 150
         ])
         gt0 = pd.DataFrame([
-            {**d.hypers, 'reward': (np.array(d.rewards[-50:]) > 0).sum()}
+            {**d.hypers, 'reward': (np.array(d.rewards[-20:]) > 0).sum()}
             for d in dirty.itertuples()
             if len(d.rewards) > 150
         ])
@@ -117,9 +117,9 @@ def get_clean_data(onehot=True, df=None):
             clean = pd.concat([clean.drop(cat, 1), ohc], axis=1)
 
     # # Drop columns that only have one value
-    # for col in clean.columns:
-    #     if len(clean[col].unique()) == 1:
-    #         clean.drop(col, 1, inplace=True)
+    for col in clean.columns:
+        if len(clean[col].unique()) == 1:
+            clean.drop(col, 1, inplace=True)
     clean.fillna(0, inplace=True)
 
     # Sort columns by column-name. This way we can be sure when we predict later w/ different data, the columns align.

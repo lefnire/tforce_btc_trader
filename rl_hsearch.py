@@ -492,13 +492,14 @@ class HSearchEnv(Environment):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
+    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
     args = parser.parse_args()
 
     network_spec = [
         {'type': 'dense', 'size': 64},
         {'type': 'dense', 'size': 64},
     ]
-    config = Configuration(
+    config = dict(
         tf_session_config=None,
         batch_size=4,
         batched_observe=0,
@@ -510,7 +511,7 @@ def main():
             states_spec=env.states,
             actions_spec=env.actions,
             network_spec=network_spec,
-            config=config
+            config=Configuration(**config)
         )
         runner = Runner(agent=agent, environment=env)
         runner.run()  # forever (the env will cycle internally)
@@ -521,20 +522,28 @@ def main():
         for i in range(args.workers):
             envs.append(HSearchEnv())
             if i == 0:
+                config_ = config.copy()
+                config_.update(
+                    saver_spec=dict(
+                        directory='saves/model',
+                        load=args.load
+                    )
+                )
                 # let the first agent create the model, then create agents with a shared model
                 main_agent = agent = agents_dict['ppo_agent'](
                     states_spec=envs[0].states,
                     actions_spec=envs[0].actions,
                     network_spec=network_spec,
-                    config=config
+                    config=Configuration(**config_)
                 )
             else:
-                config.default(main_agent.default_config)
+                config_ = Configuration(**config)
+                config_.default(main_agent.default_config)
                 agent = WorkerAgent(
                     states_spec=envs[0].states,
                     actions_spec=envs[0].actions,
                     network_spec=network_spec,
-                    config=config,
+                    config=config_,
                     model=main_agent.model
                 )
             agents.append(agent)
