@@ -1,10 +1,8 @@
 import argparse, time, pdb
 import numpy as np
 import tensorflow as tf
-from tensorforce import Configuration
-from tensorforce.agents import agents as agents_dict
-from tensorforce.execution import ThreadedRunner
-from tensorforce.execution.threaded_runner import WorkerAgent
+from tensorforce.agents import agents as agents_dict, Agent
+from tensorforce.execution.threaded_runner import ThreadedRunner, WorkerAgentGenerator
 from btc_env.btc_env import BitcoinEnvTforce
 from hypersearch import HyperSearch
 
@@ -22,8 +20,9 @@ def main():
     agents, envs = [], []
     hs = HyperSearch(args.agent)
     flat, hydrated, network = hs.get_hypers(use_winner=args.use_winner)
+    hydrated['saver_spec'] = dict(directory='saves/model', load=args.load)
     if args.gpu_split:
-        hydrated['tf_session_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/args.gpu_split))
+        hydrated['sess_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/args.gpu_split))
 
     for i in range(args.workers):
         write_graph = False  # i == 0 and args.use_winner
@@ -31,42 +30,23 @@ def main():
         env = BitcoinEnvTforce(name=name, hypers=flat, write_graph=write_graph)
         envs.append(env)
 
-        conf = hydrated.copy()
-        # optionally overwrite epsilon final values
-        if "exploration" in conf and "epsilon" in conf['exploration']['type']:
-            # epsilon annealing is based on the global step so divide by the total workers
-            # conf.exploration.epsilon_timesteps = conf.exploration.epsilon_timesteps // WORKERS
-            conf['exploration']['epsilon_timesteps'] = conf['exploration']['epsilon_timesteps'] // 2
-            if i != 0:  # for the worker which logs, let it expire
-                # epsilon final values are [0.5, 0.1, 0.01] with probabilities [0.3, 0.4, 0.3]
-                # epsilon_final = np.random.choice([0.5, 0.1, 0.01], p=[0.3, 0.4, 0.3])
-                epsilon_final = [.4, .1][i % 2]
-                conf['exploration']['epsilon_final'] = epsilon_final
+        config = hydrated.copy()
 
         if i == 0:
             # let the first agent create the model, then create agents with a shared model
-            conf.update(
-                saver_spec = dict(
-                    directory='saves/model',
-                    seconds=60,
-                    load=args.load
-                )
-            )
-            main_agent = agent = agents_dict[args.agent](
+            agent = main_agent = agents_dict[args.agent](
                 states_spec=envs[0].states,
                 actions_spec=envs[0].actions,
                 network_spec=network,
-                config=Configuration(**conf)
+                **config
             )
         else:
-            conf_ = Configuration(**conf)
-            conf_.default(main_agent.default_config)
-            agent = WorkerAgent(
+            agent = WorkerAgentGenerator(agents_dict[args.agent])(
                 states_spec=envs[0].states,
                 actions_spec=envs[0].actions,
                 network_spec=network,
-                config=conf_,
-                model=main_agent.model
+                model=main_agent.model,
+                **config
             )
         agents.append(agent)
 

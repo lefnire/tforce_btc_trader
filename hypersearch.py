@@ -350,7 +350,7 @@ class HyperSearch(object):
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
                 # 'tf_session_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
-                'tf_session_config': None,
+                'sess_config': None,
                 'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
                 'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': 'nadam'}},

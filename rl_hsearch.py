@@ -8,11 +8,10 @@ from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
 from data import conn
 from tensorforce.environments import Environment
-from tensorforce import Configuration
 from tensorforce.agents import agents as agents_dict
 from btc_env.btc_env import BitcoinEnvTforce
 from tensorforce.execution import Runner, ThreadedRunner
-from tensorforce.execution.threaded_runner import WorkerAgent
+from tensorforce.execution.threaded_runner import WorkerAgentGenerator
 
 
 def layers2net(layers, a, d, l2, l1=0., b=True):
@@ -429,14 +428,14 @@ class HSearchEnv(Environment):
 
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
-                # 'tf_session_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
-                'tf_session_config': None,
+                # 'sess_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
+                'sess_config': None,
                 'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
                 'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': 'nadam'}},
             })
         else:
-            hydrated = DotDict({'tf_session_config': None})
+            hydrated = DotDict({'sess_config': None})
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
         for k, v in flat.items():
@@ -467,7 +466,7 @@ class HSearchEnv(Environment):
             states_spec=env.states,
             actions_spec=env.actions,
             network_spec=network,
-            config=Configuration(**hydrated)
+            **hydrated
         )
 
         # n_train, n_test = 3, 2
@@ -500,7 +499,7 @@ def main():
         {'type': 'dense', 'size': 64},
     ]
     config = dict(
-        tf_session_config=None,
+        sess_config=None,
         batch_size=4,
         batched_observe=0,
         discount=0.
@@ -511,40 +510,33 @@ def main():
             states_spec=env.states,
             actions_spec=env.actions,
             network_spec=network_spec,
-            config=Configuration(**config)
+            **config
         )
         runner = Runner(agent=agent, environment=env)
         runner.run()  # forever (the env will cycle internally)
     else:
         main_agent = None
         agents, envs = [], []
-
+        config.update(
+            saver_spec=dict(directory='saves/model', load=args.load)
+        )
         for i in range(args.workers):
             envs.append(HSearchEnv())
             if i == 0:
-                config_ = config.copy()
-                config_.update(
-                    saver_spec=dict(
-                        directory='saves/model',
-                        load=args.load
-                    )
-                )
                 # let the first agent create the model, then create agents with a shared model
                 main_agent = agent = agents_dict['ppo_agent'](
                     states_spec=envs[0].states,
                     actions_spec=envs[0].actions,
                     network_spec=network_spec,
-                    config=Configuration(**config_)
+                    **config
                 )
             else:
-                config_ = Configuration(**config)
-                config_.default(main_agent.default_config)
-                agent = WorkerAgent(
+                agent = WorkerAgentGenerator(agents_dict['ppo_agent'])(
                     states_spec=envs[0].states,
                     actions_spec=envs[0].actions,
                     network_spec=network_spec,
-                    config=config_,
                     model=main_agent.model
+                    **config,
                 )
             agents.append(agent)
 

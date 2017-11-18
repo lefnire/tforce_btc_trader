@@ -1,7 +1,7 @@
 import argparse
 import tensorflow as tf
 from tensorforce.execution import Runner
-from tensorforce import Configuration, agents as agents_dict
+from tensorforce import agents as agents_dict
 from rl_hsearch import HSearchEnv
 
 if __name__ == '__main__':
@@ -29,8 +29,8 @@ if __name__ == '__main__':
         {'type': 'dense', 'size': 64},
     ]
 
-    config = Configuration(
-        tf_session_config=tf.ConfigProto(
+    config = dict(
+        sess_config=tf.ConfigProto(
             gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.75/args.workers)
         ),
         batch_size=4,
@@ -53,7 +53,7 @@ if __name__ == '__main__':
         states_spec=env.states,
         actions_spec=env.actions,
         network_spec=network_spec,
-        config=config
+        **config
     )
 
     runner = Runner(
