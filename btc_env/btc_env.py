@@ -19,7 +19,7 @@ import pdb
 ALLOW_SEED = False
 
 import data
-from data import conn
+from data import engine
 NCOL = len(data.columns)
 
 try:
@@ -60,6 +60,8 @@ class BitcoinEnv(gym.Env):
         self.log_states = log_states
         self.episode_results = {'cash': [], 'values': [], 'rewards': []}
 
+        self.conn = engine.connect()
+
         # Action space
         if re.search('(dqn|ppo|a3c)', name, re.IGNORECASE):
             gym_env.action_space = spaces.Discrete(5)
@@ -90,10 +92,10 @@ class BitcoinEnv(gym.Env):
             self.signals_placeholder = tf.placeholder(tf.float16, shape=(None,))
             tf.summary.histogram('buy_sell_signals', self.signals_placeholder, collections=['btc_env'])
             self.merged_summaries = tf.summary.merge_all('btc_env')
-            data.wipe_rows(name)
+            data.wipe_rows(self.conn, name)
 
     def __str__(self): return 'BitcoinEnv'
-    def _close(self): pass
+    def _close(self): self.conn.close()
     def _render(self, mode='human', close=False): pass
     def _seed(self, seed=None):
         if not ALLOW_SEED: return
@@ -167,8 +169,8 @@ class BitcoinEnv(gym.Env):
         self.total_reward = self.total_reward_true = 0
 
         # Fetch random slice of rows from the database (based on limit)
-        offset = random.randint(0, data.count_rows() - self.hypers.steps)
-        df = data.db_to_dataframe(limit=self.hypers.steps, offset=offset)
+        offset = random.randint(0, data.count_rows(self.conn) - self.hypers.steps)
+        df = data.db_to_dataframe(self.conn, limit=self.hypers.steps, offset=offset)
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self._pct_change(self.prices)
 
@@ -255,7 +257,7 @@ class BitcoinEnv(gym.Env):
         if self.log_states:
             # create table if not exists observations (obs double precision[])
             obs = [float(o) for o in next_state]
-            conn.execute(text("insert into observations (obs) values (:obs)"), obs=obs)
+            self.conn.execute(text("insert into observations (obs) values (:obs)"), obs=obs)
 
         if self.hypers.scale:
             next_state = scaler.transform([next_state])[0]
@@ -316,7 +318,7 @@ class BitcoinEnv(gym.Env):
             insert into episodes (episode, reward, cash, value, agent_name, steps, y, signals) 
             values (:episode, :reward, :cash, :value, :agent_name, :steps, :y, :signals)
         """)
-        conn.execute(q, episode=episode, reward=reward, cash=cash, value=value,
+        self.conn.execute(q, episode=episode, reward=reward, cash=cash, value=value,
                      agent_name=self.agent_name, steps=self.timestep, y=y, signals=signals)
 
 
@@ -332,8 +334,10 @@ def scale_features_and_save():
     If we want to scale/normalize or min/max features (states), first run the Env in log_states=True mode for a while,
     then call this function manually from python shell
     """
+    conn = engine.connect()
     observations = conn.execute('select obs from observations').fetchall()
     observations = [o[0] for o in observations]
+    conn.close()
 
     mat = np.array(observations)
     min_max = [np.floor(np.amin(mat, axis=0)), np.ceil(np.amax(mat, axis=0))]

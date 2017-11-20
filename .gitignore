@@ -4,3 +4,4 @@ __pycache__
 saves/
 plt/
 logs_async/
+config.json

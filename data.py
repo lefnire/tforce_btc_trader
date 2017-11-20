@@ -1,10 +1,14 @@
+import time, json
 import pandas as pd
 from sqlalchemy import create_engine
 
-DB = "kaggle"
+config_json = json.load(open('config.json'))
+DB = config_json['DB_URL'].split('/')[-1]
+engine = create_engine(config_json['DB_URL'])
 
-engine = create_engine("postgres://lefnire:lefnire@localhost:5432/{}".format(DB))
-conn = engine.connect()
+# From connecting source file, import engine and run the following code. Need each connection to be separate
+# (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
+# conn = engine.connect()
 
 if DB == 'coins':
     tables = ['okcoin_btccny', 'gdax_btcusd']
@@ -32,7 +36,7 @@ elif DB == 'kaggle':
     predict_col = 'bitstamp_close'
 
 
-def wipe_rows(agent_name):
+def wipe_rows(agent_name, conn):
     conn.execute("""
     create table if not exists episodes
     (
@@ -59,17 +63,23 @@ def set_mode(m):
 
 row_count = 0
 train_test_split = 0
-def count_rows():
-    global row_count, train_test_split
-    if row_count: return row_count  # cached
-    row_count = db_to_dataframe(just_count=True)
+already_asked = False
+def count_rows(conn):
+    global row_count, train_test_split, already_asked
+    if row_count:
+        return row_count  # cached
+    elif already_asked:
+        time.sleep(5)  # give the first go a chance to cache a value
+    already_asked = True
+
+    row_count = db_to_dataframe(conn, just_count=True)
     train_test_split = int(row_count * .8)
     print('mode: ', mode, ' row_count: ', row_count, ' split: ', train_test_split)
     row_count = train_test_split if mode == 'TRAIN' else row_count - train_test_split
     return row_count
 
 
-def _db_to_dataframe_ohlc(limit='ALL', offset=0, just_count=False):
+def _db_to_dataframe_ohlc(conn, limit='ALL', offset=0, just_count=False):
     # 600, 300, 1800
     if just_count:
         select = 'select count(*) over () '
@@ -93,7 +103,7 @@ def _db_to_dataframe_ohlc(limit='ALL', offset=0, just_count=False):
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
 
-def _db_to_dataframe_main(limit='ALL', offset=0, just_count=False):
+def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
     if just_count:
         query = 'select count(*) over ()'
@@ -129,13 +139,13 @@ def _db_to_dataframe_main(limit='ALL', offset=0, just_count=False):
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
 
-def db_to_dataframe(limit='ALL', offset=0, just_count=False):
+def db_to_dataframe(conn, limit='ALL', offset=0, just_count=False):
     global mode, train_test_split
     offset = offset + train_test_split if mode == 'TEST' else offset
-    return _db_to_dataframe_ohlc(limit=limit, offset=offset, just_count=just_count) if DB == 'coins2'\
-        else _db_to_dataframe_main(limit=limit, offset=offset, just_count=just_count)
+    return _db_to_dataframe_ohlc(conn, limit=limit, offset=offset, just_count=just_count) if DB == 'coins2'\
+        else _db_to_dataframe_main(conn, limit=limit, offset=offset, just_count=just_count)
 
-def setup_runs_table():
+def setup_runs_table(conn):
     conn.execute("""
         --create type if not exists run_flag as enum ('random', 'winner');
         create table if not exists runs

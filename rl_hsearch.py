@@ -1,14 +1,15 @@
 import tensorflow as tf
-import pdb, json, random, argparse, math
+import pdb, json, random, argparse, math, time
 from pprint import pprint
 import numpy as np
 import pandas as pd
 from sqlalchemy.sql import text
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
-from data import conn
+from data import engine
 from tensorforce.environments import Environment
 from tensorforce.agents import agents as agents_dict
+from data import engine
 from btc_env.btc_env import BitcoinEnvTforce
 from tensorforce.execution import Runner, ThreadedRunner
 from tensorforce.execution.threaded_runner import WorkerAgentGenerator
@@ -365,6 +366,8 @@ class HSearchEnv(Environment):
         self.hardcoded = {}
         self.actions_ = {}
 
+        self.conn = engine.connect()
+
         for k, v in hypers_.items():
             if type(v) != dict:
                 self.hardcoded[k] = v
@@ -381,7 +384,7 @@ class HSearchEnv(Environment):
         return 'HSearchEnv'
 
     def close(self):
-        pass
+        self.conn.close()
 
     @property
     def actions(self):
@@ -439,7 +442,7 @@ class HSearchEnv(Environment):
                 del flat[k]
 
         sess_config = None if self.workers == 1 else\
-            tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.85/self.workers))
+            tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/self.workers))
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
                 'sess_config': sess_config,
@@ -490,7 +493,7 @@ class HSearchEnv(Environment):
         ep_results = runner.environment.gym.env.episode_results
         reward = np.mean(ep_results['rewards'][-n_test:])
         sql = "insert into runs (hypers, reward_avg, rewards, agent) values (:hypers, :reward_avg, :rewards, :agent)"
-        conn.execute(text(sql), hypers=json.dumps(flat), reward_avg=reward, rewards=ep_results['rewards'], agent='ppo_agent')
+        self.conn.execute(text(sql), hypers=json.dumps(flat), reward_avg=reward, rewards=ep_results['rewards'], agent='ppo_agent')
         print(flat, f"\nReward={reward}\n\n")
 
         runner.agent.close()
@@ -562,10 +565,15 @@ def main_tf():
 
 
 def main_gp():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
+    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
+    args = parser.parse_args()
+
     import GPyOpt
-    hsearch = HSearchEnv()
+    hsearch_tmp = HSearchEnv()  # instantiate just to get actions (get them from hypers above?)
     domain = []
-    for k, axn in hsearch.actions.items():
+    for k, axn in hsearch_tmp.actions.items():
         d = {'name': k, 'type': 'discrete'}
         if axn['type'] == 'bool':
             d['domain'] = (0, 1)
@@ -575,9 +583,11 @@ def main_gp():
             d['type'] = 'continuous'
             d['domain'] = (axn['min_value'], axn['max_value'])
         domain.append(d)
+    hsearch_tmp.close()
 
     def sample_loss(params):
         actions = {}
+        hsearch = HSearchEnv(workers=args.workers)
         for i, axn in enumerate(domain):
             k, v = domain[i]['name'], params[0][i]
             h_type = hsearch.hypers[k]['type']
@@ -585,12 +595,15 @@ def main_gp():
                 else int(v) if h_type == 'int'\
                 else float(v)
         _, _, reward = hsearch.execute(actions)
+        hsearch.close()
         return reward
 
     opt = GPyOpt.methods.BayesianOptimization(
         f=sample_loss,
         domain=domain,
         maximize=True,
+        batch_size=args.workers,
+        num_cores=args.workers
     )
 
     opt.run_optimization(max_iter=50)
