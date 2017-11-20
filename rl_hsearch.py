@@ -88,10 +88,12 @@ lookups['epsilon_decay'] = {
     "epsilon_timesteps": 1e9
 }
 lookups['nets'] = {
-    # 'lstm': {  # TODO revisit network types (how to flatten into agent_hypers?)
-    #     5: [('d', 256), ('L', 512), ('L', 512), ('L', 512), ('d', 256), ('d', 128)],
-    #     4: [('d', 128), ('L', 256), ('L', 256), ('d', 192), ('d', 128)]
-    # },
+    'lstm': {
+        3: [('d', 256), ('L', 512), ('L', 512), ('L', 512), ('d', 256), ('d', 128)],
+        2: [('d', 128), ('L', 256), ('L', 256), ('d', 192), ('d', 128)],
+        1: [('d', 64), ('L', 128), ('L', 128), ('d', 64), ('d', 32)],
+        0: [('d', 32), ('L', 64), ('L', 64), ('d', 32)]
+    },
     'conv2d': {
         # 5: [
         #     ('C', 64, (8, 3), (4, 1)),
@@ -406,6 +408,10 @@ class HSearchEnv(Environment):
     def _key2val(self, k, v):
         hyper = self.hypers[k]
         if type(hyper) == dict and type(hyper.get('vals', None)) == dict:
+            # FIXME special case, refactor
+            if k == 'network':
+                return lookups['nets'][self.flat['net_type']][v]
+
             return hyper['vals'][v]
         return v
 
@@ -415,6 +421,7 @@ class HSearchEnv(Environment):
     def execute(self, actions):
         flat = {k: self._action2val(k, v) for k, v in actions.items()}
         flat.update(self.hardcoded)
+        self.flat = flat
 
         # Ensure dependencies (do after above to make sure the randos have "settled")
         for k in list(flat):
@@ -574,10 +581,9 @@ def main_gp():
         for i, axn in enumerate(domain):
             k, v = domain[i]['name'], params[0][i]
             h_type = hsearch.hypers[k]['type']
-            # typecast (since all floats) and numpy-wrap, since HSearch unpacks with value.item() (ala TensorForce)
-            actions[k] = np.bool(v) if h_type == 'bool'\
-                else np.int(v) if h_type == 'int'\
-                else np.float32(v)
+            actions[k] = bool(v) if h_type == 'bool'\
+                else int(v) if h_type == 'int'\
+                else float(v)
         _, _, reward = hsearch.execute(actions)
         return reward
 

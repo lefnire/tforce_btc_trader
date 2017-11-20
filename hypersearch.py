@@ -1,5 +1,6 @@
 """
 TODO
+DEPRECATED remove this file and depend only on rl_hsearch.py
 * vals can be dict {5: [{type=dense}]..}
 * separate out & release open-source
 * agent (ppo v dqn) part of randomization, not specified up front
