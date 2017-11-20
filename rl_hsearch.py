@@ -352,10 +352,11 @@ class DotDict(object):
 
 
 class HSearchEnv(Environment):
-    def __init__(self, agent='ppo_agent'):
+    def __init__(self, agent='ppo_agent', workers=1):
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
         if agent == 'ppo_agent': del hypers_['dueling']
+        self.workers = workers  # careful, GPU-splitting may be handled in a calling class already
 
         self.agent = agent
         self.hypers = hypers_
@@ -389,6 +390,10 @@ class HSearchEnv(Environment):
         return {'shape': 1, 'type': 'float'}
 
     def _action2val(self, k, v):
+        # from TensorForce, v is a numpy object - unpack. From Bayes, it's a primitive. TODO handle better
+        try: v = v.item()
+        except Exception: pass
+
         hyper = self.hypers[k]
         if 'hook' in hyper:
             v = hyper['hook'](v)
@@ -408,7 +413,7 @@ class HSearchEnv(Environment):
         return [1.]
 
     def execute(self, actions):
-        flat = {k: self._action2val(k, v.item()) for k, v in actions.items()}
+        flat = {k: self._action2val(k, v) for k, v in actions.items()}
         flat.update(self.hardcoded)
 
         # Ensure dependencies (do after above to make sure the randos have "settled")
@@ -426,23 +431,23 @@ class HSearchEnv(Environment):
             if flat[dep_k] != dep_v:
                 del flat[k]
 
+        sess_config = None if self.workers == 1 else\
+            tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.85/self.workers))
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
-                # 'sess_config': tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.2)),
-                'sess_config': None,
+                'sess_config': sess_config,
                 'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
                 'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': 'nadam'}},
             })
         else:
-            hydrated = DotDict({'sess_config': None})
+            hydrated = DotDict({'sess_config': sess_config})
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
         for k, v in flat.items():
             if k not in hypers['custom']:
                 hydrated[k] = self._key2val(k, v)
         hydrated = hydrated.to_dict()
-
 
         extra = {k: self._key2val(k, v) for k, v in flat.items() if k in hypers['custom']}
         net_spec = extra['network']
@@ -469,7 +474,7 @@ class HSearchEnv(Environment):
             **hydrated
         )
 
-        # n_train, n_test = 3, 2
+        # n_train, n_test = 2, 1
         n_train, n_test = 230, 20
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
@@ -488,7 +493,7 @@ class HSearchEnv(Environment):
         return next_state, terminal, reward
 
 
-def main():
+def main_tf():
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
     parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
@@ -549,5 +554,42 @@ def main():
         )
 
 
+def main_gp():
+    import GPyOpt
+    hsearch = HSearchEnv()
+    domain = []
+    for k, axn in hsearch.actions.items():
+        d = {'name': k, 'type': 'discrete'}
+        if axn['type'] == 'bool':
+            d['domain'] = (0, 1)
+        elif axn['type'] == 'int':
+            d['domain'] = [i for i in range(axn['num_actions'])]
+        elif axn['type'] == 'float':
+            d['type'] = 'continuous'
+            d['domain'] = (axn['min_value'], axn['max_value'])
+        domain.append(d)
+
+    def sample_loss(params):
+        actions = {}
+        for i, axn in enumerate(domain):
+            k, v = domain[i]['name'], params[0][i]
+            h_type = hsearch.hypers[k]['type']
+            # typecast (since all floats) and numpy-wrap, since HSearch unpacks with value.item() (ala TensorForce)
+            actions[k] = np.bool(v) if h_type == 'bool'\
+                else np.int(v) if h_type == 'int'\
+                else np.float32(v)
+        _, _, reward = hsearch.execute(actions)
+        return reward
+
+    opt = GPyOpt.methods.BayesianOptimization(
+        f=sample_loss,
+        domain=domain,
+        maximize=True,
+    )
+
+    opt.run_optimization(max_iter=50)
+    opt.plot_convergence()
+
+
 if __name__ == '__main__':
-    main()
+    main_gp()
