@@ -567,10 +567,11 @@ def main_tf():
 def main_gp():
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
-    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
     args = parser.parse_args()
 
     import GPyOpt
+
+    # Map TensorForce actions to GPyOpt-compatible `domain`
     hsearch_tmp = HSearchEnv()  # instantiate just to get actions (get them from hypers above?)
     domain = []
     for k, axn in hsearch_tmp.actions.items():
@@ -583,13 +584,39 @@ def main_gp():
             d['type'] = 'continuous'
             d['domain'] = (axn['min_value'], axn['max_value'])
         domain.append(d)
+
+    # Fetch existing runs from database to pre-train GP
+    conn = engine.connect()
+    runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
+    X, Y = [], []
+    for run in runs:
+        x = []
+        # Reverse the value stored to it's index (a float that GP expects). TODO save as separate `reverse_lookup()`?
+        for i, axn in enumerate(domain):
+            from_db = run.hypers[axn['name']]
+            hyper = hsearch_tmp.hypers[axn['name']]
+            idx = from_db  # sane default, replace as-needed basis
+            if hyper['type'] == 'int':
+                if type(hyper['vals']) == list:
+                    idx = hyper['vals'].index(from_db)
+                    # If dict, from_db is already key (right?)
+                    # elif type(hyper['vals']) == dict: idx = from_db
+                    # else: raise Exception('hyper[type=int] not list or dict')
+            elif hyper['type'] == 'bool':
+                idx = float(from_db)
+            if not idx: idx = 0  # some are None. FIXME?
+            x.append(idx)
+        X.append(x)
+        Y.append([run.reward_avg])
+    conn.close()
     hsearch_tmp.close()
 
-    def sample_loss(params):
+    # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
+    def loss_fn(params):
         actions = {}
         hsearch = HSearchEnv(workers=args.workers)
         for i, axn in enumerate(domain):
-            k, v = domain[i]['name'], params[0][i]
+            k, v = axn['name'], params[0][i]
             h_type = hsearch.hypers[k]['type']
             actions[k] = bool(v) if h_type == 'bool'\
                 else int(v) if h_type == 'int'\
@@ -598,12 +625,15 @@ def main_gp():
         hsearch.close()
         return reward
 
+    # Run
     opt = GPyOpt.methods.BayesianOptimization(
-        f=sample_loss,
+        f=loss_fn,
         domain=domain,
         maximize=True,
         batch_size=args.workers,
-        num_cores=args.workers
+        num_cores=args.workers,
+        X=np.array(X),
+        Y=np.array(Y)
     )
 
     opt.run_optimization(max_iter=50)
