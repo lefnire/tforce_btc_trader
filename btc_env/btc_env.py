@@ -188,6 +188,7 @@ class BitcoinEnv(gym.Env):
         return first_state
 
     def _step(self, actions):
+        if type(actions) == list and len(actions) == 2: actions = {'action': actions[0], 'deterministic': actions[1]}  # FIXME why is this happening?
         assert type(actions) == dict  # revisit, but for now requiring 'action' and 'deterministic' (which explore & assess respectively)
         if type(self.gym_env.action_space) == spaces.Discrete:
             signals = {

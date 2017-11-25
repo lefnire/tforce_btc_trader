@@ -287,9 +287,11 @@ hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('o
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 del hypers['ppo_agent']['exploration']
 
-# TODO pass this as __init__ arg
 hypers['custom'] = {
-    'net_type': 'conv2d',
+    'net_type': {
+        'type': 'int',
+        'vals': ['conv2d','lstm']
+    },
     'indicators': False,
     'scale': False,
     # 'cryptowatch': False,
@@ -360,16 +362,16 @@ class DotDict(object):
 
 
 class HSearchEnv(Environment):
-    def __init__(self, agent='ppo_agent', workers=1):
+    def __init__(self, agent='ppo_agent', gpu_split=1):
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
         if agent == 'ppo_agent': del hypers_['dueling']
-        self.workers = workers  # careful, GPU-splitting may be handled in a calling class already
 
         self.agent = agent
         self.hypers = hypers_
         self.hardcoded = {}
         self.actions_ = {}
+        self.gpu_split = gpu_split  # careful, GPU-splitting may be handled in a calling class already
 
         self.conn = engine.connect()
 
@@ -407,6 +409,7 @@ class HSearchEnv(Environment):
         hyper = self.hypers[k]
         if 'hook' in hyper:
             v = hyper['hook'](v)
+        if hyper['type'] == 'bool': return bool(round(v))
         if hyper['type'] == 'int':
             if type(hyper['vals']) == list and type(v) == int:
                 return hyper['vals'][v]
@@ -446,8 +449,8 @@ class HSearchEnv(Environment):
             if flat[dep_k] != dep_v:
                 del flat[k]
 
-        session_config = None if self.workers == 1 else\
-            tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/self.workers))
+        session_config = None if self.gpu_split == 1 else \
+            tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82 / self.gpu_split))
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
                 'session_config': session_config,
@@ -471,7 +474,8 @@ class HSearchEnv(Environment):
         network = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
 
         if flat.get('baseline_mode', None):
-            hydrated['baseline']['network_spec'] = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
+            baseline_net = [l for l in net_spec if l[0] != 'L']
+            hydrated['baseline']['network_spec'] = custom_net(baseline_net, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
 
         print('--- Flat ---')
         pprint(flat)
@@ -511,15 +515,16 @@ class HSearchEnv(Environment):
 def main_gp():
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
+    parser.add_argument('-g', '--gpu_split', type=int, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('--load', action="store_true", default=True, help="Load model from save")
+    parser.add_argument('--pretrain', action="store_true", default=False, help="Pre-train model from database (current issues)")
     args = parser.parse_args()
 
-    import GPyOpt
-    from sklearn import preprocessing
+    import gp, threading
     from sklearn.feature_extraction import DictVectorizer
 
-    # 1) Encode features
-    # -------------------
-    hsearch = HSearchEnv()
+    # Encode features
+    hsearch = HSearchEnv(gpu_split=args.gpu_split)
     actions, hypers, hardcoded = hsearch.actions, hsearch.hypers, hsearch.hardcoded
     hypers = {k: v for k, v in hypers.items() if k not in hardcoded}
     hsearch.close()
@@ -541,73 +546,78 @@ def main_gp():
 
     # Map TensorForce actions to GPyOpt-compatible `domain`
     # instantiate just to get actions (get them from hypers above?)
-    domain = []
+    bounds = []
     for k in feat_names:
-        d = {'name': k, 'type': 'discrete', 'domain': (0, 1)}
         hyper = hypers.get(k, False)
         if hyper and hyper['type'] == 'bounded':
-            d['type'] = 'continuous'
-            d['domain'] = (min(hyper['vals']), max(hyper['vals']))
-        domain.append(d)
-
-    # Fetch existing runs from database to pre-train GP
-    # conn = engine.connect()
-    # runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
-    # X, Y = [], []
-    # for run in runs:
-    #     x = []
-    #     # Reverse the value stored to it's index (a float that GP expects). TODO save as separate `reverse_lookup()`?
-    #     for i, axn in enumerate(domain):
-    #         from_db = run.hypers[axn['name']]
-    #         hyper = hypers[axn['name']]
-    #         idx = from_db  # sane default, replace as-needed basis
-    #         if hyper['type'] == 'int':
-    #             if type(hyper['vals']) == list:
-    #                 idx = hyper['vals'].index(from_db)
-    #                 # If dict, from_db is already key (right?)
-    #                 # elif type(hyper['vals']) == dict: idx = from_db
-    #                 # else: raise Exception('hyper[type=int] not list or dict')
-    #         elif hyper['type'] == 'bool':
-    #             idx = float(from_db)
-    #         if not idx: idx = 0  # some are None. FIXME?
-    #         x.append(idx)
-    #     X.append(x)
-    #     Y.append([run.reward_avg])
-    # conn.close()
+            b = [min(hyper['vals']), max(hyper['vals'])]
+        else: b = [0, 1]
+        bounds.append(b)
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
     def loss_fn(params):
-        hsearch = HSearchEnv(workers=args.workers)
+        hsearch = HSearchEnv(gpu_split=args.gpu_split)
 
         # Reverse the encoding
         # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
-        reversed = vectorizer.inverse_transform(params)[0]
+        # https://github.com/scikit-learn/scikit-learn/issues/4414
+        reversed = vectorizer.inverse_transform([params])[0]
         actions = {}
         for k, v in reversed.items():
-            if '=' in k:
-                # Note that sometimes activation=relu and activation=tanh (or so. multiple assignments); this will
-                # iterate-and-replace, best way to handle?
-                actions[k.split('=')[0]] = k.split('=')[1]
-            else:
-                actions[k] = bool(v) if hypers[k]['type'] == 'bool' else v
+            if '=' not in k:
+                actions[k] = v
+                continue
+            if k in actions: continue  # we already handled this x=y logic (below)
+            # Find the winner (max) option for this key
+            score, attr, val = v, k.split('=')[0], k.split('=')[1]
+            for k2, score2 in reversed.items():
+                if k2.startswith(attr + '=') and score2 > score:
+                    score, val = score2, k2.split('=')[1]
+            actions[attr] = val
 
         _, _, reward = hsearch.execute(actions)
         hsearch.close()
         return reward
 
-    # Run
-    opt = GPyOpt.methods.BayesianOptimization(
-        f=loss_fn,
-        domain=domain,
-        maximize=True,
-        batch_size=args.workers,
-        num_cores=args.workers,
-        # X=np.array(X),
-        # Y=np.array(Y)
-    )
+    filename = 'saves/gp.pkl' if args.load else None
+    model = gp.make_model(filename=filename)
 
-    opt.run_optimization(max_iter=50)
-    opt.plot_convergence()
+    # Fetch existing runs from database to pre-train GP
+    if args.pretrain:
+        conn = engine.connect()
+        runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
+        conn.close()
+        X, Y = [], []
+        for run in runs:
+            h_ = dict()
+            for k, v in run.hypers.items():
+                if k in hardcoded: continue
+                if type(v) == bool: h_[k] = float(v)
+                else: h_[k] = v or 0.
+            vec = vectorizer.transform(h_).toarray()[0]
+            ## FIXME! Why are some values NaN?
+            #if np.any(np.isnan(vec)): pdb.set_trace()
+            # vec = np.nan_to_num(vec)
+            X.append(vec)
+            Y.append(run.reward_avg)
+        model.fit(X, Y)
+
+    def thread_fn():
+        gp.bayesian_optimisation(
+            n_iters=1000,
+            sample_loss=loss_fn,
+            bounds=np.array(bounds),
+            model=model,
+            filename=filename
+        )
+
+    if args.workers > 1:
+        threads = [threading.Thread(target=thread_fn) for _ in range(args.workers)]
+        for t in threads:
+            time.sleep(3)
+            t.start()
+        # [t.join(10) for t in threads]
+    else: thread_fn()
 
 
 if __name__ == '__main__':
