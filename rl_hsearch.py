@@ -441,17 +441,17 @@ class HSearchEnv(Environment):
             if flat[dep_k] != dep_v:
                 del flat[k]
 
-        sess_config = None if self.workers == 1 else\
+        session_config = None if self.workers == 1 else\
             tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/self.workers))
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
-                'sess_config': sess_config,
+                'session_config': session_config,
                 'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
                 'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': 'nadam'}},
             })
         else:
-            hydrated = DotDict({'sess_config': sess_config})
+            hydrated = DotDict({'session_config': session_config})
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
         for k, v in flat.items():
@@ -514,7 +514,7 @@ def main_tf():
         {'type': 'dense', 'size': 64},
     ]
     config = dict(
-        sess_config=None,
+        session_config=None,
         batch_size=4,
         batched_observe=0,
         discount=0.

@@ -17,7 +17,7 @@ def main():
     flat, hydrated, network = hs.get_hypers(use_winner=args.use_winner)
     env = BitcoinEnvTforce(name=args.agent, hypers=flat)
     if args.gpu_split:
-        hydrated['sess_config'] = tf.ConfigProto(
+        hydrated['session_config'] = tf.ConfigProto(
             gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/args.gpu_split))
     agent = agents_dict[args.agent](
         states_spec=env.states,

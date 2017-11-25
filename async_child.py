@@ -30,7 +30,7 @@ if __name__ == '__main__':
     ]
 
     config = dict(
-        sess_config=tf.ConfigProto(
+        session_config=tf.ConfigProto(
             gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.75/args.workers)
         ),
         batch_size=4,

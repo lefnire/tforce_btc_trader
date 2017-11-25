@@ -22,7 +22,7 @@ def main():
     flat, hydrated, network = hs.get_hypers(use_winner=args.use_winner)
     hydrated['saver_spec'] = dict(directory='saves/model', load=args.load)
     if args.gpu_split:
-        hydrated['sess_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/args.gpu_split))
+        hydrated['session_config'] = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82/args.gpu_split))
 
     for i in range(args.workers):
         write_graph = False  # i == 0 and args.use_winner
