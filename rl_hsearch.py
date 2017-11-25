@@ -324,6 +324,11 @@ hypers['custom'] = {
     }
 }
 
+# Fill in implicit 'vals' (eg, 'bool' with [True, False])
+for _, section in hypers.items():
+    for k, v in section.items():
+        if type(v) != dict: continue  # hard-coded vals
+        if v['type'] == 'bool': v['vals'] = [True, False]
 
 class DotDict(object):
     def __init__(self, data):
@@ -503,78 +508,41 @@ class HSearchEnv(Environment):
         return next_state, terminal, reward
 
 
-def main_tf():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
-    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
-    args = parser.parse_args()
-
-    network_spec = [
-        {'type': 'dense', 'size': 64},
-        {'type': 'dense', 'size': 64},
-    ]
-    config = dict(
-        session_config=None,
-        batch_size=4,
-        batched_observe=0,
-        discount=0.
-    )
-    if args.workers == 1:
-        env = HSearchEnv()
-        agent = agents_dict['ppo_agent'](
-            states_spec=env.states,
-            actions_spec=env.actions,
-            network_spec=network_spec,
-            **config
-        )
-        runner = Runner(agent=agent, environment=env)
-        runner.run()  # forever (the env will cycle internally)
-    else:
-        main_agent = None
-        agents, envs = [], []
-        config.update(
-            saver_spec=dict(directory='saves/model', load=args.load)
-        )
-        for i in range(args.workers):
-            envs.append(HSearchEnv())
-            if i == 0:
-                # let the first agent create the model, then create agents with a shared model
-                main_agent = agent = agents_dict['ppo_agent'](
-                    states_spec=envs[0].states,
-                    actions_spec=envs[0].actions,
-                    network_spec=network_spec,
-                    **config
-                )
-            else:
-                agent = WorkerAgentGenerator(agents_dict['ppo_agent'])(
-                    states_spec=envs[0].states,
-                    actions_spec=envs[0].actions,
-                    network_spec=network_spec,
-                    model=main_agent.model
-                    **config,
-                )
-            agents.append(agent)
-
-        def summary_report(x): pass
-        threaded_runner = ThreadedRunner(agents, envs)
-        threaded_runner.run(
-            episodes=-1,  # forever (the env will cycle internally)
-            summary_interval=2000,
-            summary_report=summary_report
-        )
-
-
 def main_gp():
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
     args = parser.parse_args()
 
     import GPyOpt
+    from sklearn import preprocessing
+
+    # 1) Encode features
+    # -------------------
+    hsearch = HSearchEnv()
+    actions, hypers, hardcoded = hsearch.actions, hsearch.hypers, hsearch.hardcoded
+    hypers = {k: v for k, v in hypers.items() if k not in hardcoded}
+    hsearch.close()
+
+    # Build a matrix of features,  length = max feature size
+    max_num_vals = max(actions.values(), key=lambda v: v.get('num_actions', 0))['num_actions']
+    empty_obj = {k: None for k in hypers}
+    mat = pd.DataFrame([empty_obj.copy() for _ in range(max_num_vals)])
+    for k, hyper in hypers.items():
+        for i, v in enumerate(hyper['vals']):
+            mat.loc[i,k] = v if hyper['type'] == 'bounded' else i
+    mat.ffill(inplace=True)
+    column_order = mat.columns
+    cat_features = [k for k,v in hypers.items() if v['type'] == 'int']
+    cat_features_idx = [mat.columns.get_loc(k) for k in cat_features]
+
+    # Above is Pandas-friendly stuff, now convert to sklearn-friendly & pipe through OneHotEncoder
+    ohc = preprocessing.OneHotEncoder(categorical_features=cat_features_idx)
+    ohc.fit(mat)
 
     # Map TensorForce actions to GPyOpt-compatible `domain`
-    hsearch_tmp = HSearchEnv()  # instantiate just to get actions (get them from hypers above?)
+    # instantiate just to get actions (get them from hypers above?)
     domain = []
-    for k, axn in hsearch_tmp.actions.items():
+    for k, axn in actions.items():
         d = {'name': k, 'type': 'discrete'}
         if axn['type'] == 'bool':
             d['domain'] = (0, 1)
@@ -594,7 +562,7 @@ def main_gp():
         # Reverse the value stored to it's index (a float that GP expects). TODO save as separate `reverse_lookup()`?
         for i, axn in enumerate(domain):
             from_db = run.hypers[axn['name']]
-            hyper = hsearch_tmp.hypers[axn['name']]
+            hyper = hypers[axn['name']]
             idx = from_db  # sane default, replace as-needed basis
             if hyper['type'] == 'int':
                 if type(hyper['vals']) == list:
@@ -609,7 +577,6 @@ def main_gp():
         X.append(x)
         Y.append([run.reward_avg])
     conn.close()
-    hsearch_tmp.close()
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
     def loss_fn(params):
