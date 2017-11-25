@@ -328,7 +328,7 @@ hypers['custom'] = {
 for _, section in hypers.items():
     for k, v in section.items():
         if type(v) != dict: continue  # hard-coded vals
-        if v['type'] == 'bool': v['vals'] = [True, False]
+        if v['type'] == 'bool': v['vals'] = [0, 1]
 
 class DotDict(object):
     def __init__(self, data):
@@ -408,7 +408,7 @@ class HSearchEnv(Environment):
         if 'hook' in hyper:
             v = hyper['hook'](v)
         if hyper['type'] == 'int':
-            if type(hyper['vals']) == list:
+            if type(hyper['vals']) == list and type(v) == int:
                 return hyper['vals'][v]
             # Else it's a dict. Don't map the values till later (keep them as keys in flat)
         return v
@@ -515,6 +515,7 @@ def main_gp():
 
     import GPyOpt
     from sklearn import preprocessing
+    from sklearn.feature_extraction import DictVectorizer
 
     # 1) Encode features
     # -------------------
@@ -529,65 +530,67 @@ def main_gp():
     mat = pd.DataFrame([empty_obj.copy() for _ in range(max_num_vals)])
     for k, hyper in hypers.items():
         for i, v in enumerate(hyper['vals']):
-            mat.loc[i,k] = v if hyper['type'] == 'bounded' else i
+            # mat.loc[i,k] = v if hyper['type'] == 'bounded' else i
+            mat.loc[i,k] = v
     mat.ffill(inplace=True)
-    column_order = mat.columns
-    cat_features = [k for k,v in hypers.items() if v['type'] == 'int']
-    cat_features_idx = [mat.columns.get_loc(k) for k in cat_features]
 
     # Above is Pandas-friendly stuff, now convert to sklearn-friendly & pipe through OneHotEncoder
-    ohc = preprocessing.OneHotEncoder(categorical_features=cat_features_idx)
-    ohc.fit(mat)
+    vectorizer = DictVectorizer()
+    vectorizer.fit(mat.T.to_dict().values())
+    feat_names = vectorizer.get_feature_names()
 
     # Map TensorForce actions to GPyOpt-compatible `domain`
     # instantiate just to get actions (get them from hypers above?)
     domain = []
-    for k, axn in actions.items():
-        d = {'name': k, 'type': 'discrete'}
-        if axn['type'] == 'bool':
-            d['domain'] = (0, 1)
-        elif axn['type'] == 'int':
-            d['domain'] = [i for i in range(axn['num_actions'])]
-        elif axn['type'] == 'float':
+    for k in feat_names:
+        d = {'name': k, 'type': 'discrete', 'domain': (0, 1)}
+        hyper = hypers.get(k, False)
+        if hyper and hyper['type'] == 'bounded':
             d['type'] = 'continuous'
-            d['domain'] = (axn['min_value'], axn['max_value'])
+            d['domain'] = (min(hyper['vals']), max(hyper['vals']))
         domain.append(d)
 
     # Fetch existing runs from database to pre-train GP
-    conn = engine.connect()
-    runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
-    X, Y = [], []
-    for run in runs:
-        x = []
-        # Reverse the value stored to it's index (a float that GP expects). TODO save as separate `reverse_lookup()`?
-        for i, axn in enumerate(domain):
-            from_db = run.hypers[axn['name']]
-            hyper = hypers[axn['name']]
-            idx = from_db  # sane default, replace as-needed basis
-            if hyper['type'] == 'int':
-                if type(hyper['vals']) == list:
-                    idx = hyper['vals'].index(from_db)
-                    # If dict, from_db is already key (right?)
-                    # elif type(hyper['vals']) == dict: idx = from_db
-                    # else: raise Exception('hyper[type=int] not list or dict')
-            elif hyper['type'] == 'bool':
-                idx = float(from_db)
-            if not idx: idx = 0  # some are None. FIXME?
-            x.append(idx)
-        X.append(x)
-        Y.append([run.reward_avg])
-    conn.close()
+    # conn = engine.connect()
+    # runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
+    # X, Y = [], []
+    # for run in runs:
+    #     x = []
+    #     # Reverse the value stored to it's index (a float that GP expects). TODO save as separate `reverse_lookup()`?
+    #     for i, axn in enumerate(domain):
+    #         from_db = run.hypers[axn['name']]
+    #         hyper = hypers[axn['name']]
+    #         idx = from_db  # sane default, replace as-needed basis
+    #         if hyper['type'] == 'int':
+    #             if type(hyper['vals']) == list:
+    #                 idx = hyper['vals'].index(from_db)
+    #                 # If dict, from_db is already key (right?)
+    #                 # elif type(hyper['vals']) == dict: idx = from_db
+    #                 # else: raise Exception('hyper[type=int] not list or dict')
+    #         elif hyper['type'] == 'bool':
+    #             idx = float(from_db)
+    #         if not idx: idx = 0  # some are None. FIXME?
+    #         x.append(idx)
+    #     X.append(x)
+    #     Y.append([run.reward_avg])
+    # conn.close()
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
     def loss_fn(params):
-        actions = {}
         hsearch = HSearchEnv(workers=args.workers)
-        for i, axn in enumerate(domain):
-            k, v = axn['name'], params[0][i]
-            h_type = hsearch.hypers[k]['type']
-            actions[k] = bool(v) if h_type == 'bool'\
-                else int(v) if h_type == 'int'\
-                else float(v)
+
+        # Reverse the encoding
+        # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
+        reversed = vectorizer.inverse_transform(params)[0]
+        actions = {}
+        for k, v in reversed.items():
+            if '=' in k:
+                # Note that sometimes activation=relu and activation=tanh (or so. multiple assignments); this will
+                # iterate-and-replace, best way to handle?
+                actions[k.split('=')[0]] = k.split('=')[1]
+            else:
+                actions[k] = bool(v) if hypers[k]['type'] == 'bool' else v
+
         _, _, reward = hsearch.execute(actions)
         hsearch.close()
         return reward
@@ -599,8 +602,8 @@ def main_gp():
         maximize=True,
         batch_size=args.workers,
         num_cores=args.workers,
-        X=np.array(X),
-        Y=np.array(Y)
+        # X=np.array(X),
+        # Y=np.array(Y)
     )
 
     opt.run_optimization(max_iter=50)
