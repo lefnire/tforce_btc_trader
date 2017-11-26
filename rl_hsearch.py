@@ -429,7 +429,7 @@ class HSearchEnv(Environment):
     def reset(self):
         return [1.]
 
-    def execute(self, actions):
+    def get_hypers(self, actions):
         flat = {k: self._action2val(k, v) for k, v in actions.items()}
         flat.update(self.hardcoded)
         self.flat = flat
@@ -482,6 +482,11 @@ class HSearchEnv(Environment):
         print('--- Hydrated ---')
         pprint(hydrated)
 
+        return flat, hydrated, network
+
+    def execute(self, actions):
+        flat, hydrated, network = self.get_hypers(actions)
+
         hydrated['scope'] = 'hypersearch'
 
         env = BitcoinEnv(flat, name=self.agent)
@@ -521,7 +526,12 @@ class HSearchEnv(Environment):
         next_state, terminal = [1.], False
         return next_state, terminal, reward
 
-
+    def get_winner(self):
+        sql = "select id, hypers from runs where flag is null and agent=:agent order by reward_avg desc limit 1"
+        winner = self.conn.execute(text(sql), agent=self.agent).fetchone()
+        self.hardcoded = winner.hypers
+        print(f'Using winner {winner.id}')
+        return self.get_hypers({})
 
 
 def main_gp():
