@@ -162,11 +162,10 @@ class BitcoinEnv(gym.Env):
     def _reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
-        self.cash_true = self.value_true = self.start_cap
         start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
-        self.total_reward = self.total_reward_true = 0
+        self.total_reward = 0
 
         # Fetch random slice of rows from the database (based on limit)
         offset = random.randint(0, data.count_rows(self.conn) - self.hypers.steps)
@@ -188,8 +187,6 @@ class BitcoinEnv(gym.Env):
         return first_state
 
     def _step(self, actions):
-        if type(actions) == list and len(actions) == 2: actions = {'action': actions[0], 'deterministic': actions[1]}  # FIXME why is this happening?
-        assert type(actions) == dict  # revisit, but for now requiring 'action' and 'deterministic' (which explore & assess respectively)
         if type(self.gym_env.action_space) == spaces.Discrete:
             signals = {
                 0: -40,
@@ -198,14 +195,13 @@ class BitcoinEnv(gym.Env):
                 3: 5,
                 4: 20
             }
-            signal = signals[int(actions['action'])]
-            signal_true = signals[int(actions['deterministic'])]
+            signal = signals[actions]
         else:
-            signal = actions['action']
+            signal = actions
             # gdax requires a minimum .01BTC (~$40) sale. As we're learning a probability distribution, don't separate
             # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
             if signal < 0: signal -= 40
-        self.signals.append(signal_true)
+        self.signals.append(signal)
 
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
         abs_sig = abs(signal)
@@ -219,26 +215,12 @@ class BitcoinEnv(gym.Env):
                 self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
 
-        before_true = self.cash_true + self.value_true
-        abs_sig_true = abs(signal_true)
-        if signal_true > 0:
-            if self.cash_true >= abs_sig_true:
-                self.value_true += abs_sig_true - abs_sig_true*fee
-            self.cash_true -= abs_sig_true
-        elif signal_true < 0:
-            if self.value_true >= abs_sig_true:
-                self.cash_true += abs_sig_true - abs_sig_true*fee
-            self.value_true -= abs_sig_true
-
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         diff_loc = self.timestep if self.conv2d else self.timestep + 1
         pct_change = self.prices_diff[diff_loc]
         self.value += pct_change * self.value
-        self.value_true += pct_change * self.value_true
         total = self.value + self.cash
-        total_true = self.value_true + self.cash_true
         reward = total - before  # Relative reward (seems to work better)
-        reward_true = total_true - before_true
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -263,18 +245,24 @@ class BitcoinEnv(gym.Env):
         if self.hypers.scale:
             next_state = scaler.transform([next_state])[0]
 
-        if self.hypers.penalize_inaction and (np.array(self.signals[-100:]) == 0).all():
-            reward *= 2  # up the ante (TODO reconsider logic)
+        # Punish in-action options: hold_* vs unique_* means "he's only holding" or "he's doing the same thing 
+        # over and over". *_double means "double the reward (up the ante)" or "*_spank" means "just punish him"
+        punish, recent_actions = self.hypers.punish_inaction, self.signals[-100:]
+        if (punish.startswith('unique') and np.unique(recent_actions).size == 1)\
+            or (punish.startswith('hold') and (np.array(recent_actions) == 0).all()):
+            if punish.endswith('double'):
+                reward *= 2  # up the ante
+            elif punish.endswith('spank'):
+                reward -= 5  # just penalize
 
         self.total_reward += reward
-        self.total_reward_true += reward_true
 
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
             self.episode_results['cash'].append(self.cash)
             self.episode_results['values'].append(self.value)
-            self.episode_results['rewards'].append(self.total_reward_true)
+            self.episode_results['rewards'].append(self.total_reward)
             self.time = round(time.time() - self.time)
             self.write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
@@ -283,8 +271,8 @@ class BitcoinEnv(gym.Env):
     def write_results(self):
         res = self.episode_results
         episode = len(res['cash'])
-        if episode % 10 != 0: return  # TODO temporary
-        reward, cash, value = float(self.total_reward_true), float(self.cash), float(self.value)
+        if episode % 5 != 0: return  # TODO temporary: reduce the output clutter
+        reward, cash, value = float(self.total_reward), float(self.cash), float(self.value)
         avg50 = round(np.mean(res['rewards'][-50:]))
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)

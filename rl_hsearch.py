@@ -290,13 +290,14 @@ del hypers['ppo_agent']['exploration']
 hypers['custom'] = {
     'net_type': {
         'type': 'int',
-        'vals': ['conv2d','lstm']
+        'vals': ['conv2d', 'lstm']
     },
     'indicators': False,
     'scale': False,
     # 'cryptowatch': False,
-    'penalize_inaction': {
-        'type': 'bool',
+    'punish_inaction': {
+        'type': 'int',
+        'vals': ['off', 'hold_double', 'hold_spank', 'unique_double', 'unique_spank']
     },
     'network': {
         'type': 'bounded',
@@ -456,7 +457,7 @@ class HSearchEnv(Environment):
                 'session_config': session_config,
                 'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
-                'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': 'nadam'}},
+                'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': flat['step_optimizer.type']}},
             })
         else:
             hydrated = DotDict({'session_config': session_config})
@@ -516,7 +517,7 @@ def main_gp():
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
     parser.add_argument('-g', '--gpu_split', type=int, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    parser.add_argument('--load', action="store_true", default=True, help="Load model from save")
+    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
     parser.add_argument('--pretrain', action="store_true", default=False, help="Pre-train model from database (current issues)")
     args = parser.parse_args()
 
@@ -595,9 +596,6 @@ def main_gp():
                 if type(v) == bool: h_[k] = float(v)
                 else: h_[k] = v or 0.
             vec = vectorizer.transform(h_).toarray()[0]
-            ## FIXME! Why are some values NaN?
-            #if np.any(np.isnan(vec)): pdb.set_trace()
-            # vec = np.nan_to_num(vec)
             X.append(vec)
             Y.append(run.reward_avg)
         model.fit(X, Y)
