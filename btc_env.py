@@ -69,7 +69,7 @@ class BitcoinEnv(Environment):
                 self.states_ = dict(type='float', min_value=min_max[0], max_value=min_max[1], shape=())
                 print('using min_max', min_max)
             else:
-                default_min_max = 1 if self.hypers.diff == 'percent' else 1
+                default_min_max = 1 if self.hypers.diff_percent else 1
                 self.states_ = dict(type='float', min_value=-default_min_max, max_value=default_min_max, shape=(self.num_features(),))
 
         # self._seed()
@@ -108,7 +108,7 @@ class BitcoinEnv(Environment):
             .replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
 
     def _diff(self, arr):
-        if self.hypers.diff == 'percent':
+        if self.hypers.diff_percent:
             return self._pct_change(arr)
         return pd.Series(arr).diff()\
             .replace([np.inf, -np.inf], np.nan).ffill()\
@@ -238,11 +238,11 @@ class BitcoinEnv(Environment):
         # Punish in-action options: hold_* vs unique_* means "he's only holding" or "he's doing the same thing 
         # over and over". *_double means "double the reward (up the ante)" or "*_spank" means "just punish him"
         punish, recent_actions = self.hypers.punish_inaction, self.signals[-100:]
-        if (punish.startswith('unique') and np.unique(recent_actions).size == 1)\
-            or (punish.startswith('hold') and (np.array(recent_actions) == 0).all()):
-            if punish.endswith('double'):
+        if ('unique' in punish and np.unique(recent_actions).size == 1)\
+            or ('hold' in punish and (np.array(recent_actions) == 0).all()):
+            if 'double' in punish:
                 reward *= 2  # up the ante
-            elif punish.endswith('spank'):
+            elif 'spank' in punish:
                 reward -= 5  # just penalize
 
         self.total_reward += reward

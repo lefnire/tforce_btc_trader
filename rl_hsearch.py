@@ -1,5 +1,6 @@
 import argparse, json, math, time, pdb
 from pprint import pprint
+from box import Box
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -7,47 +8,75 @@ from sqlalchemy.sql import text
 from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
-from tensorforce.environments import Environment
 from tensorforce.execution import Runner
 
 from btc_env import BitcoinEnv
 from data import engine
 
+"""
+Each hyper is specified as `key: {type, vals, requires, hook}`. 
+- type: (int|bounded|bool). bool is True|False param, bounded is a float between min & max, int is "choose one" 
+    eg 'activation' one of (tanh|elu|selu|..)`)
+- vals: the vals this hyper can take on. If type(vals) is primitive, hard-coded at this value. If type is list, then
+    (a) min/max specified inside (for bounded); (b) all possible options (for 'int'). If type is dict, then the keys
+    are used in the searching (eg, look at the network hyper) and the values are used as the configuration.
+- requires: can specify that a hyper should be deleted if some other hyper (a) doesn't exist (type(requires)==str), 
+    (b) doesn't equal some value (type(requires)==dict)
+- hook: transform this hyper before plugging it into Configuration(). Eg, we'd use type='bounded' for batch size since
+    we want to range from min to max (insteaad of listing all possible values); but we'd cast it to an int inside
+    hook before using it. (Actually we clamp it to blocks of 8, as you'll see)      
 
-def layers2net(layers, a, d, l2, l1=0., b=True):
+The special sauce is specifying hypers as dot-separated keys, like `memory.type`. This allows us to easily 
+mix-and-match even within a config-dict. Eg, you can try different combos of hypers within `memory{}` w/o having to 
+specify the whole block combo (`memory=({this1,that1}, {this2,that2})`). To use this properly, make sure to specify
+a `requires` field where necessary. 
+"""
+
+
+def build_net_spec(net):
+    """Builds a net_spec from some specifications like width, depth, etc"""
+    net = Box(net)
+    dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
+    dropout = {'type': 'dropout', 'rate': net.dropout}
+    conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
+    lstm = {'type': 'lstm', 'dropout': net.dropout}
+
     arr = []
-    if d: arr.append(dict(type='dropout', rate=d))
-    for l in layers:
-        conv_args = {}
-        type = l[0]
-        if len(l)>1: size = l[1]
-        if len(l)>2: conv_args['window'] = l[2]
-        if len(l)>3: conv_args['stride'] = l[3]
-        if type == 'd':
-            arr.append(dict(
-                type='dense',
-                size=size,
-                activation=a,
-                l1_regularization=l1,
-                l2_regularization=0. if d else l2)
-            )
-            if d: arr.append(dict(type='dropout', rate=d))
-        elif type == 'L':
-            arr.append(dict(type='lstm', size=size, dropout=d))
-        elif type == 'C':
-            arr.append(dict(type='conv2d', size=size, bias=b, **conv_args))
-        elif type == 'F':
-            arr.append(dict(type='flatten'))
-        elif type == 'U':
-            arr.append(dict(type='dueling', size=size, activation='none'))
+    if net.dropout:
+        arr.append({**dropout})
+
+    # Pre-layer
+    if 'pre_depth' in net:
+        for i in range(net.pre_depth):
+            size = int(net.width/(net.pre_depth-i+1)) if net.funnel else net.width
+            arr.append({'size': size, **dense})
+            if net.dropout: arr.append({**dropout})
+
+    # Mid-layer
+    for i in range(net.depth):
+        if net.type == 'conv2d':
+            size = max([32, int(net.width/4)])
+            if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
+            arr.append({'size': size, 'window': (net.window, 8), 'stride': (net.stride, 1), **conv2d})
+        else:
+            size = net.width
+            arr.append({'size': size, **lstm})
+    if net.type == 'conv2d':
+        arr.append({'type': 'flatten'})
+
+    # Dense
+    for i in range(net.depth):
+        size = int(net.width / (i + 2)) if net.funnel else net.width
+        arr.append({'size': size, **dense})
+        if net.dropout: arr.append({**dropout})
+
     return arr
 
 
-def custom_net(layers, net_type, **kwargs):
-    layers_spec = layers2net(layers, **kwargs)
-    for l in layers_spec:
-        l.pop('l1_regularization', None)  # not yet in TF2
-    if net_type != 'conv2d': return layers_spec
+def custom_net(net, print_net=False):
+    layers_spec = build_net_spec(net)
+    if print_net: pprint(layers_spec)
+    if net['type'] != 'conv2d': return layers_spec
 
     class ConvNetwork(LayeredNetwork):
         def __init__(self, **kwargs):
@@ -80,118 +109,18 @@ def custom_net(layers, net_type, **kwargs):
     return ConvNetwork
 
 
-lookups = {}
-lookups['epsilon_decay'] = {
-    "type": "epsilon_decay",
-    "epsilon": 1.0,
-    "epsilon_final": 0.1,
-    "epsilon_timesteps": 1e9
-}
-lookups['nets'] = {
-    'lstm': {
-        3: [('d', 256), ('L', 512), ('L', 512), ('L', 512), ('d', 256), ('d', 128)],
-        2: [('d', 128), ('L', 256), ('L', 256), ('d', 192), ('d', 128)],
-        1: [('d', 64), ('L', 128), ('L', 128), ('d', 64), ('d', 32)],
-        0: [('d', 32), ('L', 64), ('L', 64), ('d', 32)]
-    },
-    'conv2d': {
-        # 5: [
-        #     ('C', 64, (8, 3), (4, 1)),
-        #     ('C', 96, (4, 2), (2, 1)),
-        #     ('C', 96, (3, 2), 1),
-        #     ('C', 64, (2, 2), 1),
-        #     ('F'),
-        #     ('d', 512),
-        #     ('d', 256),
-        #     ('d', 196),
-        #     ('d', 128),
-        #     ('d', 64)
-        # ],
-        3: [
-            ('C', 64, (8, 3), (4, 1)),
-            ('C', 96, (4, 2), (2, 1)),
-            ('C', 96, (3, 2), 1),
-            ('F'),
-            ('d', 512),
-            ('d', 256),
-            ('d', 128),
-            ('d', 64)
-        ],
-        2: [
-            ('C',32,(8,3),(4,2)),
-            ('C',64,(4,2),(2,1)),
-            ('C',64,(3,2),1),
-            ('F'),
-            ('d',512),
-            ('d',256),
-            ('d',128)
-        ],
-        1: [
-            ('C', 32, (8, 3), (4, 2)),
-            ('C', 64, (4, 2), (2, 1)),
-            ('C', 64, (3, 2), 1),
-            ('F'),
-            ('d',256),
-            ('d',128),
-            ('d',64)
-        ],
-        0: [  # loser
-            ('C',32,(8,3),(4,2)),
-            ('C',64,(4,2),(2,1)),
-            ('F'),
-            ('d',256)
-        ],
-    }
-}
+def bins_of_8(x): return int(x // 8) * 8
+
 
 hypers = {}
 hypers['agent'] = {
-    'exploration': {
-        'type': 'int',
-        'vals': lookups['epsilon_decay']
-    },  # TODO epsilon_anneal
     # TODO preprocessing, batch_observe, reward_preprocessing[dict(type='clip', min=-1, max=1)]
-}
-hypers['memory_agent'] = {
-    'batch_size': {
-        'type': 'bounded',
-        'vals': [8, 256],
-        'hook': lambda x: int(x // 8) * 8
-    },
-    'memory.type': {
-        'type': 'int',
-        'vals': ['replay', 'naive-prioritized-replay']
-    },
-    'memory.random_sampling': {
-        'type': 'bool',
-        'requires': {'memory.type': 'replay'},
-    },
-    'memory.capacity': {
-        'type': 'bounded',
-        'vals': [10000, 100000],  # ensure > batch_size
-        'hook': int
-    },
-    'first_update': {
-        'type': 'bounded',
-        'vals': [1000, 10000],
-        'hook': int
-    },
-    'update_frequency': {
-        'type': 'bounded',
-        'vals': [4, 20],
-        'hook': int
-    },
-    'repeat_update': {
-        'type': 'bounded',
-        'vals': [1, 4],
-        'hook': int
-    }
 }
 hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
         'vals': [8, 256],
-        'hook': lambda x: int(x // 8) * 8
+        'hook': bins_of_8
     },
     'keep_last_timestep': {
         'type': 'bool'
@@ -204,24 +133,27 @@ hypers['model'] = {
     },
     'optimizer.learning_rate': {
         'type': 'bounded',
-        'vals': [1e-7, 1e-2],
+        'vals': [1e-7, 1e-1],
     },
     'optimization_steps': {
         'type': 'bounded',
-        'vals': [5, 20],
+        'vals': [2, 20],
         'hook': int
     },
     'discount': {
         'type': 'bounded',
         'vals': [.95, .99],
     },
-    'normalize_rewards': True,  # True is definite winner
+    'normalize_rewards': {
+        # True is definite winner
+        'type': 'bool'
+    },
     # TODO variable_noise
 }
 hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
-        'vals': [0., 1,],
+        'vals': [0., 1.],
     }
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
@@ -236,12 +168,12 @@ hypers['pg_model'] = {
     'baseline_optimizer.optimizer.learning_rate': {
         'requires': 'baseline_mode',
         'type': 'bounded',
-        'vals': [1e-7, 1e-2]
+        'vals': [1e-7, 1e-1]
     },
     'baseline_optimizer.num_steps': {
         'requires': 'baseline_mode',
         'type': 'bounded',
-        'vals': [5, 20],
+        'vals': [2, 20],
         'hook': int
     },
 }
@@ -252,27 +184,7 @@ hypers['pg_prob_ration_model'] = {
         'vals': [0., 1.],
     }
 }
-hypers['q_model'] = {
-    'target_sync_frequency': 10000,  # This effects speed the most - make it a high value
-    'target_update_weight': {
-        'type': 'bounded',
-        'vals': [0., 1.],
-    },
-    'double_q_model': True,
-    'huber_loss': {
-        'type': 'bounded',
-        'vals': [0., 1.],
-        'hook': lambda x: None if x < .001 else x
-    }
-}
 
-hypers['dqn_agent'] = {
-    **hypers['agent'],
-    **hypers['memory_agent'],
-    **hypers['model'],
-    **hypers['distribution_model'],
-    **hypers['q_model'],
-}
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **hypers['agent'],
     **hypers['batch_agent'],
@@ -284,13 +196,8 @@ hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
 }
 hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('optimizer.learning_rate')
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
-del hypers['ppo_agent']['exploration']
 
 hypers['custom'] = {
-    'net_type': {
-        'type': 'int',
-        'vals': ['conv2d', 'lstm']
-    },
     'indicators': False,
     'scale': False,
     # 'cryptowatch': False,
@@ -298,32 +205,63 @@ hypers['custom'] = {
         'type': 'int',
         'vals': ['off', 'hold_double', 'hold_spank', 'unique_double', 'unique_spank']
     },
-    'network': {
-        'type': 'bounded',
-        'vals': lookups['nets']['conv2d'],
-        'hook': lambda x: math.floor(x)
+    'net.type': {
+        'type': 'int',
+        'vals': ['conv2d', 'lstm']
     },
-    'activation': {
+    'net.window': {
+        'type': 'bounded',
+        'vals': [3, 8],
+        'hook': int,
+        'requires': {'net.type': 'conv2d'}
+    },
+    'net.stride': {
+        'type': 'bounded',
+        'vals': [1, 4],
+        'hook': int,
+        'requires': {'net.type': 'conv2d'}
+    },
+    'net.pre_depth': {
+        'type': 'bounded',
+        'vals': [0, 3],
+        'hook': int,
+        'requires': {'net.type': 'lstm'}
+    },
+    'net.depth': {
+        'type': 'bounded',
+        'vals': [1, 5],
+        'hook': int
+    },
+    'net.width': {
+        'type': 'bounded',
+        'vals': [32, 768],
+        'hook': bins_of_8
+    },
+    'net.funnel': {
+        'type': 'bool'
+    },
+    'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'elu', 'relu', 'selu'],
     },
-    'dropout': {
+    'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
         'hook': lambda x: None if x < .1 else x
     },
-    'l2': {
+    'net.l2': {
         'type': 'bounded',
         'vals': [1e-5, 1e-1]
     },
-    'diff': {
-        'type': 'int',
-        'vals': ['percent', 'absolute']
+    'net.l1': {
+        'type': 'bounded',
+        'vals': [1e-5, 1e-1]
     },
-    'steps': 2048*3+3,
-    'dueling': {
+    # 'net.bias': {'type': 'bool'},
+    'diff_percent': {
         'type': 'bool'
-    }
+    },
+    'steps': 2048*3+3,  # can hard-code attrs as you find winners to reduce dimensionality of GP search
 }
 
 # Fill in implicit 'vals' (eg, 'bool' with [True, False])
@@ -333,6 +271,9 @@ for _, section in hypers.items():
         if v['type'] == 'bool': v['vals'] = [0, 1]
 
 class DotDict(object):
+    """
+    Utility class that lets you get/set attributes with a dot-seperated string key, like `d = a['b.c.d']` or `a['b.c.d'] = 1`
+    """
     def __init__(self, data):
         self._data = data
 
@@ -361,45 +302,34 @@ class DotDict(object):
         return self._data
 
 
-class HSearchEnv(Environment):
+class HSearchEnv(object):
+    """
+    This is the "wrapper" environment (the "inner" environment is the one you're testing against, like Cartpole-v0).
+    This env's actions are all the hyperparameters (above). The state is nothing (`[1.]`), and a single episode is
+    running the inner-env however many episodes (300). The inner's last-few reward avg is outer's one-episode reward.
+    That's one run: make inner-env, run 300, avg reward, return that. The next episode will be a new set of
+    hyperparameters (actions); run inner-env from scratch using new hypers.
+    """
     def __init__(self, agent='ppo_agent', gpu_split=1):
+        """
+        TODO only tested with ppo_agent. There's some code for dqn_agent, but I haven't tested. Nothing else
+        is even attempted implemtned
+        """
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
-        if agent == 'ppo_agent': del hypers_['dueling']
 
         self.agent = agent
         self.hypers = hypers_
         self.hardcoded = {}
-        self.actions_ = {}
         self.gpu_split = gpu_split  # careful, GPU-splitting may be handled in a calling class already
+
+        for k, v in hypers_.items():
+            if type(v) != dict: self.hardcoded[k] = v
 
         self.conn = engine.connect()
 
-        for k, v in hypers_.items():
-            if type(v) != dict:
-                self.hardcoded[k] = v
-            elif v['type'] == 'int':
-                self.actions_[k] = dict(type='int', shape=(), num_actions=len(v['vals']))
-            elif v['type'] == 'bounded':
-                # cast to list in case the keys are the min/max (as in network)
-                min, max = np.min(list(v['vals'])), np.max(list(v['vals']))
-                self.actions_[k] = dict(type='float', shape=(), min_value=min, max_value=max)
-            elif v['type'] == 'bool':
-                self.actions_[k] = dict(type='bool', shape=())
-
-    def __str__(self):
-        return 'HSearchEnv'
-
     def close(self):
         self.conn.close()
-
-    @property
-    def actions(self):
-        return self.actions_
-
-    @property
-    def states(self):
-        return {'shape': 1, 'type': 'float'}
 
     def _action2val(self, k, v):
         # from TensorForce, v is a numpy object - unpack. From Bayes, it's a primitive. TODO handle better
@@ -419,17 +349,17 @@ class HSearchEnv(Environment):
     def _key2val(self, k, v):
         hyper = self.hypers[k]
         if type(hyper) == dict and type(hyper.get('vals', None)) == dict:
-            # FIXME special case, refactor
-            if k == 'network':
-                return lookups['nets'][self.flat['net_type']][v]
-
             return hyper['vals'][v]
         return v
 
-    def reset(self):
-        return [1.]
-
     def get_hypers(self, actions):
+        """
+        Bit of confusing logic here where I construct a `flat` dict of hypers from the actions - looks like how hypers
+        are specified above ('dot.key.str': val). Then from that we hydrate it as a proper config dict (hydrated).
+        Keeping `flat` around because I save the run to the database so can be analyzed w/ a decision tree
+        (for feature_importances and the like) and that's a good format, rather than a nested dict.
+        :param actions: the hyperparamters
+        """
         flat = {k: self._action2val(k, v) for k, v in actions.items()}
         flat.update(self.hardcoded)
         self.flat = flat
@@ -451,6 +381,7 @@ class HSearchEnv(Environment):
 
         session_config = None if self.gpu_split == 1 else \
             tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82 / self.gpu_split))
+        # TODO put this in hard-coded hyper above?
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
                 'session_config': session_config,
@@ -467,15 +398,18 @@ class HSearchEnv(Environment):
                 hydrated[k] = self._key2val(k, v)
         hydrated = hydrated.to_dict()
 
-        extra = {k: self._key2val(k, v) for k, v in flat.items() if k in hypers['custom']}
-        net_spec = extra['network']
-        if extra.get('dueling', False):
-            net_spec = net_spec + [('U', 16)]
-        network = custom_net(net_spec, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
+        extra = DotDict({})
+        for k, v in flat.items():
+            if k in hypers['custom']:
+                extra[k] = self._key2val(k, v)
+        extra = extra.to_dict()
+        network = custom_net(extra['net'], True)
 
         if flat.get('baseline_mode', None):
-            baseline_net = [l for l in net_spec if l[0] != 'L']
-            hydrated['baseline']['network_spec'] = custom_net(baseline_net, extra['net_type'], a=extra['activation'], d=extra['dropout'], l2=extra['l2'])
+            baseline_net = custom_net(extra['net'])
+            if flat['net.type'] == 'lstm':
+                baseline_net = [l for l in baseline_net if l['type'] != 'lstm']
+            hydrated['baseline']['network_spec'] = baseline_net
 
         print('--- Flat ---')
         pprint(flat)
@@ -498,11 +432,14 @@ class HSearchEnv(Environment):
         )
 
         # n_train, n_test = 2, 1
-        n_train, n_test = 230, 20
+        n_train, n_test = 250, 50
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         runner.run(episodes=n_test, deterministic=True)  # test
+        # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
+        # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
 
+        # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
         ep_results = runner.environment.episode_results
         reward = np.mean(ep_results['rewards'][-n_test:])
         sql = """
@@ -522,9 +459,7 @@ class HSearchEnv(Environment):
 
         runner.agent.close()
         runner.environment.close()
-
-        next_state, terminal = [1.], False
-        return next_state, terminal, reward
+        return reward
 
     def get_winner(self):
         sql = "select id, hypers from runs where flag is null and agent=:agent order by reward_avg desc limit 1"
@@ -536,10 +471,7 @@ class HSearchEnv(Environment):
 
 def main_gp():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-w', '--workers', type=int, default=1, help="Number of workers")
     parser.add_argument('-g', '--gpu_split', type=int, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
-    parser.add_argument('--pretrain', action="store_true", default=False, help="Pre-train model from database (current issues)")
     args = parser.parse_args()
 
     import gp, threading
@@ -547,12 +479,15 @@ def main_gp():
 
     # Encode features
     hsearch = HSearchEnv(gpu_split=args.gpu_split)
-    actions, hypers, hardcoded = hsearch.actions, hsearch.hypers, hsearch.hardcoded
+    hypers, hardcoded = hsearch.hypers, hsearch.hardcoded
     hypers = {k: v for k, v in hypers.items() if k not in hardcoded}
     hsearch.close()
 
     # Build a matrix of features,  length = max feature size
-    max_num_vals = max(actions.values(), key=lambda v: v.get('num_actions', 0))['num_actions']
+    max_num_vals = 0
+    for v in hypers.values():
+        l = len(v['vals'])
+        if l > max_num_vals: max_num_vals = l
     empty_obj = {k: None for k in hypers}
     mat = pd.DataFrame([empty_obj.copy() for _ in range(max_num_vals)])
     for k, hyper in hypers.items():
@@ -597,15 +532,16 @@ def main_gp():
                     score, val = score2, k2.split('=')[1]
             actions[attr] = val
 
-        _, _, reward = hsearch.execute(actions)
+        reward = hsearch.execute(actions)
         hsearch.close()
         return reward
 
-    filename = 'saves/gp.pkl' if args.load else None
-    model = gp.make_model(filename=filename)
-
-    # Fetch existing runs from database to pre-train GP
-    if args.pretrain:
+    while True:
+        """
+        Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk, 
+        but this allows to distribute across servers easily
+        """
+        model = gp.make_model()
         conn = engine.connect()
         runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
         conn.close()
@@ -618,25 +554,18 @@ def main_gp():
                 else: h_[k] = v or 0.
             vec = vectorizer.transform(h_).toarray()[0]
             X.append(vec)
-            Y.append(run.reward_avg)
-        model.fit(X, Y)
+            Y.append([run.reward_avg])
+        if X:
+            print('pre-training GP model')
+            model.fit(X, Y)
 
-    def thread_fn():
         gp.bayesian_optimisation(
-            n_iters=1000,
+            n_iters=1,
             sample_loss=loss_fn,
             bounds=np.array(bounds),
             model=model,
-            filename=filename
+            n_pre_samples=1 if len(X) > 5 else 5
         )
-
-    if args.workers > 1:
-        threads = [threading.Thread(target=thread_fn) for _ in range(args.workers)]
-        for t in threads:
-            time.sleep(3)
-            t.start()
-        # [t.join(10) for t in threads]
-    else: thread_fn()
 
 
 if __name__ == '__main__':

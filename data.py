@@ -28,7 +28,7 @@ elif DB == 'coins2':
     columns = ['open', 'high', 'low', 'close', 'volume']
     close_col = 'close'
     predict_col = 'g_close'
-elif DB == 'kaggle':
+elif 'kaggle' in DB:
     tables = ['bitstamp', 'btcn']
     ts_col = 'timestamp'
     columns = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']

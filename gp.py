@@ -96,7 +96,7 @@ def sample_next_hyperparameter(acquisition_func, gaussian_process, evaluated_los
 
 
 def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5,
-                          gp_params=None, random_search=False, alpha=1e-5, epsilon=1e-7, model=None, filename=None):
+                          gp_params=None, random_search=False, alpha=1e-5, epsilon=1e-7, model=None):
     """ bayesian_optimisation
 
     Uses Gaussian Processes to optimise the loss function `sample_loss`.
@@ -156,11 +156,7 @@ def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5
             )
 
     for n in range(n_iters):
-        if filename and os.path.isfile(filename):
-            model = joblib.load(filename)
         model.fit(xp, yp)
-        if filename:
-            joblib.dump(model, filename)
 
         # Sample next hyperparameter
         if random_search:
@@ -188,9 +184,7 @@ def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5
     return xp, yp
 
 
-def make_model(alpha=1e-5, filename=None):
-    if filename and os.path.isfile(filename):
-       return joblib.load(filename)
+def make_model(alpha=1e-5):
     kernel = gp.kernels.Matern()
     return gp.GaussianProcessRegressor(
         kernel=kernel,
