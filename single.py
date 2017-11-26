@@ -1,9 +1,11 @@
-import argparse, pdb
+import argparse
+
 import tensorflow as tf
-from hypersearch import HyperSearch
 from tensorforce.agents import agents as agents_dict
-from btc_env.btc_env import BitcoinEnvTforce
 from tensorforce.execution import Runner
+
+from btc_env import BitcoinEnvTforce
+from hypersearch import HyperSearch
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-a', '--agent', type=str, default='ppo_agent', help="(ppo_agent|dqn_agent) agent to use")

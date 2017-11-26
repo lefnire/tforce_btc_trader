@@ -11,7 +11,6 @@ from collections import Counter
 from sqlalchemy.sql import text
 import tensorflow as tf
 from box import Box
-from tensorforce.contrib.openai_gym import OpenAIGym
 from tensorforce import util, TensorForceError
 from tensorforce.environments import Environment
 import pdb
@@ -32,27 +31,12 @@ try:
 except Exception:
     min_max = None
 
-DEFAULT_HYPERS = {
-    'scale': False,
-    'indicators': False,
-    'steps': 2048*3+3,
-    'net_type': 'conv2d',
-    'diff': 'percent',  # absolute
-}
 
-class BitcoinEnv(gym.Env):
-    metadata = {
-        'render.modes': []
-    }
-
-    # Calling gym.make(ID) doesn't allow passing in params, so we make then initialize separately
-    # def __init__(self):
-
-    def init(self, gym_env, name='ppo_agent', write_graph=False, log_states=False, hypers=DEFAULT_HYPERS):
+class BitcoinEnv(Environment):
+    def __init__(self, hypers, name='ppo_agent', write_graph=False, log_states=False):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
         self.conv2d = self.hypers.net_type == 'conv2d'
-        self.gym_env = gym_env
         self.agent_name = name
         self.start_cap = 1e3
         self.window = 150
@@ -64,27 +48,30 @@ class BitcoinEnv(gym.Env):
 
         # Action space
         if re.search('(dqn|ppo|a3c)', name, re.IGNORECASE):
-            gym_env.action_space = spaces.Discrete(5)
+            self.actions_ = dict(type='int', shape=(), num_actions=5)
         else:
-            gym_env.action_space = spaces.Box(low=-100, high=100, shape=(1,))
+            self.actions_ = dict(type='float', shape=(), min_value=-100, max_value=100)
 
         # Observation space
-        default_min_max = 1 if self.hypers.diff == 'percent' else 1
         if self.conv2d:
             # width = window width (150 time-steps)
             # height = num_features, but one layer for each table
             # channels is number of tables (each table is a "layer" of features
-            gym_env.observation_space = spaces.Tuple((
-                spaces.Box(-1, 1, shape=(150,NCOL,2)),  # "image"
-                spaces.Box(-1, 1, shape=(2,))  # money
-            ))
+            self.states_ = dict(
+                state0=dict(type='float', min_value=-1, max_value=1, shape=(150,NCOL,2)),  # image 150x7x2-dim
+                state1=dict(type='float', min_value=-1, max_value=1, shape=(2,))  # money
+            )
         else:
-            gym_env.observation_space = spaces.Box(*min_max_scaled) if self.hypers.scale else\
-                spaces.Box(*min_max) if min_max else\
-                spaces.Box(low=-default_min_max, high=default_min_max, shape=(self.num_features(),))
-            if self.hypers.scale: print('using min_max', min_max_scaled)
-            elif min_max: print('using min_max', min_max)
-        
+            if self.hypers.scale:
+                self.states_ = dict(type='float', min_value=min_max_scaled[0], max_value=min_max_scaled[1], shape=())
+                print('using min_max', min_max_scaled)
+            elif min_max:
+                self.states_ = dict(type='float', min_value=min_max[0], max_value=min_max[1], shape=())
+                print('using min_max', min_max)
+            else:
+                default_min_max = 1 if self.hypers.diff == 'percent' else 1
+                self.states_ = dict(type='float', min_value=-default_min_max, max_value=default_min_max, shape=(self.num_features(),))
+
         # self._seed()
         if write_graph:
             self.sess = tf.Session(config=tf.ConfigProto(device_count={'GPU': 0}))
@@ -95,9 +82,12 @@ class BitcoinEnv(gym.Env):
             data.wipe_rows(self.conn, name)
 
     def __str__(self): return 'BitcoinEnv'
-    def _close(self): self.conn.close()
-    def _render(self, mode='human', close=False): pass
-    def _seed(self, seed=None):
+    def close(self): self.conn.close()
+    @property
+    def states(self): return self.states_
+    @property
+    def actions(self): return self.actions_
+    def seed(self, seed=None):
         if not ALLOW_SEED: return
         # self.np_random, seed = seeding.np_random(seed)
         # return [seed]
@@ -159,7 +149,7 @@ class BitcoinEnv(gym.Env):
             # self._diff(SMA(df, timeperiod=200)),
         ]
 
-    def _reset(self):
+    def reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
         start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
@@ -186,8 +176,8 @@ class BitcoinEnv(gym.Env):
                 first_state = scaler.transform([first_state])[0]
         return first_state
 
-    def _step(self, actions):
-        if type(self.gym_env.action_space) == spaces.Discrete:
+    def execute(self, actions):
+        if self.actions['type'] == 'int':
             signals = {
                 0: -40,
                 1: 0,
@@ -264,11 +254,11 @@ class BitcoinEnv(gym.Env):
             self.episode_results['values'].append(self.value)
             self.episode_results['rewards'].append(self.total_reward)
             self.time = round(time.time() - self.time)
-            self.write_results()
+            self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
-        return next_state, reward, terminal, {}
+        return next_state, terminal, reward
 
-    def write_results(self):
+    def _write_results(self):
         res = self.episode_results
         episode = len(res['cash'])
         if episode % 5 != 0: return  # TODO temporary: reduce the output clutter
@@ -292,30 +282,6 @@ class BitcoinEnv(gym.Env):
                 self.summary_writer.add_summary(histos, episode)
 
             self.summary_writer.flush()
-
-        return
-        # TODO fix this later
-        # save a snapshot of the actual graph & the buy/sell signals so we can visualize elsewhere
-        if total > self.start_cap * 2:
-            y = [float(p) for p in self.prices]
-            signals = [int(sig) for sig in self.signals]
-        else:
-            y = None
-            signals = None
-
-        q = text("""
-            insert into episodes (episode, reward, cash, value, agent_name, steps, y, signals) 
-            values (:episode, :reward, :cash, :value, :agent_name, :steps, :y, :signals)
-        """)
-        self.conn.execute(q, episode=episode, reward=reward, cash=cash, value=value,
-                     agent_name=self.agent_name, steps=self.timestep, y=y, signals=signals)
-
-
-class BitcoinEnvTforce(OpenAIGym):
-    def __init__(self, **kwargs):
-        super(BitcoinEnvTforce, self).__init__('BTC-v0')
-        if ALLOW_SEED: self.gym.env.seed(1234)
-        self.gym.env.init(self.gym, **kwargs)
 
 
 def scale_features_and_save():

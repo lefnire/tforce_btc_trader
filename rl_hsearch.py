@@ -1,18 +1,17 @@
-import tensorflow as tf
-import pdb, json, random, argparse, math, time
+import argparse, json, math, time, pdb
 from pprint import pprint
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from sqlalchemy.sql import text
+from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
-from data import engine
 from tensorforce.environments import Environment
-from tensorforce.agents import agents as agents_dict
+from tensorforce.execution import Runner
+
+from btc_env import BitcoinEnv
 from data import engine
-from btc_env.btc_env import BitcoinEnvTforce
-from tensorforce.execution import Runner, ThreadedRunner
-from tensorforce.execution.threaded_runner import WorkerAgentGenerator
 
 
 def layers2net(layers, a, d, l2, l1=0., b=True):
@@ -485,8 +484,7 @@ class HSearchEnv(Environment):
 
         hydrated['scope'] = 'hypersearch'
 
-        env = BitcoinEnvTforce(name=self.agent, hypers=flat)
-        # env = OpenAIGym('CartPole-v0')
+        env = BitcoinEnv(flat, name=self.agent)
         agent = agents_dict[self.agent](
             states_spec=env.states,
             actions_spec=env.actions,
@@ -500,10 +498,21 @@ class HSearchEnv(Environment):
         runner.run(episodes=n_train)  # train
         runner.run(episodes=n_test, deterministic=True)  # test
 
-        ep_results = runner.environment.gym.env.episode_results
+        ep_results = runner.environment.episode_results
         reward = np.mean(ep_results['rewards'][-n_test:])
-        sql = "insert into runs (hypers, reward_avg, rewards, agent) values (:hypers, :reward_avg, :rewards, :agent)"
-        self.conn.execute(text(sql), hypers=json.dumps(flat), reward_avg=reward, rewards=ep_results['rewards'], agent='ppo_agent')
+        sql = """
+          insert into runs (hypers, reward_avg, rewards, agent, prices, actions) 
+          values (:hypers, :reward_avg, :rewards, :agent, :prices, :actions)
+        """
+        self.conn.execute(
+            text(sql),
+            hypers=json.dumps(flat),
+            reward_avg=reward,
+            rewards=ep_results['rewards'],
+            agent='ppo_agent',
+            prices=env.prices.tolist(),
+            actions=env.signals
+        )
         print(flat, f"\nReward={reward}\n\n")
 
         runner.agent.close()
@@ -511,6 +520,8 @@ class HSearchEnv(Environment):
 
         next_state, terminal = [1.], False
         return next_state, terminal, reward
+
+
 
 
 def main_gp():

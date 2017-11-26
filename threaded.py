@@ -1,9 +1,10 @@
-import argparse, time, pdb
-import numpy as np
+import argparse
+
 import tensorflow as tf
-from tensorforce.agents import agents as agents_dict, Agent
+from tensorforce.agents import agents as agents_dict
 from tensorforce.execution.threaded_runner import ThreadedRunner, WorkerAgentGenerator
-from btc_env.btc_env import BitcoinEnvTforce
+
+from btc_env import BitcoinEnvTforce
 from hypersearch import HyperSearch
 
 parser = argparse.ArgumentParser()
