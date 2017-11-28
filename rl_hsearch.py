@@ -11,7 +11,7 @@ from tensorforce.core.networks.network import LayeredNetwork
 from tensorforce.execution import Runner
 
 from btc_env import BitcoinEnv
-from data import engine
+from data import engine, NCOL
 
 """
 Each hyper is specified as `key: {type, vals, requires, hook}`. 
@@ -57,7 +57,7 @@ def build_net_spec(net):
         if net.type == 'conv2d':
             size = max([32, int(net.width/4)])
             if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
-            arr.append({'size': size, 'window': (net.window, 8), 'stride': (net.stride, 1), **conv2d})
+            arr.append({'size': size, 'window': (net.window, NCOL), 'stride': (net.stride, 1), **conv2d})
         else:
             size = net.width
             arr.append({'size': size, **lstm})
@@ -86,16 +86,21 @@ def custom_net(net, print_net=False):
             image = x['state0']  # 150x7x2-dim, float
             money = x['state1']  # 1x2-dim, float
             x = image
-            money_applied = False
 
             internal_outputs = list()
             index = 0
-            for layer in self.layers:
+
+            apply_money_here = None
+            for i, layer in enumerate(self.layers):
+                if isinstance(layer, Dense):
+                    apply_money_here = i
+                    if not net['money_last']: break  # this pegs money at the first Dense.
+
+            for i, layer in enumerate(self.layers):
                 layer_internals = [internals[index + n] for n in range(layer.num_internals)]
                 index += layer.num_internals
-                if isinstance(self.layers, Dense) and not money_applied:
+                if i == apply_money_here:
                     x = tf.concat([x, money], axis=1)
-                    money_applied = True
                 x = layer.apply(x, update, *layer_internals)
 
                 if not isinstance(x, tf.Tensor):
@@ -145,7 +150,7 @@ hypers['model'] = {
         'vals': [.95, .99],
     },
     'normalize_rewards': {
-        # True is definite winner
+        # True seems definite winner
         'type': 'bool'
     },
     # TODO variable_noise
@@ -260,6 +265,9 @@ hypers['conv2d'] = {
         'type': 'bounded',
         'vals': [1, 4],
         'hook': int,
+    },
+    'net.money_last': {
+        'type': 'bool',
     },
 }
 
@@ -382,8 +390,10 @@ class HSearchEnv(object):
             if flat[dep_k] != dep_v:
                 del flat[k]
 
-        session_config = None if self.gpu_split == 1 else \
-            tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=.82 / self.gpu_split))
+        session_config = None
+        if self.gpu_split != 1:
+            fraction = .9/self.gpu_split if self.gpu_split > 1 else self.gpu_split
+            session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
         # TODO put this in hard-coded hyper above?
         if self.agent == 'ppo_agent':
             hydrated = DotDict({
@@ -478,7 +488,7 @@ def main_gp():
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu_split', type=int, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('-g', '--gpu_split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
     args = parser.parse_args()
 
@@ -539,7 +549,7 @@ def main_gp():
 
         reward = hsearch.execute(actions)
         hsearch.close()
-        return reward
+        return [reward]
 
     while True:
         """

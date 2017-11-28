@@ -18,8 +18,7 @@ import pdb
 ALLOW_SEED = False
 
 import data
-from data import engine
-NCOL = len(data.columns)
+from data import engine, NCOL
 
 try:
     scaler = joblib.load('saves/scaler.pkl')
@@ -59,7 +58,7 @@ class BitcoinEnv(Environment):
             # channels is number of tables (each table is a "layer" of features
             self.states_ = dict(
                 state0=dict(type='float', min_value=-1, max_value=1, shape=(150,NCOL,2)),  # image 150x7x2-dim
-                state1=dict(type='float', min_value=-1, max_value=1, shape=(2,))  # money
+                state1=dict(type='float', min_value=-1, max_value=1, shape=(2))  # money
             )
         else:
             if self.hypers.scale:
