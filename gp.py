@@ -96,7 +96,7 @@ def sample_next_hyperparameter(acquisition_func, gaussian_process, evaluated_los
 
 
 def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5,
-                          gp_params=None, random_search=False, alpha=1e-5, epsilon=1e-7, model=None):
+                          gp_params=None, random_search=False, alpha=1e-5, epsilon=1e-7):
     """ bayesian_optimisation
 
     Uses Gaussian Processes to optimise the loss function `sample_loss`.
@@ -143,19 +143,17 @@ def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5
     yp = np.array(y_list)
 
     # Create the GP
-    if not model:
-        if gp_params is not None:
-            model = gp.GaussianProcessRegressor(**gp_params)
-        else:
-            kernel = gp.kernels.Matern()
-            model = gp.GaussianProcessRegressor(
-                kernel=kernel,
-                alpha=alpha,
-                n_restarts_optimizer=10,
-                normalize_y=True
-            )
+    if gp_params is not None:
+        model = gp.GaussianProcessRegressor(**gp_params)
+    else:
+        kernel = gp.kernels.Matern()
+        model = gp.GaussianProcessRegressor(kernel=kernel,
+                                            alpha=alpha,
+                                            n_restarts_optimizer=10,
+                                            normalize_y=True)
 
     for n in range(n_iters):
+
         model.fit(xp, yp)
 
         # Sample next hyperparameter
@@ -184,11 +182,44 @@ def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5
     return xp, yp
 
 
-def make_model(alpha=1e-5):
+def bayesian_optimisation2(n_iters, loss_fn, bounds, x_list=[], y_list=[], n_pre_samples=5, alpha=1e-5, epsilon=1e-7):
+    n_pre_samples -= len(x_list)
+    if n_pre_samples > 0:
+        for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (n_pre_samples, bounds.shape[0])):
+            x_list.append(params)
+            y_list.append(loss_fn(params))
+
+    xp = np.array(x_list)
+    yp = np.array(y_list)
+
+    # Create the GP
     kernel = gp.kernels.Matern()
-    return gp.GaussianProcessRegressor(
+    model = gp.GaussianProcessRegressor(
         kernel=kernel,
         alpha=alpha,
         n_restarts_optimizer=10,
         normalize_y=True
     )
+
+    for n in range(n_iters):
+        model.fit(xp, yp)
+
+        # Sample next hyperparameter
+        next_sample = sample_next_hyperparameter(expected_improvement, model, yp, greater_is_better=True, bounds=bounds, n_restarts=100)
+
+        # Duplicates will break the GP. In case of a duplicate, we will randomly sample a next query point.
+        if np.any(np.abs(next_sample - xp) <= epsilon):
+            next_sample = np.random.uniform(bounds[:, 0], bounds[:, 1], bounds.shape[0])
+
+        # Sample loss for new set of parameters
+        cv_score = loss_fn(next_sample)
+
+        # Update lists
+        x_list.append(next_sample)
+        y_list.append(cv_score)
+
+        # Update xp and yp
+        xp = np.array(x_list)
+        yp = np.array(y_list)
+
+    return xp, yp

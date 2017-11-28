@@ -546,7 +546,6 @@ def main_gp():
         Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk, 
         but this allows to distribute across servers easily
         """
-        model = gp.make_model()
         conn = engine.connect()
         sql = "select hypers, reward_avg from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
@@ -561,16 +560,13 @@ def main_gp():
             vec = vectorizer.transform(h_).toarray()[0]
             X.append(vec)
             Y.append([run.reward_avg])
-        if X:
-            print('pre-training GP model')
-            model.fit(X, Y)
 
-        gp.bayesian_optimisation(
-            n_iters=1,
-            sample_loss=loss_fn,
+        gp.bayesian_optimisation2(
+            n_iters=5,
+            loss_fn=loss_fn,
             bounds=np.array(bounds),
-            model=model,
-            n_pre_samples=1 if len(X) > 5 else 5
+            x_list=X,
+            y_list=Y
         )
 
 
