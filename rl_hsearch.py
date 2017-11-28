@@ -205,28 +205,6 @@ hypers['custom'] = {
         'type': 'int',
         'vals': ['off', 'hold_double', 'hold_spank', 'unique_double', 'unique_spank']
     },
-    'net.type': {
-        'type': 'int',
-        'vals': ['conv2d', 'lstm']
-    },
-    'net.window': {
-        'type': 'bounded',
-        'vals': [3, 8],
-        'hook': int,
-        'requires': {'net.type': 'conv2d'}
-    },
-    'net.stride': {
-        'type': 'bounded',
-        'vals': [1, 4],
-        'hook': int,
-        'requires': {'net.type': 'conv2d'}
-    },
-    'net.pre_depth': {
-        'type': 'bounded',
-        'vals': [0, 3],
-        'hook': int,
-        'requires': {'net.type': 'lstm'}
-    },
     'net.depth': {
         'type': 'bounded',
         'vals': [1, 5],
@@ -240,6 +218,7 @@ hypers['custom'] = {
     'net.funnel': {
         'type': 'bool'
     },
+    # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'elu', 'relu', 'selu'],
@@ -263,6 +242,27 @@ hypers['custom'] = {
     },
     'steps': 2048*3+3,  # can hard-code attrs as you find winners to reduce dimensionality of GP search
 }
+
+hypers['lstm'] = {
+    'net.pre_depth': {
+        'type': 'bounded',
+        'vals': [0, 3],
+        'hook': int,
+    },
+}
+hypers['conv2d'] = {
+    'net.window': {
+        'type': 'bounded',
+        'vals': [3, 8],
+        'hook': int,
+    },
+    'net.stride': {
+        'type': 'bounded',
+        'vals': [1, 4],
+        'hook': int,
+    },
+}
+
 
 # Fill in implicit 'vals' (eg, 'bool' with [True, False])
 for _, section in hypers.items():
@@ -310,22 +310,25 @@ class HSearchEnv(object):
     That's one run: make inner-env, run 300, avg reward, return that. The next episode will be a new set of
     hyperparameters (actions); run inner-env from scratch using new hypers.
     """
-    def __init__(self, agent='ppo_agent', gpu_split=1):
+    def __init__(self, agent='ppo_agent', gpu_split=1, net_type='conv2d'):
         """
         TODO only tested with ppo_agent. There's some code for dqn_agent, but I haven't tested. Nothing else
         is even attempted implemtned
         """
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
+        hypers_['net.type'] = net_type  # set as hard-coded val
+        hypers_.update(hypers[net_type])
 
-        self.agent = agent
+        hardcoded = {}
+        for k, v in hypers_.copy().items():
+            if type(v) != dict: hardcoded[k] = v
+
         self.hypers = hypers_
-        self.hardcoded = {}
-        self.gpu_split = gpu_split  # careful, GPU-splitting may be handled in a calling class already
-
-        for k, v in hypers_.items():
-            if type(v) != dict: self.hardcoded[k] = v
-
+        self.agent = agent
+        self.hardcoded = hardcoded
+        self.gpu_split = gpu_split
+        self.net_type = net_type
         self.conn = engine.connect()
 
     def close(self):
@@ -394,13 +397,13 @@ class HSearchEnv(object):
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
         for k, v in flat.items():
-            if k not in hypers['custom']:
+            if k in hypers[self.agent]:  # remove custom fields
                 hydrated[k] = self._key2val(k, v)
         hydrated = hydrated.to_dict()
 
         extra = DotDict({})
         for k, v in flat.items():
-            if k in hypers['custom']:
+            if k not in hypers[self.agent]:  # only custom fields
                 extra[k] = self._key2val(k, v)
         extra = extra.to_dict()
         network = custom_net(extra['net'], True)
@@ -443,8 +446,8 @@ class HSearchEnv(object):
         ep_results = runner.environment.episode_results
         reward = np.mean(ep_results['rewards'][-n_test:])
         sql = """
-          insert into runs (hypers, reward_avg, rewards, agent, prices, actions) 
-          values (:hypers, :reward_avg, :rewards, :agent, :prices, :actions)
+          insert into runs (hypers, reward_avg, rewards, agent, prices, actions, flag) 
+          values (:hypers, :reward_avg, :rewards, :agent, :prices, :actions, :flag)
         """
         self.conn.execute(
             text(sql),
@@ -453,7 +456,8 @@ class HSearchEnv(object):
             rewards=ep_results['rewards'],
             agent='ppo_agent',
             prices=env.prices.tolist(),
-            actions=env.signals
+            actions=env.signals,
+            flag=self.net_type
         )
         print(flat, f"\nReward={reward}\n\n")
 
@@ -470,27 +474,28 @@ class HSearchEnv(object):
 
 
 def main_gp():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu_split', type=int, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    args = parser.parse_args()
-
-    import gp, threading
+    import gp
     from sklearn.feature_extraction import DictVectorizer
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-g', '--gpu_split', type=int, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('-n', '--net_type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
+    args = parser.parse_args()
+
     # Encode features
-    hsearch = HSearchEnv(gpu_split=args.gpu_split)
-    hypers, hardcoded = hsearch.hypers, hsearch.hardcoded
-    hypers = {k: v for k, v in hypers.items() if k not in hardcoded}
+    hsearch = HSearchEnv(gpu_split=args.gpu_split, net_type=args.net_type)
+    hypers_, hardcoded = hsearch.hypers, hsearch.hardcoded
+    hypers_ = {k: v for k, v in hypers_.items() if k not in hardcoded}
     hsearch.close()
 
     # Build a matrix of features,  length = max feature size
     max_num_vals = 0
-    for v in hypers.values():
+    for v in hypers_.values():
         l = len(v['vals'])
         if l > max_num_vals: max_num_vals = l
-    empty_obj = {k: None for k in hypers}
+    empty_obj = {k: None for k in hypers_}
     mat = pd.DataFrame([empty_obj.copy() for _ in range(max_num_vals)])
-    for k, hyper in hypers.items():
+    for k, hyper in hypers_.items():
         for i, v in enumerate(hyper['vals']):
             # mat.loc[i,k] = v if hyper['type'] == 'bounded' else i
             mat.loc[i,k] = v
@@ -505,7 +510,7 @@ def main_gp():
     # instantiate just to get actions (get them from hypers above?)
     bounds = []
     for k in feat_names:
-        hyper = hypers.get(k, False)
+        hyper = hypers_.get(k, False)
         if hyper and hyper['type'] == 'bounded':
             b = [min(hyper['vals']), max(hyper['vals'])]
         else: b = [0, 1]
@@ -513,7 +518,7 @@ def main_gp():
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
     def loss_fn(params):
-        hsearch = HSearchEnv(gpu_split=args.gpu_split)
+        hsearch = HSearchEnv(gpu_split=args.gpu_split, net_type=args.net_type)
 
         # Reverse the encoding
         # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
@@ -543,7 +548,8 @@ def main_gp():
         """
         model = gp.make_model()
         conn = engine.connect()
-        runs = conn.execute("select hypers, reward_avg from runs where flag is null").fetchall()
+        sql = "select hypers, reward_avg from runs where flag=:f"
+        runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
         X, Y = [], []
         for run in runs:
