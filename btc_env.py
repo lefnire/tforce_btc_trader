@@ -191,8 +191,13 @@ class BitcoinEnv(Environment):
             # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
             if signal < 0: signal -= 40
         self.signals.append(signal)
+        punish, recent_actions = self.hypers.punish_inaction, self.signals[-50:]
 
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
+        # wave the commission fee to encourage behavior variety
+        if punish == 'comission' and np.unique(recent_actions).size == 1:
+            fee = 0
+
         abs_sig = abs(signal)
         before = self.cash + self.value
         if signal > 0:
@@ -236,7 +241,6 @@ class BitcoinEnv(Environment):
 
         # Punish in-action options: hold_* vs unique_* means "he's only holding" or "he's doing the same thing 
         # over and over". *_double means "double the reward (up the ante)" or "*_spank" means "just punish him"
-        punish, recent_actions = self.hypers.punish_inaction, self.signals[-100:]
         if ('unique' in punish and np.unique(recent_actions).size == 1)\
             or ('hold' in punish and (np.array(recent_actions) == 0).all()):
             if 'double' in punish:

@@ -208,7 +208,7 @@ hypers['custom'] = {
     # 'cryptowatch': False,
     'punish_inaction': {
         'type': 'int',
-        'vals': ['off', 'hold_double', 'hold_spank', 'unique_double', 'unique_spank']
+        'vals': ['off', 'hold_double', 'hold_spank', 'unique_double', 'unique_spank', 'comission']
     },
     'net.depth': {
         'type': 'bounded',
