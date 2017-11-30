@@ -23,11 +23,12 @@ Each hyper is specified as `key: {type, vals, requires, hook}`.
 - vals: the vals this hyper can take on. If type(vals) is primitive, hard-coded at this value. If type is list, then
     (a) min/max specified inside (for bounded); (b) all possible options (for 'int'). If type is dict, then the keys
     are used in the searching (eg, look at the network hyper) and the values are used as the configuration.
+- guess: initial guess (supplied by human) to explore      
 - requires: can specify that a hyper should be deleted if some other hyper (a) doesn't exist (type(requires)==str), 
     (b) doesn't equal some value (type(requires)==dict)
 - hook: transform this hyper before plugging it into Configuration(). Eg, we'd use type='bounded' for batch size since
     we want to range from min to max (insteaad of listing all possible values); but we'd cast it to an int inside
-    hook before using it. (Actually we clamp it to blocks of 8, as you'll see)      
+    hook before using it. (Actually we clamp it to blocks of 8, as you'll see)
 
 The special sauce is specifying hypers as dot-separated keys, like `memory.type`. This allows us to easily 
 mix-and-match even within a config-dict. Eg, you can try different combos of hypers within `memory{}` w/o having to 
@@ -128,33 +129,40 @@ hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
         'vals': [8, 256],
+        'guess': 176,
         'hook': bins_of_8
     },
     'keep_last_timestep': {
-        'type': 'bool'
+        'type': 'bool',
+        'guess': False
     }
 }
 hypers['model'] = {
     'optimizer.type': {
         'type': 'int',
         'vals': ['nadam', 'adam'],  # TODO rmsprop
+        'guess': 'adam',
     },
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [1e-7, 1e-1],
+        'guess': .005,
     },
     'optimization_steps': {
         'type': 'bounded',
         'vals': [2, 20],
+        'guess': 10,
         'hook': int
     },
     'discount': {
         'type': 'bounded',
         'vals': [.95, .99],
+        'guess': .98
     },
     'normalize_rewards': {
         # True seems definite winner
-        'type': 'bool'
+        'type': 'bool',
+        'guess': True
     },
     # TODO variable_noise
 }
@@ -162,26 +170,34 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
+        'guess': .5
     }
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
 hypers['pg_model'] = {
-    'baseline_mode': 'states',
+    'baseline_mode': {
+        'type': 'int',
+        'vals': ['states', None],
+        'guess': 'states'
+    },
     'gae_lambda': {
         'requires': 'baseline_mode',
         'type': 'bounded',
         'vals': [.94, .99],
+        'guess': .97,
         'hook': lambda x: None if x < .95 else x
     },
     'baseline_optimizer.optimizer.learning_rate': {
         'requires': 'baseline_mode',
         'type': 'bounded',
-        'vals': [1e-7, 1e-1]
+        'vals': [1e-7, 1e-1],
+        'guess': .005
     },
     'baseline_optimizer.num_steps': {
         'requires': 'baseline_mode',
         'type': 'bounded',
         'vals': [2, 20],
+        'guess': 10,
         'hook': int
     },
 }
@@ -190,6 +206,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
+        'guess': .2
     }
 }
 
@@ -206,48 +223,57 @@ hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('o
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
-    'indicators': False,
+    'indicators': False,  # FIXME!
     'scale': False,
-    # 'cryptowatch': False,
-    'max_repeat': {  # max number times the agent can repeat the same action until punished for lack of diversity
+    # max number times the agent can repeat the same action until punished for lack of diversity
+    'max_repeat': {
         'type':  'bounded',
         'vals': [20, 100],
+        'guess': 50,
         'hook': int
     },
     'net.depth': {
         'type': 'bounded',
         'vals': [1, 5],
+        'guess': 3,
         'hook': int
     },
     'net.width': {
         'type': 'bounded',
         'vals': [32, 768],
+        'guess': 512,
         'hook': bins_of_8
     },
     'net.funnel': {
-        'type': 'bool'
+        'type': 'bool',
+        'guess': True
     },
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'elu', 'relu', 'selu'],
+        'guess': 'tanh'
     },
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
+        'guess': .2,
         'hook': lambda x: None if x < .1 else x
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [1e-5, 1e-1]
+        'vals': [1e-5, 1e-1],
+        'guess': .03
     },
     'net.l1': {
         'type': 'bounded',
-        'vals': [1e-5, 1e-1]
+        'vals': [1e-5, 1e-1],
+        'guess': .005
     },
     # 'net.bias': {'type': 'bool'},
     'diff_percent': {
-        'type': 'bool'
+        'type': 'bool',
+        'guess': True
     },
     'steps': 2048*3+3,  # can hard-code attrs as you find winners to reduce dimensionality of GP search
 }
@@ -256,6 +282,7 @@ hypers['lstm'] = {
     'net.pre_depth': {
         'type': 'bounded',
         'vals': [0, 3],
+        'guess': 1,
         'hook': int,
     },
 }
@@ -263,15 +290,18 @@ hypers['conv2d'] = {
     'net.window': {
         'type': 'bounded',
         'vals': [3, 8],
+        'guess': 4,
         'hook': int,
     },
     'net.stride': {
         'type': 'bounded',
         'vals': [1, 4],
+        'guess': 2,
         'hook': int,
     },
     'net.money_last': {
         'type': 'bool',
+        'guess': True
     },
 }
 
@@ -486,7 +516,9 @@ class HSearchEnv(object):
         print(f'Using winner {winner.id}')
         return self.get_hypers({})
 
+
 def print_feature_importances(X, Y, feat_names):
+    if len(X) < 5: return
     model = RandomForestRegressor(bootstrap=True, oob_score=True)
     model_hypers = {
         'max_features': [None, 'sqrt', 'log2'],
@@ -508,6 +540,7 @@ def main_gp():
     parser = argparse.ArgumentParser()
     parser.add_argument('-g', '--gpu_split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
+    parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
     args = parser.parse_args()
 
     # Encode features
@@ -587,8 +620,13 @@ def main_gp():
             vec = vectorizer.transform(h_).toarray()[0]
             X.append(vec)
             Y.append([run.reward_avg])
-
         print_feature_importances(X, Y, feat_names)
+
+        if args.guess:
+            x = vectorizer.transform({k: v['guess'] for k, v in hypers_.items()})
+            X.append(x.toarray()[0])
+            Y.append([None])
+            args.guess = False
 
         gp.bayesian_optimisation2(
             n_iters=5,

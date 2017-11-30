@@ -183,6 +183,12 @@ def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5
 
 
 def bayesian_optimisation2(n_iters, loss_fn, bounds, x_list=[], y_list=[], n_pre_samples=5, alpha=1e-5, epsilon=1e-7):
+    # Handle any specifically-asked for "guesses" first
+    for i, v in enumerate(y_list):
+        if v[0] is None:
+            print("Running guess values")
+            y_list[i] = loss_fn(x_list[i])
+
     n_pre_samples -= len(x_list)
     if n_pre_samples > 0:
         for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (n_pre_samples, bounds.shape[0])):
@@ -202,6 +208,7 @@ def bayesian_optimisation2(n_iters, loss_fn, bounds, x_list=[], y_list=[], n_pre
     )
 
     for n in range(n_iters):
+        print("Fitting GP")
         model.fit(xp, yp)
 
         # Sample next hyperparameter

@@ -35,7 +35,7 @@ class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent', write_graph=False, log_states=False):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
-        self.conv2d = self.hypers.net_type == 'conv2d'
+        self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
         self.start_cap = 1e3
         self.window = 150
