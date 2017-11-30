@@ -176,11 +176,14 @@ hypers['distribution_model'] = {
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
 hypers['pg_model'] = {
-    'baseline_mode': {
-        'type': 'int',
-        'vals': ['states', None],
-        'guess': 'states'
-    },
+    # 'baseline_mode': {
+    #     'type': 'int',
+    #     # My framework can't handle different variable types in int[vals], so set None as string and cast in hook()
+    #     'vals': ['states', 'None'],
+    #     'guess': 'states',
+    #     'hook': lambda x: None if x == 'None' else x
+    # },
+    'baseline_mode': 'states',  # big issues w/ removed values (through 'requires') & DictVectorizer
     'gae_lambda': {
         'requires': 'baseline_mode',
         'type': 'bounded',
@@ -232,8 +235,8 @@ hypers['custom'] = {
     # max number times the agent can repeat the same action until punished for lack of diversity
     'max_repeat': {
         'type':  'bounded',
-        'vals': [20, 100],
-        'guess': 50,
+        'vals': [20, 1000],
+        'guess': 100,
         'hook': int
     },
     'net.depth': {
@@ -430,18 +433,17 @@ class HSearchEnv(object):
 
         session_config = None
         if self.gpu_split != 1:
-            fraction = .9/self.gpu_split if self.gpu_split > 1 else self.gpu_split
+            fraction = .92/self.gpu_split if self.gpu_split > 1 else self.gpu_split
             session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
-        # TODO put this in hard-coded hyper above?
-        if self.agent == 'ppo_agent':
-            hydrated = DotDict({
-                'session_config': session_config,
+        hydrated = {'session_config': session_config}
+        if flat.get('baseline_mode') == 'states':
+            # TODO put this in hard-coded hyper above?
+            hydrated.update({
                 'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
                 'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': flat['step_optimizer.type']}},
             })
-        else:
-            hydrated = DotDict({'session_config': session_config})
+        hydrated = DotDict(hydrated)
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
         for k, v in flat.items():
@@ -582,37 +584,6 @@ def main_gp():
         else: b = [0, 1]
         bounds.append(b)
 
-    # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
-    def loss_fn(params):
-        hsearch = HSearchEnv(gpu_split=args.gpu_split, net_type=args.net_type)
-
-        # Reverse the encoding
-        # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
-        # https://github.com/scikit-learn/scikit-learn/issues/4414
-        reversed = vectorizer.inverse_transform([params])[0]
-        actions = {}
-        for k, v in reversed.items():
-            if '=' not in k:
-                actions[k] = v
-                continue
-            if k in actions: continue  # we already handled this x=y logic (below)
-            # Find the winner (max) option for this key
-            score, attr, val = v, k.split('=')[0], k.split('=')[1]
-            for k2, score2 in reversed.items():
-                if k2.startswith(attr + '=') and score2 > score:
-                    score, val = score2, k2.split('=')[1]
-            actions[attr] = val
-
-        # FIXME is this correct? Seems if a value would be False, it reverses as non-existent instead
-        for k, v in hypers_.items():
-            if k not in actions:
-                print(f'{k}={v} not in reversed actions')
-                actions[k] = False
-
-        reward = hsearch.execute(actions)
-        hsearch.close()
-        return [reward]
-
     def hypers2vec(obj):
         h = dict()
         for k, v in obj.items():
@@ -620,6 +591,38 @@ def main_gp():
             if type(v) == bool: h[k] = float(v)
             else: h[k] = v or 0.
         return vectorizer.transform(h).toarray()[0]
+
+    def vec2hypers(vec):
+        # Reverse the encoding
+        # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
+        # https://github.com/scikit-learn/scikit-learn/issues/4414
+        reversed = vectorizer.inverse_transform([vec])[0]
+        obj = {}
+        for k, v in reversed.items():
+            if '=' not in k:
+                obj[k] = v
+                continue
+            if k in obj: continue  # we already handled this x=y logic (below)
+            # Find the winner (max) option for this key
+            score, attr, val = v, k.split('=')[0], k.split('=')[1]
+            for k2, score2 in reversed.items():
+                if k2.startswith(attr + '=') and score2 > score:
+                    score, val = score2, k2.split('=')[1]
+            obj[attr] = val
+
+        # Is this correct? Seems if a value would be False, it reverses as non-existent instead
+        for k, v in hypers_.items():
+            if k not in obj:
+                print(f'{k}={v} not in reversed actions')
+                obj[k] = False
+        return obj
+
+    # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
+    def loss_fn(params):
+        hsearch = HSearchEnv(gpu_split=args.gpu_split, net_type=args.net_type)
+        reward = hsearch.execute(vec2hypers(params))
+        hsearch.close()
+        return [reward]
 
     while True:
         """
