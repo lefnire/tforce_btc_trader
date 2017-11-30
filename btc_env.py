@@ -191,13 +191,8 @@ class BitcoinEnv(Environment):
             # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
             if signal < 0: signal -= 40
         self.signals.append(signal)
-        punish, recent_actions = self.hypers.punish_inaction, self.signals[-50:]
 
         fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
-        # wave the commission fee to encourage behavior variety
-        if punish == 'comission' and np.unique(recent_actions).size == 1:
-            fee = 0
-
         abs_sig = abs(signal)
         before = self.cash + self.value
         if signal > 0:
@@ -239,14 +234,13 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             next_state = scaler.transform([next_state])[0]
 
-        # Punish in-action options: hold_* vs unique_* means "he's only holding" or "he's doing the same thing 
-        # over and over". *_double means "double the reward (up the ante)" or "*_spank" means "just punish him"
-        if ('unique' in punish and np.unique(recent_actions).size == 1)\
-            or ('hold' in punish and (np.array(recent_actions) == 0).all()):
-            if 'double' in punish:
-                reward *= 2  # up the ante
-            elif 'spank' in punish:
-                reward -= 5  # just penalize
+        # Encourage diverse behavior by punishing the same consecutive action. See 8741ff0 for prior ways I explored
+        # this, including: (1) no interference (2) punish for holding too long (3) punish for repeats (4) instead
+        # of punishing, "up the ante" by doubling the reward (kinda force him to take a closer look). Too many options
+        # had dimensionality down-side, so I'm trying an "always on" but "vary the max #steps" approach.
+        recent_actions = np.array(self.signals[-self.hypers.max_repeat:])
+        if not (np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0)):
+            reward -= 1
 
         self.total_reward += reward
 

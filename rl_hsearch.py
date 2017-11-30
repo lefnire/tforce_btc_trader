@@ -209,9 +209,10 @@ hypers['custom'] = {
     'indicators': False,
     'scale': False,
     # 'cryptowatch': False,
-    'punish_inaction': {
-        'type': 'int',
-        'vals': ['off', 'hold_double', 'hold_spank', 'unique_double', 'unique_spank', 'comission']
+    'max_repeat': {  # max number times the agent can repeat the same action until punished for lack of diversity
+        'type':  'bounded',
+        'vals': [20, 100],
+        'hook': int
     },
     'net.depth': {
         'type': 'bounded',
