@@ -9,6 +9,9 @@ from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
 from tensorforce.execution import Runner
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+
 
 from btc_env import BitcoinEnv
 from data import engine, NCOL
@@ -482,6 +485,20 @@ class HSearchEnv(object):
         print(f'Using winner {winner.id}')
         return self.get_hypers({})
 
+def print_feature_importances(X, Y, feat_names):
+    model = RandomForestRegressor(bootstrap=True, oob_score=True)
+    model_hypers = {
+        'max_features': [None, 'sqrt', 'log2'],
+        'max_depth': [None, 10, 20],
+        'n_estimators': [100, 200, 300],
+    }
+    model = GridSearchCV(model, param_grid=model_hypers, cv=5, scoring='neg_mean_squared_error', n_jobs=-1)
+    model.fit(X, np.squeeze(Y))
+    feature_imp = sorted(zip(model.best_estimator_.feature_importances_, feat_names), key=lambda x: x[0],
+                         reverse=True)
+    print('\n\n--- Feature Importances ---\n')
+    print('\n'.join([f'{x[1]}: {round(x[0],4)}' for x in feature_imp]))
+
 
 def main_gp():
     import gp
@@ -507,7 +524,6 @@ def main_gp():
     mat = pd.DataFrame([empty_obj.copy() for _ in range(max_num_vals)])
     for k, hyper in hypers_.items():
         for i, v in enumerate(hyper['vals']):
-            # mat.loc[i,k] = v if hyper['type'] == 'bounded' else i
             mat.loc[i,k] = v
     mat.ffill(inplace=True)
 
@@ -570,6 +586,8 @@ def main_gp():
             vec = vectorizer.transform(h_).toarray()[0]
             X.append(vec)
             Y.append([run.reward_avg])
+
+        print_feature_importances(X, Y, feat_names)
 
         gp.bayesian_optimisation2(
             n_iters=5,
