@@ -14,7 +14,7 @@ from sklearn.model_selection import GridSearchCV
 
 
 from btc_env import BitcoinEnv
-from data import engine, NCOL
+from data import engine
 
 """
 Each hyper is specified as `key: {type, vals, requires, hook}`. 
@@ -37,9 +37,8 @@ a `requires` field where necessary.
 """
 
 
-def build_net_spec(net):
+def build_net_spec(net, indicators):
     """Builds a net_spec from some specifications like width, depth, etc"""
-    net = Box(net)
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
     conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
@@ -57,11 +56,12 @@ def build_net_spec(net):
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
+    n_cols = BitcoinEnv.n_cols(conv2d=net.type == 'conv2d', indicators=indicators)
     for i in range(net.depth):
         if net.type == 'conv2d':
             size = max([32, int(net.width/4)])
             if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
-            arr.append({'size': size, 'window': (net.window, NCOL), 'stride': (net.stride, 1), **conv2d})
+            arr.append({'size': size, 'window': (net.window, n_cols), 'stride': (net.stride, 1), **conv2d})
         else:
             size = net.width
             arr.append({'size': size, **lstm})
@@ -77,10 +77,11 @@ def build_net_spec(net):
     return arr
 
 
-def custom_net(net, print_net=False):
-    layers_spec = build_net_spec(net)
+def custom_net(net, indicators, print_net=False):
+    net = Box(net)
+    layers_spec = build_net_spec(net, indicators)
     if print_net: pprint(layers_spec)
-    if net['type'] != 'conv2d': return layers_spec
+    if net.type != 'conv2d': return layers_spec
 
     class ConvNetwork(LayeredNetwork):
         def __init__(self, **kwargs):
@@ -98,7 +99,7 @@ def custom_net(net, print_net=False):
             for i, layer in enumerate(self.layers):
                 if isinstance(layer, Dense):
                     apply_money_here = i
-                    if not net['money_last']: break  # this pegs money at the first Dense.
+                    if not net.money_last: break  # this pegs money at the first Dense.
 
             for i, layer in enumerate(self.layers):
                 layer_internals = [internals[index + n] for n in range(layer.num_internals)]
@@ -223,7 +224,10 @@ hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('o
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
-    'indicators': False,  # FIXME!
+    'indicators': {
+        'type': 'bool',
+        'guess': False
+    },
     'scale': False,
     # max number times the agent can repeat the same action until punished for lack of diversity
     'max_repeat': {
@@ -450,10 +454,11 @@ class HSearchEnv(object):
             if k not in hypers[self.agent]:  # only custom fields
                 extra[k] = self._key2val(k, v)
         extra = extra.to_dict()
-        network = custom_net(extra['net'], True)
+        w_indicators = extra['indicators']
+        network = custom_net(extra['net'], w_indicators, print_net=True)
 
         if flat.get('baseline_mode', None):
-            baseline_net = custom_net(extra['net'])
+            baseline_net = custom_net(extra['net'], w_indicators)
             if flat['net.type'] == 'lstm':
                 baseline_net = [l for l in baseline_net if l['type'] != 'lstm']
             hydrated['baseline']['network_spec'] = baseline_net
@@ -482,6 +487,7 @@ class HSearchEnv(object):
         n_train, n_test = 250, 50
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
+        env.testing = True
         runner.run(episodes=n_test, deterministic=True)  # test
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
@@ -597,9 +603,23 @@ def main_gp():
                     score, val = score2, k2.split('=')[1]
             actions[attr] = val
 
+        # FIXME is this correct? Seems if a value would be False, it reverses as non-existent instead
+        for k, v in hypers_.items():
+            if k not in actions:
+                print(f'{k}={v} not in reversed actions')
+                actions[k] = False
+
         reward = hsearch.execute(actions)
         hsearch.close()
         return [reward]
+
+    def hypers2vec(obj):
+        h = dict()
+        for k, v in obj.items():
+            if k in hardcoded: continue
+            if type(v) == bool: h[k] = float(v)
+            else: h[k] = v or 0.
+        return vectorizer.transform(h).toarray()[0]
 
     while True:
         """
@@ -612,19 +632,13 @@ def main_gp():
         conn.close()
         X, Y = [], []
         for run in runs:
-            h_ = dict()
-            for k, v in run.hypers.items():
-                if k in hardcoded: continue
-                if type(v) == bool: h_[k] = float(v)
-                else: h_[k] = v or 0.
-            vec = vectorizer.transform(h_).toarray()[0]
-            X.append(vec)
+            X.append(hypers2vec(run.hypers))
             Y.append([run.reward_avg])
         print_feature_importances(X, Y, feat_names)
 
         if args.guess:
-            x = vectorizer.transform({k: v['guess'] for k, v in hypers_.items()})
-            X.append(x.toarray()[0])
+            guesses = {k: v['guess'] for k, v in hypers_.items()}
+            X.append(hypers2vec(guesses))
             Y.append([None])
             args.guess = False
 

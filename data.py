@@ -35,8 +35,6 @@ elif 'kaggle' in DB:
     close_col = 'close'
     predict_col = 'bitstamp_close'
 
-NCOL = len(columns)
-
 
 def wipe_rows(agent_name, conn):
     conn.execute("""
