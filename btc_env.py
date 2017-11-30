@@ -118,6 +118,14 @@ class BitcoinEnv(Environment):
             # self._diff(SMA(df, timeperiod=200)),
         ]
 
+    def _reshape_window_for_conv2d(self, window):
+        if len(data.tables) == 1:
+            return np.expand_dims(window, -1)
+        elif len(data.tables) == 2:  # default (risk arbitrage)
+            return np.transpose([window[:, 0:self.cols_], window[:, self.cols_:]], (1, 2, 0))
+        else:
+            raise NotImplementedError('TODO Implement conv2d features depth > 2')
+
     def reset(self):
         self.time = time.time()
         self.cash = self.value = self.start_cap
@@ -134,9 +142,8 @@ class BitcoinEnv(Environment):
 
         if self.conv2d:
             window = self.observations[self.timestep - self.window:self.timestep]
-            # TODO adapt to more than 2 tables
             first_state = dict(
-                state0=np.transpose([window[:, 0:self.cols_], window[:, self.cols_:]], (1,2,0)),
+                state0=self._reshape_window_for_conv2d(window),
                 state1=np.array([1., 1.])
             )
         else:
@@ -186,7 +193,7 @@ class BitcoinEnv(Environment):
         if self.conv2d:
             window = self.observations[self.timestep - self.window:self.timestep]
             next_state = dict(
-                state0=np.transpose([window[:, 0:self.cols_], window[:, self.cols_:]], (1,2,0)),
+                state0=self._reshape_window_for_conv2d(window),
                 state1=np.array([cash_scaled, val_scaled])
             )
 

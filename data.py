@@ -17,11 +17,11 @@ if DB == 'coins':
     close_col = 'last'
     predict_col = 'gdax_btcusd_last'
 elif DB == 'alex':
-    tables = ['exch_ticker_bitstamp_usd', 'exch_ticker_coinbase_usd']
+    tables = ['exch_ticker_coinbase_usd']
     ts_col = 'trade_timestamp'
-    columns = ['last_trade', 'ask', 'high', 'low', 'vwap', 'volume']
-    close_col = 'last_trade'
-    predict_col = 'exch_ticker_coinbase_usd_ask'
+    columns = 'last_trade_price last_trade_size bid_price bid_size bid_num_orders ask_price ask_size ask_num_orders'.split(' ')
+    close_col = 'last_trade_price'
+    predict_col = 'exch_ticker_coinbase_usd_last_trade_price'
 elif DB == 'coins2':
     tables = ['g', 'o']
     ts_col = 'close_time'
@@ -34,26 +34,6 @@ elif 'kaggle' in DB:
     columns = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']
     close_col = 'close'
     predict_col = 'bitstamp_close'
-
-
-def wipe_rows(agent_name, conn):
-    conn.execute("""
-    create table if not exists episodes
-    (
-        episode integer not null,
-        reward double precision,
-        cash double precision,
-        value double precision,
-        agent_name char(256) not null,
-        y double precision[],
-        signals double precision[],
-        steps integer,
-        constraint episodes_pkey
-            primary key (episode, agent_name)
-    );
-    """)
-    conn.execute(f"delete from episodes where agent_name='{agent_name}'")
-
 
 mode = 'ALL'  # ALL|TRAIN|TEST
 def set_mode(m):
@@ -139,21 +119,39 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False):
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
 
+# TODO this just fetches one table because the 3 tables' columns are different (not just in name, but conceptually).
+# Need to consolidate them so can do risk-arbitrage
+def _db_to_dataframe_alex(conn, limit='ALL', offset=0, just_count=False):
+    if just_count:
+        return conn.execute('select count(*) from exch_ticker_coinbase_usd').fetchone()[0]
+
+    t = tables[0] # only one for now
+    query = 'select ' + ', '.join(f"{c} as {t}_{c}" for c in columns)
+    query += f" from {t} order by {ts_col} desc limit {limit} offset {offset}"
+    return pd.read_sql_query(query, conn).iloc[::-1].ffill()
+
+
 def db_to_dataframe(conn, limit='ALL', offset=0, just_count=False):
     global mode, train_test_split
     offset = offset + train_test_split if mode == 'TEST' else offset
-    return _db_to_dataframe_ohlc(conn, limit=limit, offset=offset, just_count=just_count) if DB == 'coins2'\
-        else _db_to_dataframe_main(conn, limit=limit, offset=offset, just_count=just_count)
+    args = [conn, limit, offset, just_count]
+    return _db_to_dataframe_alex(*args) if DB == 'alex'\
+        else _db_to_dataframe_ohlc(*args) if DB == 'coins2'\
+        else _db_to_dataframe_main(*args)
+
 
 def setup_runs_table(conn):
     conn.execute("""
         --create type if not exists run_flag as enum ('random', 'winner');
-        create table if not exists runs
+        create table if not exists public.runs
         (
-            id SERIAL,
+            id serial not null,
             hypers jsonb not null,
             reward_avg double precision not null,
-            rewards double precision[] not null,
-            flag varchar(16) -- run_flag
+            flag varchar(16),
+            rewards double precision[],
+            agent varchar(64) default 'ppo_agent'::character varying not null,
+            actions double precision[],
+            prices double precision[]
         );
     """)
