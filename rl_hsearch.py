@@ -436,10 +436,10 @@ class HSearchEnv(object):
             fraction = .92/self.gpu_split if self.gpu_split > 1 else self.gpu_split
             session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
         hydrated = {'session_config': session_config}
-        if flat.get('baseline_mode') == 'states':
+        baseline_mode = flat.get('baseline_mode', None)
+        if baseline_mode == 'states':
             # TODO put this in hard-coded hyper above?
             hydrated.update({
-                'baseline_mode': 'states',
                 'baseline': {'type': 'custom'},
                 'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': flat['step_optimizer.type']}},
             })
@@ -459,7 +459,7 @@ class HSearchEnv(object):
         w_indicators = extra['indicators']
         network = custom_net(extra['net'], w_indicators, print_net=True)
 
-        if flat.get('baseline_mode', None):
+        if baseline_mode:
             baseline_net = custom_net(extra['net'], w_indicators)
             if flat['net.type'] == 'lstm':
                 baseline_net = [l for l in baseline_net if l['type'] != 'lstm']
