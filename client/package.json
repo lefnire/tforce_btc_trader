@@ -19,9 +19,12 @@
     "immutability-helper": "^2.5.1",
     "lodash": "^4.17.4",
     "react": "^16.2.0",
-    "react-dom": "^16.2.0"
+    "react-dom": "^16.2.0",
+    "react-table": "^6.7.4"
   },
   "devDependencies": {
+    "css-loader": "^0.28.7",
+    "style-loader": "^0.19.0",
     "webpack": "^3.9.1"
   }
 }

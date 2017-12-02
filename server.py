@@ -10,17 +10,19 @@ CORS(app)
 
 db_url = data.config_json['DB_URL']
 databases = dict(
-    kaggle=create_engine(db_url.replace(data.DB, 'kaggle')).connect(),
-    kaggle2=create_engine(db_url.replace(data.DB, 'kaggle2')).connect(),
-    alex=create_engine(db_url.replace(data.DB, 'alex')).connect()
+    kaggle=create_engine(db_url.replace(data.DB, 'kaggle')),
+    kaggle2=create_engine(db_url.replace(data.DB, 'kaggle2')),
+    alex=create_engine(db_url.replace(data.DB, 'alex'))
 )
 
 @app.route("/")
 def send_data():
     rows = []
-    for db_name, conn in databases.items():
+    for db_name, engine in databases.items():
+        conn = engine.connect()
         for row in conn.execute('select * from runs').fetchall():
             row = dict(row.items())
             row['source'] = db_name
             rows.append(row)
+        conn.close()
     return jsonify(rows)

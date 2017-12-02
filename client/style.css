@@ -11,3 +11,7 @@
 .dot {
     fill: rgba(0,0,0,.2);
 }
+
+.line:hover {
+ stroke-width: 3;
+}

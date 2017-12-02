@@ -282,7 +282,12 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': True
     },
-    'steps': 2048*3+3,  # can hard-code attrs as you find winners to reduce dimensionality of GP search
+    'steps': 2 * (2048*3+3)
+    # 'steps': {
+    #     'type': 'bounded',
+    #     'vals': [2048*3+3, 3*(2048*3+3)],
+    #     'guess': 2048*3+3,
+    # }
 }
 
 hypers['lstm'] = {
