@@ -3,6 +3,7 @@ import _ from 'lodash';
 import ReactTable from 'react-table';
 require('react-table/react-table.css');
 const d3 = require('d3');
+const uuidv4 = require('uuid/v4');
 const d3Tip = require('d3-tip');
 
 class App extends Component {
@@ -15,8 +16,25 @@ class App extends Component {
   }
 
   componentDidMount() {
-    fetch('http://localhost:5000').then(res => res.json()).then(data => {
-      this.setState({data}, this.mountChart);
+    // fetch('http://localhost:5000').then(res => res.json()).then(data => {
+    fetch('data.json').then(res => res.json()).then(data => {
+      // Get rid of definite losers
+      data = _.filter(data, d => {
+        return d.reward_avg > _.mean(d.rewards.slice(0,250))
+          && d.reward_avg > -10000;
+      });
+
+      data.forEach(d => {
+        d.hypers = _.transform(d.hypers, (m,v,k) => {
+          m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
+        });
+        d.unique_sigs = _.uniq(d.actions).length;
+        d.id = uuidv4();
+      });
+      this.orig_data = data;
+      this.setState({data}, () => {
+        this.mountChart(data);
+      });
     });
   }
 
@@ -34,63 +52,64 @@ class App extends Component {
     return false;
   };
 
+  onFilteredChange = () => {
+    this.mountChart(_.map(this.refs.reactTable.state.sortedData, '_original'));
+  };
+
   renderTable = () => {
     let {data} = this.state;
     if (!data) return;
-    data = _.map(data, d => {
-      let obj = _.transform(d.hypers, (m,v,k) => {
-        m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
-      });
-      return _.defaults({
-        source: d.source,
-        reward: d.reward_avg,
-        unique_sigs: _.uniq(d.actions).length
-      }, obj);
-    });
-    let columns = _(data).map(d => _.keys(d)).flatten().uniq().map(k => ({Header: k, accessor: k})).value();
+    let columns = ['unique_sigs', 'reward_avg', 'source'].map(k => ({Header: k, accessor: k}));
+    columns = columns.concat(
+      _(data).map(d => _.keys(d.hypers)).flatten().uniq().map(k => ({Header: k, accessor: 'hypers.' + k})).value()
+    );
 
     return <ReactTable
+      ref='reactTable'
+      minRows={2}
       data={data}
       columns={columns}
       filterable={true}
       defaultFilterMethod={this.defaultFilterMethod}
+      onFilteredChange={_.debounce(this.onFilteredChange, 400)}
+      defaultSorted={[{id:'reward_avg', desc:true}]}
+      defaultPageSize={10}
     />
   };
 
   render() {
     const width = window.innerWidth - 50,
       height = window.innerHeight - 50;
+    const {showSignals} = this.state;
     return (
       <div>
-        <svg id='rewards' width={width} height={height / 2} />
-        {this.state.showSignals && <svg id='signals' width={width} height={height / 2} />}
         {this.renderTable()}
+        <svg id='rewards' width={width} height={height / 2} />
+        <svg id='signals' width={width} height={showSignals? (height / 2) : 0} />
       </div>
     );
   }
 
-  mountChart = () => {
-    let {data} = this.state;
+  mountChart = (data) => {
     let svg = d3.select("svg#rewards"),
       margin = {top: 20, right: 20, bottom: 30, left: 50},
       width = +svg.attr("width") - margin.left - margin.right,
-      height = +svg.attr("height") - margin.top - margin.bottom,
-      g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+      height = +svg.attr("height") - margin.top - margin.bottom;
 
-    data = _.filter(data, d => _.uniq(d.actions).length > 2);
-    // data = _.sortBy(data, d => _(d.rewards).slice(-10).mean()).reverse().slice(0,10);
-    data = _.sortBy(data, 'reward_avg').reverse().slice(0,4);
-    data.forEach(d => {
-      d.rewards = d.rewards.map((v,i) => ({y:v, x:i, parent:d}));
+    svg.select('g').remove(); // start clean
+    let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+    let rewards = data.map(d => {
+      return d.rewards.map((v,i) => ({y:v, x:i, parent:d}));
     });
-    let all_rewards = _(data).map('rewards').flatten().value();
+    let all_rewards = _.flatten(rewards);
 
     let colorScale = d3.scaleOrdinal(d3.schemeCategory10)
       .domain([0, data.length]);
 
     let x = d3.scaleLinear()
       .rangeRound([0, width])
-      .domain([0, data[0].rewards.length]);
+      .domain([0, d3.max(rewards, r => r.length)]);
     let y = d3.scaleLinear()
       .rangeRound([height, 0])
       .domain(d3.extent(all_rewards, d => d.y));
@@ -121,9 +140,9 @@ class App extends Component {
     let radius = 2.5,
       lineWidth = 1.5;
 
-    data.forEach((row, i) => {
+    rewards.forEach((row, i) => {
       g.append("path")
-        .datum(row.rewards)
+        .datum(row)
         .classed('line', true)
         .attr("fill", "none")
         .attr("stroke", () => colorScale(i))
@@ -132,18 +151,18 @@ class App extends Component {
         .attr("d", line)
         .on("click", d => {
           this.clickedDatum = d[0].parent;
-          this.mountSignals();
+          this.setState({showSignals: true}, this.mountSignals);
         })
     });
 
     // Add a 0-line
     let zeroLine = [
       {x:0,y:0},
-      {x:data[0].rewards.length, y:0}
+      {x:d3.max(rewards, r => r.length), y:0}
     ];
     g.datum(zeroLine)
       .append('path')
-      .classed('line', true)
+      .classed('zero-line', true)
       .attr("fill", "none")
       .attr("stroke", 'black')
       .attr("stroke-linejoin", "round")
@@ -174,10 +193,6 @@ class App extends Component {
         .attr("cy", d => y(d.y))
         .on("mouseover", tip.show)
         .on("mouseout", tip.hide)
-        .on("click", d => {
-          this.clickedDatum = d.parent;
-          this.setState({showSignals: true}, this.mountSignals());
-        });
 
     let zoom = d3.zoom()
       .scaleExtent([0,500])
@@ -187,7 +202,7 @@ class App extends Component {
       g.selectAll('.dot')
         .attr("transform", d3.event.transform)
         .attr('r', radius/d3.event.transform.k);
-      g.selectAll('.line')
+      g.selectAll('.line,.zero-line')
         .attr("transform", d3.event.transform)
         .attr("stroke-width", lineWidth/d3.event.transform.k);
       axes_g.x.call(axes.x.scale(d3.event.transform.rescaleX(x)));
@@ -257,8 +272,7 @@ class App extends Component {
       .on("zoom", zooming);
     svg.call(zoom);
     function zooming() {
-      g.selectAll('.dot').attr("transform", d3.event.transform);
-      g.selectAll('.line').attr("transform", d3.event.transform);
+      g.selectAll('.line,.zero-line,.dot').attr("transform", d3.event.transform);
       axes_g.x.call(axes.x.scale(d3.event.transform.rescaleX(x)));
       axes_g.y.call(axes.y.scale(d3.event.transform.rescaleY(y)));
     }
