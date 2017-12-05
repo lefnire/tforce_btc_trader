@@ -17,13 +17,7 @@ class App extends Component {
 
   componentDidMount() {
     // fetch('http://localhost:5000').then(res => res.json()).then(data => {
-    fetch('data.json').then(res => res.json()).then(data => {
-      // Get rid of definite losers
-      data = _.filter(data, d => {
-        return d.reward_avg > _.mean(d.rewards.slice(0,250))
-          && d.reward_avg > -10000;
-      });
-
+    fetch('dumps/alex2.json').then(res => res.json()).then(data => {
       data.forEach(d => {
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;

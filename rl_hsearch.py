@@ -9,7 +9,7 @@ from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
 from tensorforce.execution import Runner
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
 
 
@@ -24,9 +24,7 @@ Each hyper is specified as `key: {type, vals, requires, hook}`.
     (a) min/max specified inside (for bounded); (b) all possible options (for 'int'). If type is dict, then the keys
     are used in the searching (eg, look at the network hyper) and the values are used as the configuration.
 - guess: initial guess (supplied by human) to explore      
-- requires: can specify that a hyper should be deleted if some other hyper (a) doesn't exist (type(requires)==str), 
-    (b) doesn't equal some value (type(requires)==dict)
-- hook: transform this hyper before plugging it into Configuration(). Eg, we'd use type='bounded' for batch size since
+- pre/post (hooks): transform this hyper before plugging it into Configuration(). Eg, we'd use type='bounded' for batch size since
     we want to range from min to max (insteaad of listing all possible values); but we'd cast it to an int inside
     hook before using it. (Actually we clamp it to blocks of 8, as you'll see)
 
@@ -37,36 +35,37 @@ a `requires` field where necessary.
 """
 
 
-def build_net_spec(net, indicators):
+def build_net_spec(net, indicators, baseline=False):
     """Builds a net_spec from some specifications like width, depth, etc"""
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
     conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
     lstm = {'type': 'lstm', 'dropout': net.dropout}
+    only_net_end = net.type == 'lstm' and baseline
 
     arr = []
-    if net.dropout:
-        arr.append({**dropout})
+    if net.dropout: arr.append({**dropout})
 
     # Pre-layer
-    if 'pre_depth' in net:
+    if 'pre_depth' in net and not only_net_end:
         for i in range(net.pre_depth):
             size = int(net.width/(net.pre_depth-i+1)) if net.funnel else net.width
             arr.append({'size': size, **dense})
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
-    n_cols = BitcoinEnv.n_cols(conv2d=net.type == 'conv2d', indicators=indicators)
-    for i in range(net.depth):
+    if not only_net_end:
+        n_cols = BitcoinEnv.n_cols(conv2d=net.type == 'conv2d', indicators=indicators)
+        for i in range(net.depth):
+            if net.type == 'conv2d':
+                size = max([32, int(net.width/4)])
+                if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
+                arr.append({'size': size, 'window': (net.window, n_cols), 'stride': (net.stride, 1), **conv2d})
+            else:
+                size = net.width
+                arr.append({'size': size, **lstm})
         if net.type == 'conv2d':
-            size = max([32, int(net.width/4)])
-            if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
-            arr.append({'size': size, 'window': (net.window, n_cols), 'stride': (net.stride, 1), **conv2d})
-        else:
-            size = net.width
-            arr.append({'size': size, **lstm})
-    if net.type == 'conv2d':
-        arr.append({'type': 'flatten'})
+            arr.append({'type': 'flatten'})
 
     # Dense
     for i in range(net.depth):
@@ -77,9 +76,9 @@ def build_net_spec(net, indicators):
     return arr
 
 
-def custom_net(net, indicators, print_net=False):
+def custom_net(net, indicators, print_net=False, baseline=False):
     net = Box(net)
-    layers_spec = build_net_spec(net, indicators)
+    layers_spec = build_net_spec(net, indicators, baseline)
     if print_net: pprint(layers_spec)
     if net.type != 'conv2d': return layers_spec
 
@@ -121,7 +120,6 @@ def custom_net(net, indicators, print_net=False):
 
 def bins_of_8(x): return int(x // 8) * 8
 
-
 hypers = {}
 hypers['agent'] = {
     # TODO preprocessing, batch_observe, reward_preprocessing[dict(type='clip', min=-1, max=1)]
@@ -129,21 +127,14 @@ hypers['agent'] = {
 hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
-        'vals': [8, 256],
+        'vals': [8, 2048],
         'guess': 176,
-        'hook': bins_of_8
+        'pre': bins_of_8
     },
-    'keep_last_timestep': {
-        'type': 'bool',
-        'guess': False
-    }
+    'keep_last_timestep': True
 }
 hypers['model'] = {
-    'optimizer.type': {
-        'type': 'int',
-        'vals': ['nadam', 'adam'],  # TODO rmsprop
-        'guess': 'adam',
-    },
+    'optimizer.type': 'nadam',
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [1e-7, 1e-1],
@@ -153,15 +144,14 @@ hypers['model'] = {
         'type': 'bounded',
         'vals': [2, 20],
         'guess': 10,
-        'hook': int
+        'pre': int
     },
     'discount': {
         'type': 'bounded',
         'vals': [.95, .99],
-        'guess': .98
+        'guess': .97
     },
     'normalize_rewards': {
-        # True seems definite winner
         'type': 'bool',
         'guess': True
     },
@@ -171,38 +161,21 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .5
+        'guess': .4
     }
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
 hypers['pg_model'] = {
-    # 'baseline_mode': {
-    #     'type': 'int',
-    #     # My framework can't handle different variable types in int[vals], so set None as string and cast in hook()
-    #     'vals': ['states', 'None'],
-    #     'guess': 'states',
-    #     'hook': lambda x: None if x == 'None' else x
-    # },
-    'baseline_mode': 'states',  # big issues w/ removed values (through 'requires') & DictVectorizer
+    'baseline_mode': {
+        'type': 'bool',
+        'guess': False,
+        'pre': lambda x: 'states' if x else None
+    },
     'gae_lambda': {
-        'requires': 'baseline_mode',
         'type': 'bounded',
-        'vals': [.94, .99],
-        'guess': .97,
-        'hook': lambda x: None if x < .95 else x
-    },
-    'baseline_optimizer.optimizer.learning_rate': {
-        'requires': 'baseline_mode',
-        'type': 'bounded',
-        'vals': [1e-7, 1e-1],
-        'guess': .005
-    },
-    'baseline_optimizer.num_steps': {
-        'requires': 'baseline_mode',
-        'type': 'bounded',
-        'vals': [2, 20],
-        'guess': 10,
-        'hook': int
+        'vals': [0., 1.],
+        'guess': .96,
+        'post': lambda x, others: x if others['baseline_mode'] and x > .1 else None
     },
 }
 hypers['pg_prob_ration_model'] = {
@@ -210,7 +183,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .2
+        'guess': .5
     }
 }
 
@@ -235,21 +208,21 @@ hypers['custom'] = {
     # max number times the agent can repeat the same action until punished for lack of diversity
     'max_repeat': {
         'type':  'bounded',
-        'vals': [20, 1000],
-        'guess': 100,
-        'hook': int
+        'vals': [20, 100],
+        'guess': 50,
+        'pre': int
     },
     'net.depth': {
         'type': 'bounded',
         'vals': [1, 5],
-        'guess': 3,
-        'hook': int
+        'guess': 2,
+        'pre': int
     },
     'net.width': {
         'type': 'bounded',
         'vals': [32, 768],
-        'guess': 512,
-        'hook': bins_of_8
+        'guess': 384,
+        'pre': bins_of_8
     },
     'net.funnel': {
         'type': 'bool',
@@ -258,36 +231,36 @@ hypers['custom'] = {
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
-        'vals': ['tanh', 'elu', 'relu', 'selu'],
-        'guess': 'tanh'
+        'vals': ['tanh', 'elu'],  # , 'relu', 'selu'],
+        'guess': 'elu'
     },
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
         'guess': .2,
-        'hook': lambda x: None if x < .1 else x
+        'pre': lambda x: None if x < .1 else x
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [1e-5, 1e-1],
-        'guess': .03
+        'vals': [1e-5, .1],
+        'guess': .05
     },
     'net.l1': {
         'type': 'bounded',
-        'vals': [1e-5, 1e-1],
-        'guess': .005
+        'vals': [1e-5, .1],
+        'guess': .05
     },
-    # 'net.bias': {'type': 'bool'},
     'diff_percent': {
         'type': 'bool',
         'guess': True
     },
-    'steps': 2 * (2048*3+3)
-    # 'steps': {
-    #     'type': 'bounded',
-    #     'vals': [2048*3+3, 3*(2048*3+3)],
-    #     'guess': 2048*3+3,
-    # }
+    # note 'steps' removed as that effects reward outcome! can't compare runs
+    'episodes': {
+        'type': 'bounded',
+        'vals': [250, 250*3],
+        'guess': 250,
+        'pre': int
+    }
 }
 
 hypers['lstm'] = {
@@ -295,21 +268,22 @@ hypers['lstm'] = {
         'type': 'bounded',
         'vals': [0, 3],
         'guess': 1,
-        'hook': int,
+        'pre': int,
     },
 }
 hypers['conv2d'] = {
+    # 'net.bias': {'type': 'bool'},
     'net.window': {
         'type': 'bounded',
         'vals': [3, 8],
         'guess': 4,
-        'hook': int,
+        'pre': int,
     },
     'net.stride': {
         'type': 'bounded',
         'vals': [1, 4],
         'guess': 2,
-        'hook': int,
+        'pre': int,
     },
     'net.money_last': {
         'type': 'bool',
@@ -388,26 +362,6 @@ class HSearchEnv(object):
     def close(self):
         self.conn.close()
 
-    def _action2val(self, k, v):
-        # from TensorForce, v is a numpy object - unpack. From Bayes, it's a primitive. TODO handle better
-        try: v = v.item()
-        except Exception: pass
-
-        hyper = self.hypers[k]
-        if 'hook' in hyper:
-            v = hyper['hook'](v)
-        if hyper['type'] == 'bool': return bool(round(v))
-        if hyper['type'] == 'int':
-            if type(hyper['vals']) == list and type(v) == int:
-                return hyper['vals'][v]
-            # Else it's a dict. Don't map the values till later (keep them as keys in flat)
-        return v
-
-    def _key2val(self, k, v):
-        hyper = self.hypers[k]
-        if type(hyper) == dict and type(hyper.get('vals', None)) == dict:
-            return hyper['vals'][v]
-        return v
 
     def get_hypers(self, actions):
         """
@@ -417,58 +371,59 @@ class HSearchEnv(object):
         (for feature_importances and the like) and that's a good format, rather than a nested dict.
         :param actions: the hyperparamters
         """
-        flat = {k: self._action2val(k, v) for k, v in actions.items()}
-        flat.update(self.hardcoded)
-        self.flat = flat
-
-        # Ensure dependencies (do after above to make sure the randos have "settled")
-        for k in list(flat):
-            if k in self.hardcoded: continue
+        self.flat = flat = {}
+        # Preprocess hypers
+        for k, v in actions.items():
+            try: v = v.item()  # sometimes primitive, sometimes numpy
+            except Exception: pass
             hyper = self.hypers[k]
-            if not (type(hyper) is dict and 'requires' in hyper): continue
-            req = hyper['requires']
-            # Requirement is a string (require the value's not None). TODO handle nested deps.
-            if type(req) is str:
-                if not flat[req]: del flat[k]
-                continue
-            # Requirement is a dict of type {key: value_it_must_equal}. TODO handle multiple deps
-            dep_k, dep_v = list(req.items())[0]
-            if flat[dep_k] != dep_v:
-                del flat[k]
+            if 'pre' in hyper:
+                v = hyper['pre'](v)
+            flat[k] = v
+        flat.update(self.hardcoded)
+
+        # Post-process hypers (allow for dependency handling, etc)
+        for k, v in flat.items():
+            hyper = self.hypers[k]
+            if type(hyper) == dict and 'post' in hyper:
+                flat[k] = hyper['post'](v, flat)
 
         session_config = None
         if self.gpu_split != 1:
-            fraction = .92/self.gpu_split if self.gpu_split > 1 else self.gpu_split
+            fraction = .90/self.gpu_split if self.gpu_split > 1 else self.gpu_split
             session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
         hydrated = {'session_config': session_config}
-        baseline_mode = flat.get('baseline_mode', None)
-        if baseline_mode == 'states':
-            # TODO put this in hard-coded hyper above?
+        if flat['baseline_mode']:
             hydrated.update({
                 'baseline': {'type': 'custom'},
-                'baseline_optimizer': {'type': 'multi_step', 'optimizer': {'type': flat['step_optimizer.type']}},
+                'baseline_mode': 'states',
+                'baseline_optimizer': {
+                    'type': 'multi_step',
+                    'num_steps': flat['optimization_steps'],
+                    'optimizer': {
+                        'type': flat['step_optimizer.type'],
+                        'learning_rate': flat['step_optimizer.learning_rate']
+                    }
+                },
             })
         hydrated = DotDict(hydrated)
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
         for k, v in flat.items():
             if k in hypers[self.agent]:  # remove custom fields
-                hydrated[k] = self._key2val(k, v)
+                hydrated[k] = v  # self._key2val(k, v)
         hydrated = hydrated.to_dict()
 
         extra = DotDict({})
         for k, v in flat.items():
             if k not in hypers[self.agent]:  # only custom fields
-                extra[k] = self._key2val(k, v)
+                extra[k] = v  # self._key2val(k, v)
         extra = extra.to_dict()
         w_indicators = extra['indicators']
         network = custom_net(extra['net'], w_indicators, print_net=True)
 
-        if baseline_mode:
-            baseline_net = custom_net(extra['net'], w_indicators)
-            if flat['net.type'] == 'lstm':
-                baseline_net = [l for l in baseline_net if l['type'] != 'lstm']
-            hydrated['baseline']['network_spec'] = baseline_net
+        if flat['baseline_mode']:
+            hydrated['baseline']['network_spec'] = custom_net(extra['net'], w_indicators, baseline=True)
 
         print('--- Flat ---')
         pprint(flat)
@@ -491,7 +446,7 @@ class HSearchEnv(object):
         )
 
         # n_train, n_test = 2, 1
-        n_train, n_test = 250, 50
+        n_train, n_test = flat['episodes'], 50
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         env.testing = True
@@ -532,7 +487,7 @@ class HSearchEnv(object):
 
 def print_feature_importances(X, Y, feat_names):
     if len(X) < 5: return
-    model = RandomForestRegressor(bootstrap=True, oob_score=True)
+    model = GradientBoostingRegressor()
     model_hypers = {
         'max_features': [None, 'sqrt', 'log2'],
         'max_depth': [None, 10, 20],
@@ -551,8 +506,8 @@ def main_gp():
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu_split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    parser.add_argument('-n', '--net_type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
+    parser.add_argument('-g', '--gpu_split', type=float, default=.3, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
     args = parser.parse_args()
 
@@ -615,11 +570,11 @@ def main_gp():
                     score, val = score2, k2.split('=')[1]
             obj[attr] = val
 
-        # Is this correct? Seems if a value would be False, it reverses as non-existent instead
+        # Bools come in as floats. Also, if the result is False they don't come in at all! So we start iterate
+        # hypers now instead of nesting this logic in reversed-iteration above
         for k, v in hypers_.items():
-            if k not in obj:
-                print(f'{k}={v} not in reversed actions')
-                obj[k] = False
+            if v['type'] == 'bool':
+                obj[k] = bool(round(obj.get(k,0.)))
         return obj
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run

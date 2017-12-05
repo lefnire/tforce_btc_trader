@@ -16,12 +16,22 @@ if DB == 'coins':
     columns = ['last', 'high', 'low', 'volume']
     close_col = 'last'
     predict_col = 'gdax_btcusd_last'
-elif DB == 'alex':
-    tables = ['exch_ticker_coinbase_usd']
-    ts_col = 'trade_timestamp'
-    columns = 'last_trade_price last_trade_size bid_price bid_size bid_num_orders ask_price ask_size ask_num_orders'.split(' ')
-    close_col = 'last_trade_price'
-    predict_col = 'exch_ticker_coinbase_usd_last_trade_price'
+elif 'alex' in DB:
+    tables = [
+    {
+        'name': 'exch_ticker_kraken_usd',
+        'ts_col': 'last_update',
+        'columns': 'last_trade_price last_trade_lot_volume ask_price ask_lot_volume bid_price bid_lot_volume volume volume_last24 vwap vwap_last24 number_trades number_trades_last24 low low_last24 high high_last24 open_price'.split(' '),
+        'ohlcv': {'open': 'open_price', 'high': 'high', 'low': 'low', 'close': 'last_trade_price', 'volume': 'volume'},
+    },
+    ## TODO figure out how to left-join this in w/ nulls properly imputed
+    # {
+    #     'name': 'exch_ticker_coinbase_usd',
+    #     'ts_col': 'last_update',
+    #     'columns': 'last_trade_price last_trade_size bid_price bid_size bid_num_orders ask_price ask_size ask_num_orders'.split(' '),
+    # }
+    ]
+    target = 'exch_ticker_kraken_usd_last_trade_price'
 elif DB == 'coins2':
     tables = ['g', 'o']
     ts_col = 'close_time'
@@ -34,6 +44,11 @@ elif 'kaggle' in DB:
     columns = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']
     close_col = 'close'
     predict_col = 'bitstamp_close'
+
+LEN_COLS, N_INDICATORS = 0, 0
+for t in tables:
+    LEN_COLS += len(t['columns'])
+    if 'ohlcv' in t: N_INDICATORS += 4  # This is defined in btc_env._get_indicatora()
 
 mode = 'ALL'  # ALL|TRAIN|TEST
 def set_mode(m):
@@ -53,6 +68,9 @@ def count_rows(conn):
     already_asked = True
 
     row_count = db_to_dataframe(conn, just_count=True)
+    if mode == 'ALL':
+        print('mode: ', mode, ' row_count: ', row_count)
+        return row_count
     train_test_split = int(row_count * .8)
     print('mode: ', mode, ' row_count: ', row_count, ' split: ', train_test_split)
     row_count = train_test_split if mode == 'TRAIN' else row_count - train_test_split
@@ -89,54 +107,49 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False):
         query = 'select count(*) over ()'
     else:
         query = 'select ' + ', '.join(
-            ', '.join(f"{t}.{c} as {t}_{c}" for c in columns)
+            ', '.join(f"{t['name']}.{c} as {t['name']}_{c}" for c in t['columns'])
             for t in tables
         )
 
     # interval = 10  # what time-intervals to group by? 60 would be 1-minute intervals
     # TODO https://gis.stackexchange.com/a/127874/105932 for arbitrary interval-grouping
-    for (i, table) in enumerate(tables):
-        query += " from (" if i == 0 else " inner join ("
-        avg_cols = ', '.join(f'avg({c}) as {c}' for c in columns)
-        query += f"""
-              select {avg_cols},
-                date_trunc('second', {ts_col} at time zone 'utc') as ts
-              from {table}
-              where {ts_col} > now() - interval '2 years'
-              group by ts
-            ) {table}
-            """
-        if i != 0:
-            query += f'on {table}.ts={tables[i - 1]}.ts'
+    if len(tables) == 1:
+        query += f" from {tables[0]['name']}"
+    else:
+        prior_table = None
+        for table in tables:
+            cols, name, ts_col = table['columns'], table['name'], table['ts_col']
+            query += " inner join (" if prior_table else " from ("
+            avg_cols = ', '.join(f'avg({c}) as {c}' for c in cols)
+            query += f"""
+                  select {avg_cols},
+                    date_trunc('second', {ts_col} at time zone 'utc') as ts
+                  from {name}
+                  group by ts
+                ) {name}
+                """
+            if prior_table:
+                query += f'on {name}.ts={prior_table}.ts'
+            prior_table = name
 
     if just_count:
         query += " limit 1"
         return conn.execute(query).fetchone()[0]
 
-    query += f" order by {tables[0]}.ts desc limit {limit} offset {offset}"
+    order_field = f"{tables[0]['name']}.ts" if len(tables) > 1 else tables[0]['ts_col']
+    query += f" order by {order_field} desc limit {limit} offset {offset}"
 
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
-    return pd.read_sql_query(query, conn).iloc[::-1].ffill()
-
-
-# TODO this just fetches one table because the 3 tables' columns are different (not just in name, but conceptually).
-# Need to consolidate them so can do risk-arbitrage
-def _db_to_dataframe_alex(conn, limit='ALL', offset=0, just_count=False):
-    if just_count:
-        return conn.execute('select count(*) from exch_ticker_coinbase_usd').fetchone()[0]
-
-    t = tables[0] # only one for now
-    query = 'select ' + ', '.join(f"{c} as {t}_{c}" for c in columns)
-    query += f" from {t} order by {ts_col} desc limit {limit} offset {offset}"
-    return pd.read_sql_query(query, conn).iloc[::-1].ffill()
+    df = pd.read_sql_query(query, conn).iloc[::-1]
+    # return df.fillna(method='ffill').fillna(method='bfill')  # fill forward then backward
+    return df.fillna(method='ffill')
 
 
 def db_to_dataframe(conn, limit='ALL', offset=0, just_count=False):
     global mode, train_test_split
     offset = offset + train_test_split if mode == 'TEST' else offset
     args = [conn, limit, offset, just_count]
-    return _db_to_dataframe_alex(*args) if DB == 'alex'\
-        else _db_to_dataframe_ohlc(*args) if DB == 'coins2'\
+    return _db_to_dataframe_ohlc(*args) if DB == 'coins2'\
         else _db_to_dataframe_main(*args)
 
 

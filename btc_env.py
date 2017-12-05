@@ -18,6 +18,7 @@ from data import engine
 class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
+        if 'steps' not in hypers: hypers['steps'] = 2048*3+3
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
@@ -64,11 +65,11 @@ class BitcoinEnv(Environment):
 
     @staticmethod
     def n_cols(conv2d=True, indicators=False):
-        num = len(data.columns)
+        num = data.LEN_COLS
         if indicators:
-            num += 4  # num features from self._get_indicators
+            num += data.N_INDICATORS  # num features from self._get_indicators
         if not conv2d: # These will be added in downstream Dense
-            num *= len(data.tables)  # That many features per table
+            # num *= len(data.tables)  # That many features per table
             num += 2  # [self.cash, self.value]
         return num
 
@@ -85,20 +86,22 @@ class BitcoinEnv(Environment):
 
     def _xform_data(self, df):
         columns = []
-        for k in data.tables:
+        for table in data.tables:
+            name, cols, ohlcv = table['name'], table['columns'], table.get('ohlcv', {})
             # TA-Lib requires specifically-named columns (OHLCV)
-            c = dict([(f'{k}_{c}', c) for c in data.columns if c != data.close_col])
-            c[f'{k}_{data.close_col}'] = 'close'
+            c = dict([(f'{name}_{c}', c) for c in cols if c not in ohlcv.values()])
+            for k, v in ohlcv.items():
+                c[f'{name}_{v}'] = k
             xchange_df = df.rename(columns=c)
 
             # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
             # are absolute values, causing number-range instability
             columns += list(map(lambda k: self._diff(xchange_df[k]), c.values()))
-            if self.hypers.indicators:
+            if self.hypers.indicators and ohlcv:
                 columns += self._get_indicators(xchange_df)
 
         states = np.nan_to_num(np.column_stack(columns))
-        prices = df[data.predict_col].values
+        prices = df[data.target].values
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/self.cash after each action
         return states, prices
 
