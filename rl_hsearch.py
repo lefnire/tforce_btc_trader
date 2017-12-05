@@ -204,7 +204,6 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': False
     },
-    'scale': False,
     # max number times the agent can repeat the same action until punished for lack of diversity
     'max_repeat': {
         'type':  'bounded',
@@ -260,6 +259,10 @@ hypers['custom'] = {
         'vals': [250, 250*3],
         'guess': 250,
         'pre': int
+    },
+    'unimodal': {
+        'type': 'bool',
+        'guess': False
     }
 }
 

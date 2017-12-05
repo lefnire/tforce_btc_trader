@@ -30,10 +30,12 @@ class BitcoinEnv(Environment):
         self.conn = engine.connect()
 
         # Action space
-        if re.search('(dqn|ppo|a3c)', name, re.IGNORECASE):
-            self.actions_ = dict(type='int', shape=(), num_actions=5)
-        else:
+        if self.hypers.unimodal:
             self.actions_ = dict(type='float', shape=(), min_value=-100, max_value=100)
+        else:
+            self.actions_ = dict(
+                action=dict(type='int', shape=(), num_actions=3),
+                amount=dict(type='float', shape=(), min_value=-100, max_value=100))
 
         # Observation space
         self.cols_ = self.n_cols(conv2d=self.conv2d, indicators=self.hypers.indicators)
@@ -154,23 +156,22 @@ class BitcoinEnv(Environment):
         return first_state
 
     def execute(self, actions):
-        if self.actions['type'] == 'int':
-            signals = {
-                0: -40,
-                1: 0,
-                2: 1,
-                3: 5,
-                4: 20
-            }
-            signal = signals[actions]
+        min_trade = 24  # gdax min order size = .01btc ($118); krakken = .002btc ($23.60)
+        if self.hypers.unimodal:
+            signal = 0 if -min_trade < actions < min_trade else actions
         else:
-            signal = actions
-            # gdax requires a minimum .01BTC (~$40) sale. As we're learning a probability distribution, don't separate
-            # it w/ cutting -40-0 as 0 - keep it "continuous" by augmenting like this.
-            if signal < 0: signal -= 40
+            signal = {
+                0: -1,  # make amount negative
+                1: 0,  # hold
+                2: 1  # make amount positive
+            }[actions['action']] * actions['amount']
+            if not signal: signal = 0  # sometimes gives -0.0, dunno if that matters anywhere downstream
+            elif signal < 0: signal -= min_trade
+            elif signal > 0: signal += min_trade
+
         self.signals.append(signal)
 
-        fee = 0.0025  # https://www.gdax.com/fees/BTC-USD
+        fee = 0.0026  # https://www.kraken.com/en-us/help/fees
         abs_sig = abs(signal)
         before = self.cash + self.value
         if signal > 0:
