@@ -204,13 +204,6 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': False
     },
-    # max number times the agent can repeat the same action until punished for lack of diversity
-    'max_repeat': {
-        'type':  'bounded',
-        'vals': [20, 100],
-        'guess': 50,
-        'pre': int
-    },
     'net.depth': {
         'type': 'bounded',
         'vals': [1, 5],
@@ -253,11 +246,10 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': True
     },
-    # note 'steps' removed as that effects reward outcome! can't compare runs
-    'episodes': {
+    'steps': {
         'type': 'bounded',
-        'vals': [250, 250*3],
-        'guess': 250,
+        'vals': [2048*3+3, 3*(2048*3+3)],
+        'guess': 2048*3+3,
         'pre': int
     },
     'unimodal': {
@@ -449,7 +441,7 @@ class HSearchEnv(object):
         )
 
         # n_train, n_test = 2, 1
-        n_train, n_test = flat['episodes'], 50
+        n_train, n_test = 250, 50
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         env.testing = True
@@ -458,8 +450,8 @@ class HSearchEnv(object):
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
 
         # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
-        ep_results = runner.environment.episode_results
-        reward = np.mean(ep_results['rewards'][-n_test:])
+        rewards = runner.environment.episode_rewards
+        reward = np.mean(rewards[-n_test:])
         sql = """
           insert into runs (hypers, reward_avg, rewards, agent, prices, actions, flag) 
           values (:hypers, :reward_avg, :rewards, :agent, :prices, :actions, :flag)
@@ -468,7 +460,7 @@ class HSearchEnv(object):
             text(sql),
             hypers=json.dumps(flat),
             reward_avg=reward,
-            rewards=ep_results['rewards'],
+            rewards=rewards,
             agent='ppo_agent',
             prices=env.prices.tolist(),
             actions=env.signals,

@@ -1,4 +1,4 @@
-import random, time, re
+import random, time, re, math
 import numpy as np
 import pandas as pd
 from talib.abstract import SMA, RSI, ATR, EMA
@@ -18,13 +18,12 @@ from data import engine
 class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
-        if 'steps' not in hypers: hypers['steps'] = 2048*3+3
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
         self.start_cap = 1e3
         self.window = 150
-        self.episode_results = {'cash': [], 'values': [], 'rewards': []}
+        self.episode_rewards = []
         self.testing = False  # training by default; calling code will switch us to testing
 
         self.conn = engine.connect()
@@ -138,6 +137,7 @@ class BitcoinEnv(Environment):
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
         self.total_reward = 0
+        self.repeat_ct = 1
 
         # Fetch random slice of rows from the database (based on limit)
         offset = random.randint(0, data.count_rows(self.conn) - self.hypers.steps)
@@ -208,30 +208,29 @@ class BitcoinEnv(Environment):
         # this, including: (1) no interference (2) punish for holding too long (3) punish for repeats (4) instead
         # of punishing, "up the ante" by doubling the reward (kinda force him to take a closer look). Too many options
         # had dimensionality down-side, so I'm trying an "always on" but "vary the max #steps" approach.
-        recent_actions = np.array(self.signals[-self.hypers.max_repeat:])
-        if not self.testing and \
-            not (np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0)):
-            reward -= 1
+        if not self.testing:
+            recent_actions = np.array(self.signals[-self.repeat_ct:])
+            if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
+                self.repeat_ct = 1  # reset penalty-growth
+            else:
+                reward -= self.repeat_ct/50
+                self.repeat_ct += 1  # grow the penalty with time
 
         self.total_reward += reward
 
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
-            self.episode_results['cash'].append(self.cash)
-            self.episode_results['values'].append(self.value)
-            self.episode_results['rewards'].append(self.total_reward)
+            self.episode_rewards.append(self.total_reward/self.hypers.steps)  # divide so we can compare runs w/ steps that vary
             self.time = round(time.time() - self.time)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, terminal, reward
 
     def _write_results(self):
-        res = self.episode_results
-        episode = len(res['cash'])
-        if episode % 5 != 0: return  # TODO temporary: reduce the output clutter
-        reward, cash, value = float(self.total_reward), float(self.cash), float(self.value)
-        avg50 = round(np.mean(res['rewards'][-50:]))
+        rewards = self.episode_rewards
+        episode = len(rewards)
+        if episode % 5 != 0: return
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         high, low = np.max(self.signals), np.min(self.signals)
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(reward)}\tavg50:{avg50}\tA:{common}(high={high},low={low})")
+        print(f"{episode}\t⌛:{self.time}s\tR:{int(rewards[-1])}\tA:{common}(high={high},low={low})")
