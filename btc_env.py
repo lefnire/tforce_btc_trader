@@ -221,7 +221,7 @@ class BitcoinEnv(Environment):
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
-            self.episode_rewards.append(self.total_reward/self.hypers.steps)  # divide so we can compare runs w/ steps that vary
+            self.episode_rewards.append(float(self.total_reward/self.hypers.steps))  # divide so we can compare runs w/ steps that vary
             self.time = round(time.time() - self.time)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
@@ -232,5 +232,5 @@ class BitcoinEnv(Environment):
         episode = len(rewards)
         if episode % 5 != 0: return
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
-        high, low = np.max(self.signals), np.min(self.signals)
-        print(f"{episode}\t⌛:{self.time}s\tR:{int(rewards[-1])}\tA:{common}(high={high},low={low})")
+        reward, high, low = '%.2f' % rewards[-1], max(self.signals), min(self.signals)
+        print(f"{episode}\t⌛:{self.time}s\tR:{reward}\tA:{common}(high={high},low={low})")

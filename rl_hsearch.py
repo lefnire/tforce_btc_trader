@@ -173,9 +173,9 @@ hypers['pg_model'] = {
     },
     'gae_lambda': {
         'type': 'bounded',
-        'vals': [0., 1.],
+        'vals': [.85, .99],
         'guess': .96,
-        'post': lambda x, others: x if others['baseline_mode'] and x > .1 else None
+        'post': lambda x, others: x if others['baseline_mode'] and x > .9 else None
     },
 }
 hypers['pg_prob_ration_model'] = {
@@ -497,13 +497,14 @@ def print_feature_importances(X, Y, feat_names):
 
 
 def main_gp():
-    import GPyOpt
+    import gp, GPyOpt
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-g', '--gpu_split', type=float, default=.3, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
+    parser.add_argument('--gpyopt', action="store_true", default=False, help="Use GPyOpt library? Or use basic sklearn GP implementation?")
     args = parser.parse_args()
 
     # Encode features
@@ -533,12 +534,15 @@ def main_gp():
     # instantiate just to get actions (get them from hypers above?)
     bounds = []
     for k in feat_names:
-        d = {'name': k, 'type': 'discrete', 'domain': (0, 1)}
         hyper = hypers_.get(k, False)
-        if hyper and hyper['type'] == 'bounded':
-            d['type'] = 'continuous'
-            d['domain'] = (min(hyper['vals']), max(hyper['vals']))
-        bounds.append(d)
+        if hyper:
+            bounded, min_, max_ = hyper['type'] == 'bounded', min(hyper['vals']), max(hyper['vals'])
+        if args.gpyopt:
+            b = {'name': k, 'type': 'discrete', 'domain': (0, 1)}
+            if bounded: b.update(type='continuous', domain=(min_, max_))
+        else:
+            b = [min_, max_] if bounded else [0, 1]
+        bounds.append(b)
 
     def hypers2vec(obj):
         h = dict()
@@ -552,6 +556,7 @@ def main_gp():
         # Reverse the encoding
         # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
         # https://github.com/scikit-learn/scikit-learn/issues/4414
+        if not args.gpyopt: vec = [vec]  # gp.py passes as flat, GPyOpt as wrapped
         reversed = vectorizer.inverse_transform(vec)[0]
         obj = {}
         for k, v in reversed.items():
@@ -601,14 +606,23 @@ def main_gp():
             Y.append([None])
             args.guess = False
 
-        pretrain = {'X': np.array(X), 'Y': np.array(Y)} if X else {}
-        opt = GPyOpt.methods.BayesianOptimization(
-            f=loss_fn,
-            domain=bounds,
-            maximize=True,
-            **pretrain
-        )
-        opt.run_optimization(max_iter=5)
+        if args.gpyopt:
+            pretrain = {'X': np.array(X), 'Y': np.array(Y)} if X else {}
+            opt = GPyOpt.methods.BayesianOptimization(
+                f=loss_fn,
+                domain=bounds,
+                maximize=True,
+                **pretrain
+            )
+            opt.run_optimization(max_iter=5)
+        else:
+            gp.bayesian_optimisation2(
+                n_iters=5,
+                loss_fn=loss_fn,
+                bounds=np.array(bounds),
+                x_list=X,
+                y_list=Y
+            )
 
 if __name__ == '__main__':
     main_gp()
