@@ -497,7 +497,7 @@ def print_feature_importances(X, Y, feat_names):
 
 
 def main_gp():
-    import gp
+    import GPyOpt
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
@@ -533,11 +533,12 @@ def main_gp():
     # instantiate just to get actions (get them from hypers above?)
     bounds = []
     for k in feat_names:
+        d = {'name': k, 'type': 'discrete', 'domain': (0, 1)}
         hyper = hypers_.get(k, False)
         if hyper and hyper['type'] == 'bounded':
-            b = [min(hyper['vals']), max(hyper['vals'])]
-        else: b = [0, 1]
-        bounds.append(b)
+            d['type'] = 'continuous'
+            d['domain'] = (min(hyper['vals']), max(hyper['vals']))
+        bounds.append(d)
 
     def hypers2vec(obj):
         h = dict()
@@ -551,7 +552,7 @@ def main_gp():
         # Reverse the encoding
         # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
         # https://github.com/scikit-learn/scikit-learn/issues/4414
-        reversed = vectorizer.inverse_transform([vec])[0]
+        reversed = vectorizer.inverse_transform(vec)[0]
         obj = {}
         for k, v in reversed.items():
             if '=' not in k:
@@ -569,7 +570,7 @@ def main_gp():
         # hypers now instead of nesting this logic in reversed-iteration above
         for k, v in hypers_.items():
             if v['type'] == 'bool':
-                obj[k] = bool(round(obj.get(k,0.)))
+                obj[k] = bool(round(obj.get(k, 0.)))
         return obj
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
@@ -600,14 +601,14 @@ def main_gp():
             Y.append([None])
             args.guess = False
 
-        gp.bayesian_optimisation2(
-            n_iters=5,
-            loss_fn=loss_fn,
-            bounds=np.array(bounds),
-            x_list=X,
-            y_list=Y
+        pretrain = {'X': np.array(X), 'Y': np.array(Y)} if X else {}
+        opt = GPyOpt.methods.BayesianOptimization(
+            f=loss_fn,
+            domain=bounds,
+            maximize=True,
+            **pretrain
         )
-
+        opt.run_optimization(max_iter=5)
 
 if __name__ == '__main__':
     main_gp()
