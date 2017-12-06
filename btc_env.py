@@ -20,6 +20,7 @@ class BitcoinEnv(Environment):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
+        self.diff_percent = self.hypers.diff == 'percent'
         self.agent_name = name
         self.start_cap = 1e3
         self.window = 150
@@ -47,7 +48,7 @@ class BitcoinEnv(Environment):
                 state1=dict(type='float', min_value=-1, max_value=1, shape=2)  # money
             )
         else:
-            default_min_max = 1 if self.hypers.diff_percent else 1
+            default_min_max = 1 if self.diff_percent else 1
             self.states_ = dict(type='float', min_value=-default_min_max, max_value=default_min_max, shape=self.cols_)
 
     def __str__(self): return 'BitcoinEnv'
@@ -79,7 +80,7 @@ class BitcoinEnv(Environment):
             .replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
 
     def _diff(self, arr):
-        if self.hypers.diff_percent:
+        if self.diff_percent:
             return self._pct_change(arr)
         return pd.Series(arr).diff()\
             .replace([np.inf, -np.inf], np.nan).ffill()\

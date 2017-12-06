@@ -40,7 +40,7 @@ def build_net_spec(net, indicators, baseline=False):
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
     conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
-    lstm = {'type': 'lstm', 'dropout': net.dropout}
+    lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
     only_net_end = net.type == 'lstm' and baseline
 
     arr = []
@@ -62,8 +62,8 @@ def build_net_spec(net, indicators, baseline=False):
                 if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
                 arr.append({'size': size, 'window': (net.window, n_cols), 'stride': (net.stride, 1), **conv2d})
             else:
-                size = net.width
-                arr.append({'size': size, **lstm})
+                # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
+                arr.append({'size': net.width, **lstm})
         if net.type == 'conv2d':
             arr.append({'type': 'flatten'})
 
@@ -121,9 +121,7 @@ def custom_net(net, indicators, print_net=False, baseline=False):
 def bins_of_8(x): return int(x // 8) * 8
 
 hypers = {}
-hypers['agent'] = {
-    # TODO preprocessing, batch_observe, reward_preprocessing[dict(type='clip', min=-1, max=1)]
-}
+hypers['agent'] = {}
 hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
@@ -151,9 +149,15 @@ hypers['model'] = {
         'vals': [.95, .99],
         'guess': .97
     },
-    'normalize_rewards': {
-        'type': 'bool',
-        'guess': True
+    'reward_preprocessing_spec': {
+        'type': 'int',
+        'vals': ['None', 'normalize', 'clip'],  # TODO others?
+        'guess': 'normalize',
+        'hydrate': lambda x, flat: {
+            'None': {'reward_preprocessing_spec': None},
+            'normalize': {'reward_preprocessing_spec': {'type': 'normalize'}},
+            'clip': {'reward_preprocessing_spec': {'type': 'clip', 'min_value': -5, 'max_value': 5}},
+        }[x]
     },
     # TODO variable_noise
 }
@@ -169,7 +173,21 @@ hypers['pg_model'] = {
     'baseline_mode': {
         'type': 'bool',
         'guess': False,
-        'pre': lambda x: 'states' if x else None
+        'hydrate': lambda x, flat: {
+            False: {'baseline_mode': None},
+            True: {
+                'baseline': {'type': 'custom'},
+                'baseline_mode': 'states',
+                'baseline_optimizer': {
+                    'type': 'multi_step',
+                    'num_steps': flat['optimization_steps'],
+                    'optimizer': {
+                        'type': flat['step_optimizer.type'],
+                        'learning_rate': flat['step_optimizer.learning_rate']
+                    }
+                },
+            }
+        }[x]
     },
     'gae_lambda': {
         'type': 'bounded',
@@ -242,9 +260,10 @@ hypers['custom'] = {
         'vals': [1e-5, .1],
         'guess': .05
     },
-    'diff_percent': {
-        'type': 'bool',
-        'guess': True
+    'diff': {
+        'type': 'int',
+        'vals': ['raw', 'percent', 'standardize'],
+        'guess': 'percent',
     },
     'steps': {
         'type': 'bounded',
@@ -299,6 +318,7 @@ class DotDict(object):
     """
     def __init__(self, data):
         self._data = data
+        self.update = self._data.update
 
     def __getitem__(self, path):
         v = self._data
@@ -357,7 +377,6 @@ class HSearchEnv(object):
     def close(self):
         self.conn.close()
 
-
     def get_hypers(self, actions):
         """
         Bit of confusing logic here where I construct a `flat` dict of hypers from the actions - looks like how hypers
@@ -383,54 +402,38 @@ class HSearchEnv(object):
             if type(hyper) == dict and 'post' in hyper:
                 flat[k] = hyper['post'](v, flat)
 
+        # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
+        main, custom = DotDict({}), DotDict({})
+        for k, v in flat.items():
+            obj = main if k in hypers[self.agent] else custom
+            try: obj.update(self.hypers[k]['hydrate'](v, self.flat))
+            except: obj[k] = v
+        main, custom = main.to_dict(), custom.to_dict()
+
+        # FIXME handle in diff.hydrate()
+        if custom['diff'] == 'standardize':
+            main['states_preprocessing_spec'] = {'type': 'running_standardize', 'reset_after_batch': False}
+
+        network = custom_net(custom['net'], custom['indicators'], print_net=True)
+        if flat['baseline_mode']:
+            main['baseline']['network_spec'] = custom_net(custom['net'], custom['indicators'], baseline=True)
+
+        # GPU split
         session_config = None
         if self.gpu_split != 1:
-            fraction = .90/self.gpu_split if self.gpu_split > 1 else self.gpu_split
+            fraction = .90 / self.gpu_split if self.gpu_split > 1 else self.gpu_split
             session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
-        hydrated = {'session_config': session_config}
-        if flat['baseline_mode']:
-            hydrated.update({
-                'baseline': {'type': 'custom'},
-                'baseline_mode': 'states',
-                'baseline_optimizer': {
-                    'type': 'multi_step',
-                    'num_steps': flat['optimization_steps'],
-                    'optimizer': {
-                        'type': flat['step_optimizer.type'],
-                        'learning_rate': flat['step_optimizer.learning_rate']
-                    }
-                },
-            })
-        hydrated = DotDict(hydrated)
-
-        # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
-        for k, v in flat.items():
-            if k in hypers[self.agent]:  # remove custom fields
-                hydrated[k] = v  # self._key2val(k, v)
-        hydrated = hydrated.to_dict()
-
-        extra = DotDict({})
-        for k, v in flat.items():
-            if k not in hypers[self.agent]:  # only custom fields
-                extra[k] = v  # self._key2val(k, v)
-        extra = extra.to_dict()
-        w_indicators = extra['indicators']
-        network = custom_net(extra['net'], w_indicators, print_net=True)
-
-        if flat['baseline_mode']:
-            hydrated['baseline']['network_spec'] = custom_net(extra['net'], w_indicators, baseline=True)
+        main['session_config'] = session_config
 
         print('--- Flat ---')
         pprint(flat)
         print('--- Hydrated ---')
-        pprint(hydrated)
+        pprint(main)
 
-        return flat, hydrated, network
+        return flat, main, network
 
     def execute(self, actions):
         flat, hydrated, network = self.get_hypers(actions)
-
-        hydrated['scope'] = 'hypersearch'
 
         env = BitcoinEnv(flat, name=self.agent)
         agent = agents_dict[self.agent](
