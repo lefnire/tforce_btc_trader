@@ -274,6 +274,11 @@ hypers['custom'] = {
     'unimodal': {
         'type': 'bool',
         'guess': False
+    },
+    'deterministic': {
+        # Whether to use deterministic=True during testing phase https://goo.gl/6GgLJo
+        'type': 'bool',
+        'guess': True
     }
 }
 
@@ -448,12 +453,16 @@ class HSearchEnv(object):
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         env.testing = True
-        runner.run(episodes=n_test, deterministic=True)  # test
+        for i in range(n_test):
+            next_state, terminal = env.reset(), False
+            while not terminal:
+                actions = agent.act(next_state, deterministic=flat['deterministic'])  # test
+                next_state, terminal, reward = env.execute(actions)
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
 
         # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
-        rewards = runner.environment.episode_rewards
+        rewards = env.episode_rewards
         reward = np.mean(rewards[-n_test:])
         sql = """
           insert into runs (hypers, reward_avg, rewards, agent, prices, actions, flag) 
@@ -471,8 +480,7 @@ class HSearchEnv(object):
         )
         print(flat, f"\nReward={reward}\n\n")
 
-        runner.agent.close()
-        runner.environment.close()
+        runner.close()
         return reward
 
     def get_winner(self):
