@@ -170,7 +170,7 @@ class BitcoinEnv(Environment):
             elif signal < 0: signal -= min_trade
             elif signal > 0: signal += min_trade
 
-        self.signals.append(signal)
+        self.signals.append(float(signal))
 
         fee = 0.0026  # https://www.kraken.com/en-us/help/fees
         abs_sig = abs(signal)
@@ -233,5 +233,5 @@ class BitcoinEnv(Environment):
         episode = len(rewards)
         if episode % 5 != 0: return
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
-        reward, high, low = '%.2f' % rewards[-1], max(self.signals), min(self.signals)
-        print(f"{episode}\t⌛:{self.time}s\tR:{reward}\tA:{common}(high={high},low={low})")
+        reward, high, low = rewards[-1], max(self.signals), min(self.signals)
+        print(f"{episode}\t⌛:{self.time}s\tR:{'%.2f'%reward}\tA:{common}(high={'%.2f'%high},low={'%.2f'%low})")

@@ -126,7 +126,7 @@ hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
         'vals': [8, 2048],
-        'guess': 176,
+        'guess': 1024,
         'pre': bins_of_8
     },
     'keep_last_timestep': True
@@ -140,7 +140,7 @@ hypers['model'] = {
     },
     'optimization_steps': {
         'type': 'bounded',
-        'vals': [2, 20],
+        'vals': [1, 20],
         'guess': 10,
         'pre': int
     },
@@ -164,8 +164,8 @@ hypers['model'] = {
 hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
-        'vals': [0., 1.],
-        'guess': .4
+        'vals': [1e-3, 1.],
+        'guess': 1e-2
     }
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
@@ -201,7 +201,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .5
+        'guess': .2
     }
 }
 
@@ -464,22 +464,26 @@ class HSearchEnv(object):
         # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
         rewards = env.episode_rewards
         reward = np.mean(rewards[-n_test:])
+
         sql = """
           insert into runs (hypers, reward_avg, rewards, agent, prices, actions, flag) 
           values (:hypers, :reward_avg, :rewards, :agent, :prices, :actions, :flag)
         """
-        self.conn.execute(
-            text(sql),
-            hypers=json.dumps(flat),
-            reward_avg=reward,
-            rewards=rewards,
-            agent='ppo_agent',
-            prices=env.prices.tolist(),
-            actions=env.signals,
-            flag=self.net_type
-        )
-        print(flat, f"\nReward={reward}\n\n")
+        try:
+            self.conn.execute(
+                text(sql),
+                hypers=json.dumps(flat),
+                reward_avg=reward,
+                rewards=rewards,
+                agent='ppo_agent',
+                prices=env.prices.tolist(),
+                actions=env.signals,
+                flag=self.net_type
+            )
+        except Exception as e:
+            pdb.set_trace()
 
+        print(flat, f"\nReward={reward}\n\n")
         runner.close()
         return reward
 
@@ -628,7 +632,7 @@ def main_gp():
             opt.run_optimization(max_iter=5)
         else:
             gp.bayesian_optimisation2(
-                n_iters=5,
+                n_iters=1,
                 loss_fn=loss_fn,
                 bounds=np.array(bounds),
                 x_list=X,
