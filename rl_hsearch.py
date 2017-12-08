@@ -266,6 +266,11 @@ hypers['custom'] = {
     'scale': {
         'type': 'bool',
         'guess': True
+    },
+    # Repeat-actions intervention: double the reward (False), or punish (True)?
+    'punish_repeats': {
+        'type': 'bool',
+        'guess': False
     }
 }
 
@@ -436,17 +441,14 @@ class HSearchEnv(object):
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         env.testing = True
-        for i in range(n_test):  # test
-            next_state, terminal = env.reset(), False
-            while not terminal:
-                actions = agent.act(next_state, deterministic=True)
-                next_state, terminal, reward = env.execute(actions)
+        runner.run(episodes=n_test, deterministic=True) # test
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
 
         # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
         rewards = env.episode_rewards
         reward = np.mean(rewards[-n_test:])
+        print(flat, f"\nReward={reward}\n\n")
 
         sql = """
           insert into runs (hypers, reward_avg, rewards, agent, prices, actions, flag) 
@@ -466,7 +468,6 @@ class HSearchEnv(object):
         except Exception as e:
             pdb.set_trace()
 
-        print(flat, f"\nReward={reward}\n\n")
         runner.close()
         return reward
 

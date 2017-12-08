@@ -244,15 +244,16 @@ class BitcoinEnv(Environment):
         # agent optimization going forward
         self.total_reward += reward
 
-        # Encourage diverse behavior by punishing the same consecutive action. See 8741ff0 for prior ways I explored
-        # this, including: (1) no interference (2) punish for holding too long (3) punish for repeats (4) instead
-        # of punishing, "up the ante" by doubling the reward (kinda force him to take a closer look). Too many options
-        # had dimensionality down-side, so I'm trying an "always on" but "vary the max #steps" approach.
+        # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior, where false
+        # is the opposite (rewarding heterogenous)
         recent_actions = np.array(self.signals[-self.repeat_ct:])
         if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
+            if not self.hypers.punish_repeats:
+                reward *= 2
             self.repeat_ct = 1  # reset penalty-growth
         else:
-            reward -= self.repeat_ct / 50
+            if self.hypers.punish_repeats:
+                reward -= self.repeat_ct / 50
             self.repeat_ct += 1  # grow the penalty with time
 
         self.timestep += 1
