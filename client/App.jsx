@@ -94,7 +94,7 @@ class App extends Component {
     let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
     let rewards = data.map(d => {
-      return d.rewards.map((v,i) => ({y:v, x:i, parent:d}));
+      return d.rewards.map((v,i) => ({y:_.clamp(v,-300,300), x:i, parent:d})); // note clamp so we don't break the graph
     });
     let all_rewards = _.flatten(rewards);
 

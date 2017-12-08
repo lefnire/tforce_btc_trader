@@ -142,7 +142,7 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False):
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
     df = pd.read_sql_query(query, conn).iloc[::-1]
     # return df.fillna(method='ffill').fillna(method='bfill')  # fill forward then backward
-    return df.fillna(method='ffill')
+    return df
 
 
 def db_to_dataframe(conn, limit='ALL', offset=0, just_count=False):

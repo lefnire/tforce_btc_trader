@@ -129,14 +129,17 @@ hypers['batch_agent'] = {
         'guess': 1024,
         'pre': bins_of_8
     },
-    'keep_last_timestep': True
+    'keep_last_timestep': {
+        'type': 'bool',
+        'guess': True
+    }
 }
 hypers['model'] = {
     'optimizer.type': 'nadam',
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [1e-7, 1e-1],
-        'guess': .005,
+        'guess': .01,
     },
     'optimization_steps': {
         'type': 'bounded',
@@ -147,17 +150,7 @@ hypers['model'] = {
     'discount': {
         'type': 'bounded',
         'vals': [.95, .99],
-        'guess': .97
-    },
-    'reward_preprocessing_spec': {
-        'type': 'int',
-        'vals': ['None', 'normalize', 'clip'],  # TODO others?
-        'guess': 'normalize',
-        'hydrate': lambda x, flat: {
-            'None': {'reward_preprocessing_spec': None},
-            'normalize': {'reward_preprocessing_spec': {'type': 'normalize'}},
-            'clip': {'reward_preprocessing_spec': {'type': 'clip', 'min_value': -5, 'max_value': 5}},
-        }[x]
+        'guess': .96
     },
     # TODO variable_noise
 }
@@ -172,7 +165,7 @@ hypers['distribution_model'] = {
 hypers['pg_model'] = {
     'baseline_mode': {
         'type': 'bool',
-        'guess': False,
+        'guess': True,
         'hydrate': lambda x, flat: {
             False: {'baseline_mode': None},
             True: {
@@ -192,7 +185,7 @@ hypers['pg_model'] = {
     'gae_lambda': {
         'type': 'bounded',
         'vals': [.85, .99],
-        'guess': .96,
+        'guess': .97,
         'post': lambda x, others: x if others['baseline_mode'] and x > .9 else None
     },
 }
@@ -253,30 +246,24 @@ hypers['custom'] = {
     'net.l2': {
         'type': 'bounded',
         'vals': [1e-5, .1],
-        'guess': .05
+        'guess': .04
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [1e-5, .1],
-        'guess': .05
-    },
-    'diff': {
-        'type': 'int',
-        'vals': ['raw', 'percent', 'standardize'],
-        'guess': 'percent',
+        'guess': .02
     },
     'steps': {
         'type': 'bounded',
         'vals': [2048*3+3, 3*(2048*3+3)],
-        'guess': 2048*3+3,
+        'guess': 2*(2048*3+3),
         'pre': int
     },
     'unimodal': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
-    'deterministic': {
-        # Whether to use deterministic=True during testing phase https://goo.gl/6GgLJo
+    'scale': {
         'type': 'bool',
         'guess': True
     }
@@ -415,10 +402,6 @@ class HSearchEnv(object):
             except: obj[k] = v
         main, custom = main.to_dict(), custom.to_dict()
 
-        # FIXME handle in diff.hydrate()
-        if custom['diff'] == 'standardize':
-            main['states_preprocessing_spec'] = {'type': 'running_standardize', 'reset_after_batch': False}
-
         network = custom_net(custom['net'], custom['indicators'], print_net=True)
         if flat['baseline_mode']:
             main['baseline']['network_spec'] = custom_net(custom['net'], custom['indicators'], baseline=True)
@@ -449,14 +432,14 @@ class HSearchEnv(object):
         )
 
         # n_train, n_test = 2, 1
-        n_train, n_test = 250, 50
+        n_train, n_test = 250, 30
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         env.testing = True
         for i in range(n_test):
             next_state, terminal = env.reset(), False
             while not terminal:
-                actions = agent.act(next_state, deterministic=flat['deterministic'])  # test
+                actions = agent.act(next_state, True)  # test
                 next_state, terminal, reward = env.execute(actions)
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
@@ -629,7 +612,7 @@ def main_gp():
                 maximize=True,
                 **pretrain
             )
-            opt.run_optimization(max_iter=5)
+            opt.run_optimization(max_iter=1)
         else:
             gp.bayesian_optimisation2(
                 n_iters=1,

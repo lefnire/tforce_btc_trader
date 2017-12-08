@@ -7,6 +7,7 @@ from sqlalchemy.sql import text
 import tensorflow as tf
 from box import Box
 from tensorforce.environments import Environment
+from sklearn.preprocessing import RobustScaler, robust_scale
 import pdb
 
 ALLOW_SEED = False
@@ -14,18 +15,56 @@ ALLOW_SEED = False
 import data
 from data import engine
 
+class Scaler(object):
+    STOP_AT = 3e5  # 400k is size of table. Might be able to do with much less, being on safe side
+    SKIP = 15
+    def __init__(self):
+        self.reward_scaler = RobustScaler()
+        self.state_scaler = RobustScaler()
+        self.rewards = []
+        self.states = []
+        self.done = False
+        self.i = 0
+
+    def transform_state(self, state):
+        self.i += 1
+        # After we've fitted enough (see self.stop_at), start returning direct-transforms for performance improvement
+        # Skip every few fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
+        if self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP):
+            return self.state_scaler.transform([state])[-1]
+
+        # Fit, transform, return
+        self.states.append(state)
+        ret = self.state_scaler.fit_transform(self.states)[-1]
+        if self.i >= self.STOP_AT:
+            # Clear up memory, fitted scalers have all the info we need. stop=True only needed in one of these functions
+            del self.rewards
+            del self.states
+            self.done = True
+        return ret
+
+    def transform_reward(self, reward):
+        if self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP):
+            return self.reward_scaler.transform([[reward]])[-1][0]
+        self.rewards.append([reward])
+        return self.reward_scaler.fit_transform(self.rewards)[-1][0]
+
+# keep this globally arround for all runs forever
+scaler = Scaler()
+scaler_indicators = Scaler()
+
 
 class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
-        self.diff_percent = self.hypers.diff == 'percent'
         self.agent_name = name
         self.start_cap = 1e3
         self.window = 150
         self.episode_rewards = []
         self.testing = False  # training by default; calling code will switch us to testing
+        self.scaler = scaler_indicators if self.hypers.indicators else scaler
 
         self.conn = engine.connect()
 
@@ -48,8 +87,7 @@ class BitcoinEnv(Environment):
                 state1=dict(type='float', min_value=-1, max_value=1, shape=2)  # money
             )
         else:
-            default_min_max = 1 if self.diff_percent else 1
-            self.states_ = dict(type='float', min_value=-default_min_max, max_value=default_min_max, shape=self.cols_)
+            self.states_ = dict(type='float', shape=self.cols_)
 
     def __str__(self): return 'BitcoinEnv'
     def close(self): self.conn.close()
@@ -76,15 +114,22 @@ class BitcoinEnv(Environment):
         return num
 
     def _pct_change(self, arr):
-        return pd.Series(arr).pct_change()\
-            .replace([np.inf, -np.inf, np.nan], [1., -1., 0.]).values
+        change = pd.Series(arr).pct_change()
+        change.iloc[0] = 0  # always NaN, nothing to compare to
+        if change.isin([np.nan, np.inf, -np.inf]).any():
+            raise Exception(f"NaN or inf detected in _pct_change()!")
+        return change.values
 
-    def _diff(self, arr):
-        if self.diff_percent:
-            return self._pct_change(arr)
-        return pd.Series(arr).diff()\
-            .replace([np.inf, -np.inf], np.nan).ffill()\
-            .fillna(0).values
+    def _diff(self, arr, fill=False):
+        diff = pd.Series(arr).diff()
+        diff.iloc[0] = 0  # always NaN, nothing to compare to
+        if diff.isin([np.nan, np.inf, -np.inf]).any():
+            if fill:  # if caller is explicitly OK with 0-fills (eg, SMA)
+                diff.fillna(0, inplace=True)
+            else:
+                raise Exception(f"NaN or inf detected in _diff()!")
+        return diff.values
+        # return diff.ffill(inplace=True).fillna(0).values
 
     def _xform_data(self, df):
         columns = []
@@ -110,10 +155,10 @@ class BitcoinEnv(Environment):
     def _get_indicators(self, df):
         return [
             ## Original indicators from boilerplate
-            self._diff(SMA(df, timeperiod=15)),
-            self._diff(SMA(df, timeperiod=60)),
-            self._diff(RSI(df, timeperiod=14)),
-            self._diff(ATR(df, timeperiod=14)),
+            self._diff(SMA(df, timeperiod=15), fill=True),
+            self._diff(SMA(df, timeperiod=60), fill=True),
+            self._diff(RSI(df, timeperiod=14), fill=True),
+            self._diff(ATR(df, timeperiod=14), fill=True),
 
             ## Indicators from "How to Day Trade For a Living" (try these)
             ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
@@ -154,6 +199,8 @@ class BitcoinEnv(Environment):
             )
         else:
             first_state = np.append(self.observations[start_timestep], [1., 1.])
+        if self.hypers.scale:
+            first_state = self.scaler.transform_state(first_state)
         return first_state
 
     def execute(self, actions):
@@ -189,7 +236,11 @@ class BitcoinEnv(Environment):
         pct_change = self.prices_diff[diff_loc]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        reward = total - before  # Relative reward (seems to work better)
+        reward = total - before
+
+        # Clamp reward to reasonable bounds (data corruption is the reason it goes beyond). Consider more automatic
+        # calculation rather than hard-coded bounds. Commenting out now because RobustScaler should handle outliers?
+        # reward = np.clip(reward, -350, 350)
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -226,6 +277,9 @@ class BitcoinEnv(Environment):
             self.time = round(time.time() - self.time)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
+        if self.hypers.scale:
+            next_state = self.scaler.transform_state(next_state)
+            reward = self.scaler.transform_reward(reward)
         return next_state, terminal, reward
 
     def _write_results(self):
