@@ -14,8 +14,8 @@ db_url = data.config_json['DB_URL']
 databases = dict(
     # kaggle=create_engine(db_url.replace(data.DB, 'kaggle')),
     # kaggle2=create_engine(db_url.replace(data.DB, 'kaggle2')),
-    # alex=create_engine(db_url.replace(data.DB, 'alex'))
-    alex2=create_engine(db_url.replace(data.DB, 'alex2'))
+    alex=create_engine(db_url.replace(data.DB, 'alex'))
+    # alex2=create_engine(db_url.replace(data.DB, 'alex2'))
 )
 
 @app.route("/")

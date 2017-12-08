@@ -17,7 +17,7 @@ class App extends Component {
 
   componentDidMount() {
     // fetch('http://localhost:5000').then(res => res.json()).then(data => {
-    fetch('dumps/alex2.json').then(res => res.json()).then(data => {
+    fetch('dumps/alex.json').then(res => res.json()).then(data => {
       data.forEach(d => {
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;

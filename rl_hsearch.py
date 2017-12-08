@@ -436,10 +436,10 @@ class HSearchEnv(object):
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
         env.testing = True
-        for i in range(n_test):
+        for i in range(n_test):  # test
             next_state, terminal = env.reset(), False
             while not terminal:
-                actions = agent.act(next_state, True)  # test
+                actions = agent.act(next_state, deterministic=True)
                 next_state, terminal, reward = env.execute(actions)
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07

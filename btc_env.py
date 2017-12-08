@@ -15,6 +15,7 @@ ALLOW_SEED = False
 import data
 from data import engine
 
+
 class Scaler(object):
     STOP_AT = 3e5  # 400k is size of table. Might be able to do with much less, being on safe side
     SKIP = 15
@@ -26,13 +27,15 @@ class Scaler(object):
         self.done = False
         self.i = 0
 
+    def _should_skip(self):
+        # After we've fitted enough (see STOP_AT), start returning direct-transforms for performance improvement
+        # Skip every few fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
+        return self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP)
+
     def transform_state(self, state):
         self.i += 1
-        # After we've fitted enough (see self.stop_at), start returning direct-transforms for performance improvement
-        # Skip every few fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
-        if self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP):
+        if self._should_skip():
             return self.state_scaler.transform([state])[-1]
-
         # Fit, transform, return
         self.states.append(state)
         ret = self.state_scaler.fit_transform(self.states)[-1]
@@ -44,7 +47,7 @@ class Scaler(object):
         return ret
 
     def transform_reward(self, reward):
-        if self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP):
+        if self._should_skip():
             return self.reward_scaler.transform([[reward]])[-1][0]
         self.rewards.append([reward])
         return self.reward_scaler.fit_transform(self.rewards)[-1][0]
@@ -63,7 +66,6 @@ class BitcoinEnv(Environment):
         self.start_cap = 1e3
         self.window = 150
         self.episode_rewards = []
-        self.testing = False  # training by default; calling code will switch us to testing
         self.scaler = scaler_indicators if self.hypers.indicators else scaler
 
         self.conn = engine.connect()
@@ -238,9 +240,20 @@ class BitcoinEnv(Environment):
         total = self.value + self.cash
         reward = total - before
 
-        # Clamp reward to reasonable bounds (data corruption is the reason it goes beyond). Consider more automatic
-        # calculation rather than hard-coded bounds. Commenting out now because RobustScaler should handle outliers?
-        # reward = np.clip(reward, -350, 350)
+        # Add the "pure" reward now to the total, which is used for human analysis. We'll tweak the reward for
+        # agent optimization going forward
+        self.total_reward += reward
+
+        # Encourage diverse behavior by punishing the same consecutive action. See 8741ff0 for prior ways I explored
+        # this, including: (1) no interference (2) punish for holding too long (3) punish for repeats (4) instead
+        # of punishing, "up the ante" by doubling the reward (kinda force him to take a closer look). Too many options
+        # had dimensionality down-side, so I'm trying an "always on" but "vary the max #steps" approach.
+        recent_actions = np.array(self.signals[-self.repeat_ct:])
+        if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
+            self.repeat_ct = 1  # reset penalty-growth
+        else:
+            reward -= self.repeat_ct / 50
+            self.repeat_ct += 1  # grow the penalty with time
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -252,34 +265,25 @@ class BitcoinEnv(Environment):
                 state0=self._reshape_window_for_conv2d(window),
                 state1=np.array([cash_scaled, val_scaled])
             )
-
         else:
             next_state = np.append(self.observations[self.timestep], [cash_scaled, val_scaled])
 
-        # Encourage diverse behavior by punishing the same consecutive action. See 8741ff0 for prior ways I explored
-        # this, including: (1) no interference (2) punish for holding too long (3) punish for repeats (4) instead
-        # of punishing, "up the ante" by doubling the reward (kinda force him to take a closer look). Too many options
-        # had dimensionality down-side, so I'm trying an "always on" but "vary the max #steps" approach.
-        if not self.testing:
-            recent_actions = np.array(self.signals[-self.repeat_ct:])
-            if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
-                self.repeat_ct = 1  # reset penalty-growth
-            else:
-                reward -= self.repeat_ct/50
-                self.repeat_ct += 1  # grow the penalty with time
-
-        self.total_reward += reward
+        if self.hypers.scale:
+            next_state = self.scaler.transform_state(next_state)
+            reward = self.scaler.transform_reward(reward)
 
         terminal = int(self.timestep + 1 >= len(self.observations))
         if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
-            self.episode_rewards.append(float(self.total_reward/self.hypers.steps))  # divide so we can compare runs w/ steps that vary
             self.time = round(time.time() - self.time)
+            # average so we can compare runs w/ varying steps
+            avg_reward = float(self.total_reward / self.hypers.steps)
+            # Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
+            # RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
+            avg_reward = float(np.clip(avg_reward, -200, 200))
+            self.episode_rewards.append(avg_reward)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
-        if self.hypers.scale:
-            next_state = self.scaler.transform_state(next_state)
-            reward = self.scaler.transform_reward(reward)
         return next_state, terminal, reward
 
     def _write_results(self):
