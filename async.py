@@ -17,7 +17,6 @@ from six.moves import xrange, shlex_quote
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-w', '--workers', type=int, default=4, help="Number of worker agents")
-parser.add_argument('--load', action="store_true", default=False, help="Load model from save")
 args = parser.parse_args()
 
 if __name__ == '__main__':

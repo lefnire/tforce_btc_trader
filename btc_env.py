@@ -65,6 +65,7 @@ class BitcoinEnv(Environment):
         self.start_cap = 1e3
         self.window = 150
         self.episode_rewards = []
+        self.testing = False
 
         self.conn = engine.connect()
 
@@ -278,7 +279,7 @@ class BitcoinEnv(Environment):
     def _write_results(self):
         rewards = self.episode_rewards
         episode = len(rewards)
-        if episode % 5 != 0: return
+        if not self.testing and episode % 5 != 0: return
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         reward, high, low = rewards[-1], max(self.signals), min(self.signals)
         print(f"{episode}\t⌛:{self.time}s\tR:{'%.2f'%reward}\tA:{common}(high={'%.2f'%high},low={'%.2f'%low})")

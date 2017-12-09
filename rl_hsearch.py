@@ -156,7 +156,7 @@ hypers['model'] = {
 hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
-        'vals': [1e-3, 1.],
+        'vals': [0., 1.],
         'guess': .2
     }
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
@@ -193,7 +193,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': 0.,
+        'guess': .2,
         'post': lambda x, others: None if x < .05 else x
     }
 }
@@ -354,7 +354,7 @@ class HSearchEnv(object):
     That's one run: make inner-env, run 300, avg reward, return that. The next episode will be a new set of
     hyperparameters (actions); run inner-env from scratch using new hypers.
     """
-    def __init__(self, agent='ppo_agent', gpu_split=1, net_type='conv2d'):
+    def __init__(self, agent='ppo_agent', gpu_split=1, net_type='lstm'):
         """
         TODO only tested with ppo_agent. There's some code for dqn_agent, but I haven't tested. Nothing else
         is even attempted implemtned
@@ -444,7 +444,6 @@ class HSearchEnv(object):
         n_train, n_test = 250, 30
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
-        env.testing = True
         runner.run(episodes=n_test, deterministic=True) # test
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
@@ -475,11 +474,19 @@ class HSearchEnv(object):
         runner.close()
         return reward
 
-    def get_winner(self):
-        sql = "select id, hypers from runs where flag is null and agent=:agent order by reward_avg desc limit 1"
-        winner = self.conn.execute(text(sql), agent=self.agent).fetchone()
-        self.hardcoded = winner.hypers
-        print(f'Using winner {winner.id}')
+    def get_winner(self, from_db=True):
+        if from_db:
+            sql = "select id, hypers from runs where flag is null and agent=:agent order by reward_avg desc limit 1"
+            winner = self.conn.execute(text(sql), agent=self.agent).fetchone()
+            print(f'Using winner {winner.id}')
+            winner = winner.hypers
+        else:
+            winner = {}
+            for k,v in self.hypers.items():
+                if k not in self.hardcoded:
+                    winner[k] = v['guess']
+            winner.update(self.hardcoded)
+        self.hardcoded = winner
         return self.get_hypers({})
 
 
