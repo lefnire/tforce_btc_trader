@@ -52,9 +52,8 @@ class Scaler(object):
         self.rewards.append([reward])
         return self.reward_scaler.fit_transform(self.rewards)[-1][0]
 
-# keep this globally arround for all runs forever
-scaler = Scaler()
-scaler_indicators = Scaler()
+# keep this globally around for all runs forever
+scalers = {}
 
 
 class BitcoinEnv(Environment):
@@ -66,7 +65,6 @@ class BitcoinEnv(Environment):
         self.start_cap = 1e3
         self.window = 150
         self.episode_rewards = []
-        self.scaler = scaler_indicators if self.hypers.indicators else scaler
 
         self.conn = engine.connect()
 
@@ -79,7 +77,7 @@ class BitcoinEnv(Environment):
                 amount=dict(type='float', shape=(), min_value=-100, max_value=100))
 
         # Observation space
-        self.cols_ = self.n_cols(conv2d=self.conv2d, indicators=self.hypers.indicators)
+        self.cols_ = data.n_cols(conv2d=self.conv2d, indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
         if self.conv2d:
             # width = window width (150 time-steps)
             # height = num_features, but one layer for each table
@@ -90,6 +88,11 @@ class BitcoinEnv(Environment):
             )
         else:
             self.states_ = dict(type='float', shape=self.cols_)
+
+        scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
+        if scaler_k not in scalers:
+            scalers[scaler_k] = Scaler()
+        self.scaler = scalers[scaler_k]
 
     def __str__(self): return 'BitcoinEnv'
     def close(self): self.conn.close()
@@ -104,16 +107,6 @@ class BitcoinEnv(Environment):
         random.seed(seed)
         np.random.seed(seed)
         tf.set_random_seed(seed)
-
-    @staticmethod
-    def n_cols(conv2d=True, indicators=False):
-        num = data.LEN_COLS
-        if indicators:
-            num += data.N_INDICATORS  # num features from self._get_indicators
-        if not conv2d: # These will be added in downstream Dense
-            # num *= len(data.tables)  # That many features per table
-            num += 2  # [self.cash, self.value]
-        return num
 
     def _pct_change(self, arr):
         change = pd.Series(arr).pct_change()
@@ -135,40 +128,37 @@ class BitcoinEnv(Environment):
 
     def _xform_data(self, df):
         columns = []
-        for table in data.tables:
+        tables_ = data.get_tables(self.hypers.arbitrage)
+        for table in tables_:
             name, cols, ohlcv = table['name'], table['columns'], table.get('ohlcv', {})
-            # TA-Lib requires specifically-named columns (OHLCV)
-            c = dict([(f'{name}_{c}', c) for c in cols if c not in ohlcv.values()])
-            for k, v in ohlcv.items():
-                c[f'{name}_{v}'] = k
-            xchange_df = df.rename(columns=c)
+            columns += [self._diff(df[f'{name}_{k}']) for k in cols]
 
-            # Currently NO indicators works better (LSTM learns the indicators itself). I'm thinking because indicators
-            # are absolute values, causing number-range instability
-            columns += list(map(lambda k: self._diff(xchange_df[k]), c.values()))
-            if self.hypers.indicators and ohlcv:
-                columns += self._get_indicators(xchange_df)
+            # Add extra indicator columns
+            if ohlcv and self.hypers.indicators:
+                ind = pd.DataFrame()
+                # TA-Lib requires specifically-named columns (OHLCV)
+                for k, v in ohlcv.items():
+                    ind[k] = df[f"{name}_{v}"]
+                columns += [
+                    ## Original indicators from boilerplate
+                    self._diff(SMA(ind, timeperiod=15), fill=True),
+                    self._diff(SMA(ind, timeperiod=60), fill=True),
+                    self._diff(RSI(ind, timeperiod=14), fill=True),
+                    self._diff(ATR(ind, timeperiod=14), fill=True),
+
+                    ## Indicators from "How to Day Trade For a Living" (try these)
+                    ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
+                    # self._diff(EMA(ind, timeperiod=9)),
+                    # self._diff(EMA(ind, timeperiod=20)),
+                    # self._diff(SMA(ind, timeperiod=50)),
+                    # self._diff(SMA(ind, timeperiod=200)),
+                ]
 
         states = np.nan_to_num(np.column_stack(columns))
         prices = df[data.target].values
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/self.cash after each action
         return states, prices
 
-    def _get_indicators(self, df):
-        return [
-            ## Original indicators from boilerplate
-            self._diff(SMA(df, timeperiod=15), fill=True),
-            self._diff(SMA(df, timeperiod=60), fill=True),
-            self._diff(RSI(df, timeperiod=14), fill=True),
-            self._diff(ATR(df, timeperiod=14), fill=True),
-
-            ## Indicators from "How to Day Trade For a Living" (try these)
-            ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
-            # self._diff(EMA(df, timeperiod=9)),
-            # self._diff(EMA(df, timeperiod=20)),
-            # self._diff(SMA(df, timeperiod=50)),
-            # self._diff(SMA(df, timeperiod=200)),
-        ]
 
     def _reshape_window_for_conv2d(self, window):
         if len(data.tables) == 1:
@@ -188,8 +178,9 @@ class BitcoinEnv(Environment):
         self.repeat_ct = 1
 
         # Fetch random slice of rows from the database (based on limit)
-        offset = random.randint(0, data.count_rows(self.conn) - self.hypers.steps)
-        df = data.db_to_dataframe(self.conn, limit=self.hypers.steps, offset=offset)
+        row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
+        offset = random.randint(0, row_ct - self.hypers.steps)
+        df = data.db_to_dataframe(self.conn, limit=self.hypers.steps, offset=offset, arbitrage=self.hypers.arbitrage)
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self._pct_change(self.prices)
 
@@ -279,6 +270,9 @@ class BitcoinEnv(Environment):
             self.time = round(time.time() - self.time)
             # average so we can compare runs w/ varying steps
             avg_reward = float(self.total_reward / self.hypers.steps)
+            # Punish (for GP) holders
+            if len(np.unique(self.signals)) == 1:
+                avg_reward -= 200
             # Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
             # RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
             avg_reward = float(np.clip(avg_reward, -200, 200))

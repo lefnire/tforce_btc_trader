@@ -14,7 +14,7 @@ from sklearn.model_selection import GridSearchCV
 
 
 from btc_env import BitcoinEnv
-from data import engine
+import data
 
 """
 Each hyper is specified as `key: {type, vals, requires, hook}`. 
@@ -35,8 +35,10 @@ a `requires` field where necessary.
 """
 
 
-def build_net_spec(net, indicators, baseline=False):
+def build_net_spec(hypers, baseline=False):
     """Builds a net_spec from some specifications like width, depth, etc"""
+    net, indicators, arbitrage = Box(hypers['net']), hypers['indicators'], hypers['arbitrage']
+
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
     conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
@@ -55,7 +57,7 @@ def build_net_spec(net, indicators, baseline=False):
 
     # Mid-layer
     if not only_net_end:
-        n_cols = BitcoinEnv.n_cols(conv2d=net.type == 'conv2d', indicators=indicators)
+        n_cols = data.n_cols(conv2d=net.type == 'conv2d', indicators=indicators, arbitrage=arbitrage)
         for i in range(net.depth):
             if net.type == 'conv2d':
                 size = max([32, int(net.width/4)])
@@ -76,9 +78,9 @@ def build_net_spec(net, indicators, baseline=False):
     return arr
 
 
-def custom_net(net, indicators, print_net=False, baseline=False):
-    net = Box(net)
-    layers_spec = build_net_spec(net, indicators, baseline)
+def custom_net(hypers, print_net=False, baseline=False):
+    net = Box(hypers['net'])
+    layers_spec = build_net_spec(hypers, baseline)
     if print_net: pprint(layers_spec)
     if net.type != 'conv2d': return layers_spec
 
@@ -129,10 +131,7 @@ hypers['batch_agent'] = {
         'guess': 1024,
         'pre': bins_of_8
     },
-    'keep_last_timestep': {
-        'type': 'bool',
-        'guess': True
-    }
+    # 'keep_last_timestep': True
 }
 hypers['model'] = {
     'optimizer.type': 'nadam',
@@ -158,7 +157,7 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [1e-3, 1.],
-        'guess': 1e-2
+        'guess': .2
     }
     # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
@@ -194,7 +193,8 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .2
+        'guess': 0.,
+        'post': lambda x, others: None if x < .05 else x
     }
 }
 
@@ -213,7 +213,7 @@ hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.
 hypers['custom'] = {
     'indicators': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
     'net.depth': {
         'type': 'bounded',
@@ -270,7 +270,11 @@ hypers['custom'] = {
     # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': {
         'type': 'bool',
-        'guess': False
+        'guess': True
+    },
+    'arbitrage': {
+        'type': 'bool',
+        'guess': True
     }
 }
 
@@ -313,8 +317,8 @@ class DotDict(object):
     """
     Utility class that lets you get/set attributes with a dot-seperated string key, like `d = a['b.c.d']` or `a['b.c.d'] = 1`
     """
-    def __init__(self, data):
-        self._data = data
+    def __init__(self, obj):
+        self._data = obj
         self.update = self._data.update
 
     def __getitem__(self, path):
@@ -369,7 +373,7 @@ class HSearchEnv(object):
         self.hardcoded = hardcoded
         self.gpu_split = gpu_split
         self.net_type = net_type
-        self.conn = engine.connect()
+        self.conn = data.engine.connect()
 
     def close(self):
         self.conn.close()
@@ -407,9 +411,9 @@ class HSearchEnv(object):
             except: obj[k] = v
         main, custom = main.to_dict(), custom.to_dict()
 
-        network = custom_net(custom['net'], custom['indicators'], print_net=True)
+        network = custom_net(custom, print_net=True)
         if flat['baseline_mode']:
-            main['baseline']['network_spec'] = custom_net(custom['net'], custom['indicators'], baseline=True)
+            main['baseline']['network_spec'] = custom_net(custom, baseline=True)
 
         # GPU split
         session_config = None
@@ -589,7 +593,7 @@ def main_gp():
         Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk, 
         but this allows to distribute across servers easily
         """
-        conn = engine.connect()
+        conn = data.engine.connect()
         sql = "select hypers, reward_avg from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
