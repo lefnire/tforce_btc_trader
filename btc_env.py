@@ -115,22 +115,16 @@ class BitcoinEnv(Environment):
             raise Exception(f"NaN or inf detected in _pct_change()!")
         return change.values
 
-    def _diff(self, arr, fill=False):
+    def _diff(self, arr):
         diff = pd.Series(arr).diff()
         diff.iloc[0] = 0  # always NaN, nothing to compare to
-        if diff.isin([np.nan, np.inf, -np.inf]).any():
-            if fill:  # if caller is explicitly OK with 0-fills (eg, SMA)
-                diff.fillna(0, inplace=True)
-            else:
-                raise Exception(f"NaN or inf detected in _diff()!")
-        return diff.values
-        # return diff.ffill(inplace=True).fillna(0).values
+        return diff.replace([np.inf, -np.inf], np.nan).ffill().fillna(0).values
 
     def _xform_data(self, df):
         columns = []
         tables_ = data.get_tables(self.hypers.arbitrage)
         for table in tables_:
-            name, cols, ohlcv = table['name'], table['columns'], table.get('ohlcv', {})
+            name, cols, ohlcv = table['name'], table['cols'], table.get('ohlcv', {})
             columns += [self._diff(df[f'{name}_{k}']) for k in cols]
 
             # Add extra indicator columns
@@ -141,10 +135,10 @@ class BitcoinEnv(Environment):
                     ind[k] = df[f"{name}_{v}"]
                 columns += [
                     ## Original indicators from boilerplate
-                    self._diff(SMA(ind, timeperiod=15), fill=True),
-                    self._diff(SMA(ind, timeperiod=60), fill=True),
-                    self._diff(RSI(ind, timeperiod=14), fill=True),
-                    self._diff(ATR(ind, timeperiod=14), fill=True),
+                    self._diff(SMA(ind, timeperiod=15)),
+                    self._diff(SMA(ind, timeperiod=60)),
+                    self._diff(RSI(ind, timeperiod=14)),
+                    self._diff(ATR(ind, timeperiod=14)),
 
                     ## Indicators from "How to Day Trade For a Living" (try these)
                     ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close

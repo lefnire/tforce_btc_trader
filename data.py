@@ -1,4 +1,4 @@
-import time, json
+import time, json, re
 import pandas as pd
 from sqlalchemy import create_engine
 
@@ -10,37 +10,35 @@ engine = create_engine(config_json['DB_URL'])
 # (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
 # conn = engine.connect()
 
-if DB == 'coins':
-    tables = ['okcoin_btccny', 'gdax_btcusd']
-    ts_col = 'ts'
-    columns = ['last', 'high', 'low', 'volume']
-    close_col = 'last'
-    predict_col = 'gdax_btcusd_last'
-elif 'alex' in DB:
+# Methods for imputing NaN. F=ffill, B=bfill, Z=zero. Generally we want volume/size-based features to be 0-filled
+# (indicating no trading during this blank period) and prices to ffill (maintain where the price left off). Right?
+# TODO Alex can you answer that question?
+F = 0
+B = 1
+Z = 2
+
+if 'alex' in DB:
     tables = [
     {
         'name': 'exch_ticker_kraken_usd',
-        'ts_col': 'last_update',
-        'columns': 'last_trade_price last_trade_lot_volume ask_price ask_lot_volume bid_price bid_lot_volume volume volume_last24 vwap vwap_last24 number_trades number_trades_last24 low low_last24 high high_last24 open_price'.split(' '),
-        'ohlcv': {'open': 'open_price', 'high': 'high', 'low': 'low', 'close': 'last_trade_price', 'volume': 'volume'},
+        'ts': 'last_update',
+        'cols': dict(last_trade_price=F, last_trade_lot_volume=Z, ask_price=F, ask_lot_volume=Z, bid_price=F,
+                     bid_lot_volume=Z, volume=Z, volume_last24=Z, vwap=Z, vwap_last24=Z, number_trades=Z,
+                     number_trades_last24=Z, low=F, low_last24=F, high=F, high_last24=F, open_price=F),
+        'ohlcv': dict(open='open_price', high='high', low='low', close='last_trade_price', volume='volume'),
     },
     {
         'name': 'exch_ticker_coinbase_usd',
-        'ts_col': 'last_update',
-        'columns': 'last_trade_price last_trade_size bid_price bid_size bid_num_orders ask_price ask_size ask_num_orders'.split(' '),
+        'ts': 'last_update',
+        'cols': dict(last_trade_price=F, last_trade_size=Z, bid_price=F, bid_size=Z, bid_num_orders=Z, ask_price=F,
+                     ask_size=Z, ask_num_orders=Z)
     }
     ]
     target = 'exch_ticker_kraken_usd_last_trade_price'
-elif DB == 'coins2':
-    tables = ['g', 'o']
-    ts_col = 'close_time'
-    columns = ['open', 'high', 'low', 'close', 'volume']
-    close_col = 'close'
-    predict_col = 'g_close'
 elif 'kaggle' in DB:
     tables = ['bitstamp', 'btcn']
-    ts_col = 'timestamp'
-    columns = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']
+    ts = 'timestamp'
+    cols = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']
     close_col = 'close'
     predict_col = 'bitstamp_close'
 
@@ -51,7 +49,7 @@ def n_cols(conv2d=False, indicators=False, arbitrage=True):
     cols = 0
     tables_ = get_tables(arbitrage)
     for t in tables_:
-        cols += len(t['columns'])
+        cols += len(t['cols'])
         if indicators and 'ohlcv' in t:
             cols += 4  # This is defined in btc_env._get_indicators()
     if not conv2d:
@@ -124,7 +122,7 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
         query = 'select count(*) over ()'
     else:
         query = 'select ' + ', '.join(
-            ', '.join(f"{t['name']}.{c} as {t['name']}_{c}" for c in t['columns'])
+            ', '.join(f"{t['name']}.{c} as {t['name']}_{c}" for c in t['cols'])
             for t in tables_
         )
 
@@ -132,16 +130,16 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
     # Could also group by intervals (10s, 60s, etc) https://gis.stackexchange.com/a/127874/105932
     first = tables_[0]
     for i, table in enumerate(tables_):
-        name, ts = table['name'], table['ts_col']
+        name, ts = table['name'], table['ts']
         if i == 0:
             query += f" from {name}"
             continue
         prior = tables_[i-1]
         query += f"""
             left join lateral (
-              select {', '.join(c for c in table['columns'])}
+              select {', '.join(c for c in table['cols'])}
               from {name}
-              where {name}.{ts} <= {prior['name']}.{prior['ts_col']}
+              where {name}.{ts} <= {prior['name']}.{prior['ts']}
               order by {name}.{ts} desc
               limit 1 
             ) {name} on true
@@ -151,12 +149,16 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
         query += " limit 1"
         return conn.execute(query).fetchone()[0]
 
-    order_field = f"{first['name']}.{first['ts_col']}" if len(tables_) > 1 else first['ts_col']
+    order_field = f"{first['name']}.{first['ts']}" if len(tables_) > 1 else first['ts']
     query += f" order by {order_field} desc limit {limit} offset {offset}"
 
     # order by date DESC (for limit to cut right), then reverse again (so old->new)
     df = pd.read_sql_query(query, conn).iloc[::-1]
-    # return df.fillna(method='ffill').fillna(method='bfill')  # fill forward then backward
+    for t in tables_:
+        for k, method in t['cols'].items():
+            fill = {'value': 0} if method == Z else {'method': 'ffill' if method == F else 'bfill'}
+            col_name = f"{t['name']}_{k}"
+            df[col_name] = df[col_name].fillna(fill)
     return df
 
 db_to_dataframe = _db_to_dataframe_ohlc if DB == 'coins2'\
