@@ -43,22 +43,22 @@ def build_net_spec(hypers, baseline=False):
     dropout = {'type': 'dropout', 'rate': net.dropout}
     conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
     lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
-    only_net_end = net.type == 'lstm' and baseline
+    lstm_baseline = net.type == 'lstm' and baseline
 
     arr = []
     if net.dropout: arr.append({**dropout})
 
     # Pre-layer
-    if 'pre_depth' in net and not only_net_end:
-        for i in range(net.pre_depth):
-            size = int(net.width/(net.pre_depth-i+1)) if net.funnel else net.width
+    if 'depth_pre' in net and not lstm_baseline:
+        for i in range(net.depth_pre):
+            size = int(net.width/(net.depth_pre-i+1)) if net.funnel else net.width
             arr.append({'size': size, **dense})
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
-    if not only_net_end:
+    if not lstm_baseline:
         n_cols = data.n_cols(conv2d=net.type == 'conv2d', indicators=indicators, arbitrage=arbitrage)
-        for i in range(net.depth):
+        for i in range(net.depth_mid):
             if net.type == 'conv2d':
                 size = max([32, int(net.width/4)])
                 if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
@@ -70,7 +70,7 @@ def build_net_spec(hypers, baseline=False):
             arr.append({'type': 'flatten'})
 
     # Dense
-    for i in range(net.depth):
+    for i in range(net.depth_post):
         size = int(net.width / (i + 2)) if net.funnel else net.width
         arr.append({'size': size, **dense})
         if net.dropout: arr.append({**dropout})
@@ -213,15 +213,21 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': True
     },
-    'net.depth': {
+    'net.depth_mid': {
         'type': 'bounded',
-        'vals': [1, 3],
+        'vals': [1, 4],
+        'guess': 1,
+        'pre': int
+    },
+    'net.depth_post': {
+        'type': 'bounded',
+        'vals': [1, 4],
         'guess': 1,
         'pre': int
     },
     'net.width': {
         'type': 'bounded',
-        'vals': [32, 768],
+        'vals': [32, 512],
         'guess': 128,
         'pre': bins_of_8
     },
@@ -277,7 +283,7 @@ hypers['custom'] = {
 }
 
 hypers['lstm'] = {
-    'net.pre_depth': {
+    'net.depth_pre': {
         'type': 'bounded',
         'vals': [0, 3],
         'guess': 1,
@@ -609,18 +615,18 @@ def main_gp():
             Y.append([run.reward_avg])
         print_feature_importances(X, Y, feat_names)
 
-        if args.guess:
-            guesses = {k: v['guess'] for k, v in hypers_.items()}
-            X.append(hypers2vec(guesses))
-            Y.append([None])
-            args.guess = False
-
         # Evidently duplicate values break GP. Many of these are ints, so they're definite duplicates. Either way,
         # tack on some small epsilon to make them different (1e-6 < gp.py's min threshold, make sure that #'s not a
         # problem). Subtracting since many vals are int()'d, which is floor()
         for x in X:
             for i,v in enumerate(x):
-                x[i] -= np.random.random() * 1e-6
+                x[i] += np.random.random() * 1e-6
+
+        if args.guess:
+            guesses = {k: v['guess'] for k, v in hypers_.items()}
+            X.append(hypers2vec(guesses))
+            Y.append([None])
+            args.guess = False
 
         if args.gpyopt:
             pretrain = {'X': np.array(X), 'Y': np.array(Y)} if X else {}
