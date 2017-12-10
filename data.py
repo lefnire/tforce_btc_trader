@@ -36,11 +36,21 @@ if 'alex' in DB:
     ]
     target = 'exch_ticker_kraken_usd_last_trade_price'
 elif 'kaggle' in DB:
-    tables = ['bitstamp', 'btcn']
-    ts = 'timestamp'
-    cols = ['open', 'high', 'low', 'close', 'volume_btc', 'volume_currency', 'weighted_price']
-    close_col = 'close'
-    predict_col = 'bitstamp_close'
+    tables = [
+    {
+        'name': 'coinbase',
+        'ts': 'timestamp',
+        'cols': dict(open=F, high=F, low=F, close=F, volume_btc=Z, volume_currency=Z, weighted_price=Z),
+        'ohlcv': dict(open='open', high='high', low='low', close='close', volume='volume_currency')
+    },
+    {
+        'name': 'coincheck',
+        'ts': 'timestamp',
+        'cols': dict(open=F, high=F, low=F, close=F, volume_btc=Z, volume_currency=Z, weighted_price=Z),
+        'ohlcv': dict(open='open', high='high', low='low', close='close', volume='volume_currency')
+    }
+    ]
+    target = 'coinbase_close'
 
 def get_tables(arbitrage=True):
     return tables if arbitrage else [tables[0]]

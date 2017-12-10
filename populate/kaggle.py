@@ -20,19 +20,9 @@ column_renames = {
     'Weighted_Price': 'weighted_price'
 }
 
-for filename in ['bitstamp', 'btcn', 'btce']:
+for filename in ['coinbase', 'coincheck']:
     df = pd.read_csv(f'../tmp/kaggle/{filename}.csv')
     df = df.rename(columns=column_renames)
-
-    # Fill NULLs. TODO make sure this is correct! Simple solution is `df = df.ffill()`
-    # Close ffills - every candle is the same close as the last non-NULL close if no activity
-    df.close = df.close.ffill()
-    for k in ['open', 'high', 'low']:
-        # Open, High, Low all set to the last non-NULL close value
-        df[k] = df[k].fillna(df.close)
-    for k in ['volume_btc', 'volume_currency', 'weighted_price']:
-        # Volume stuff set to 0 when no trades. Is weighted_price same as VWAP? VWAP has volume in numerator, so 0 right?
-        df[k] = df[k].fillna(0)
 
     print(f'{filename}: saving to DB')
     df.to_sql(filename, conn, if_exists='replace')
