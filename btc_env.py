@@ -239,7 +239,7 @@ class BitcoinEnv(Environment):
             self.repeat_ct = 1  # reset penalty-growth
         else:
             if self.hypers.punish_repeats:
-                reward -= self.repeat_ct / 50
+                reward -= self.repeat_ct
             self.repeat_ct += 1  # grow the penalty with time
 
         self.timestep += 1
@@ -266,11 +266,11 @@ class BitcoinEnv(Environment):
             # average so we can compare runs w/ varying steps
             avg_reward = float(self.total_reward / self.hypers.steps)
             # Punish (for GP) holders
-            if len(np.unique(self.signals)) == 1:
-                avg_reward -= 200
+            if len(np.unique(self.signals)) < 3:
+                avg_reward -= 20
             # Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
             # RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
-            avg_reward = float(np.clip(avg_reward, -200, 200))
+            avg_reward = float(np.clip(avg_reward, -150, 30))
             self.episode_rewards.append(avg_reward)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1

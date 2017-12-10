@@ -53,9 +53,15 @@ class App extends Component {
   renderTable = () => {
     let {data} = this.state;
     if (!data) return;
-    let columns = ['unique_sigs', 'reward_avg', 'source'].map(k => ({Header: k, accessor: k}));
+    let columns = ['unique_sigs', 'reward_avg'/*, 'source'*/].map(k => ({Header: k, accessor: k}));
     columns = columns.concat(
-      _(data).map(d => _.keys(d.hypers)).flatten().uniq().map(k => ({Header: k, accessor: 'hypers.' + k})).value()
+      _(data)
+        .map(d => _.keys(d.hypers))
+        .flatten()
+        .uniq()
+        .without('net_type', 'step_optimizer_type')
+        .map(k => ({Header: k, accessor: 'hypers.' + k}))
+        .value()
     );
 
     return <ReactTable

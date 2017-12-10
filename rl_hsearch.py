@@ -138,7 +138,7 @@ hypers['model'] = {
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [1e-7, 1e-1],
-        'guess': .01,
+        'guess': 1e-4, # .05
     },
     'optimization_steps': {
         'type': 'bounded',
@@ -149,7 +149,7 @@ hypers['model'] = {
     'discount': {
         'type': 'bounded',
         'vals': [.95, .99],
-        'guess': .96
+        'guess': .975
     },
     # TODO variable_noise
 }
@@ -157,9 +157,8 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .2
+        'guess': .3
     }
-    # distributions_spec (gaussian, beta, etc). Pretty sure meant to handle under-the-hood, investigate
 }
 hypers['pg_model'] = {
     'baseline_mode': {
@@ -189,12 +188,11 @@ hypers['pg_model'] = {
     },
 }
 hypers['pg_prob_ration_model'] = {
-    # I don't know what values to use besides the defaults, just guessing. Look into
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .2,
-        'post': lambda x, others: None if x < .05 else x
+        'guess': .5,
+        'post': lambda x, others: None if x < .1 else x
     }
 }
 
@@ -217,30 +215,30 @@ hypers['custom'] = {
     },
     'net.depth': {
         'type': 'bounded',
-        'vals': [1, 5],
-        'guess': 2,
+        'vals': [1, 3],
+        'guess': 1,
         'pre': int
     },
     'net.width': {
         'type': 'bounded',
         'vals': [32, 768],
-        'guess': 384,
+        'guess': 128,
         'pre': bins_of_8
     },
     'net.funnel': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'elu'],  # , 'relu', 'selu'],
-        'guess': 'elu'
+        'guess': 'tanh'
     },
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
-        'guess': .2,
+        'guess': .3,
         'pre': lambda x: None if x < .1 else x
     },
     'net.l2': {
@@ -251,7 +249,7 @@ hypers['custom'] = {
     'net.l1': {
         'type': 'bounded',
         'vals': [1e-5, .1],
-        'guess': .02
+        'guess': .1
     },
     'steps': {
         'type': 'bounded',
@@ -270,7 +268,7 @@ hypers['custom'] = {
     # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
     'arbitrage': {
         'type': 'bool',
@@ -515,6 +513,7 @@ def main_gp():
     parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--gpyopt', action="store_true", default=False, help="Use GPyOpt library? Or use basic sklearn GP implementation?")
+    parser.add_argument('--random', action="store_true", default=False, help="Have this worker do random search forever")
     args = parser.parse_args()
 
     # Encode features
@@ -616,6 +615,13 @@ def main_gp():
             Y.append([None])
             args.guess = False
 
+        # Evidently duplicate values break GP. Many of these are ints, so they're definite duplicates. Either way,
+        # tack on some small epsilon to make them different (1e-6 < gp.py's min threshold, make sure that #'s not a
+        # problem). Subtracting since many vals are int()'d, which is floor()
+        for x in X:
+            for i,v in enumerate(x):
+                x[i] -= np.random.random() * 1e-6
+
         if args.gpyopt:
             pretrain = {'X': np.array(X), 'Y': np.array(Y)} if X else {}
             opt = GPyOpt.methods.BayesianOptimization(
@@ -627,6 +633,7 @@ def main_gp():
             opt.run_optimization(max_iter=1)
         else:
             gp.bayesian_optimisation2(
+                n_pre_samples=999 if args.random else 5,
                 n_iters=1,
                 loss_fn=loss_fn,
                 bounds=np.array(bounds),
