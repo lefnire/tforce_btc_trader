@@ -44,14 +44,18 @@ if __name__ == '__main__':
     )
 
     runner = Runner(agent=agent, environment=env)
-    n_train, n_test = 30, 5
-    while True:
-        print("Train")
-        env.testing = False
-        runner.run(episodes=n_train)  # train
-        print("Test")
-        env.testing = True
-        runner.run(episodes=n_test, deterministic=True)  # test
+    if not is_main:
+        runner.run()
+    else:
+        n_train, n_test = 30, 5
+        while True:
+            print("Train")
+            env.testing = False
+            runner.run(episodes=n_train)  # train
+            print("Test")
+            env.testing = True
+            runner.run(episodes=n_test, deterministic=True)  # test
+
 
     rewards = env.episode_rewards
     reward = np.mean(rewards[-n_test:])

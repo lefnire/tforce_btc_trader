@@ -138,7 +138,7 @@ hypers['model'] = {
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [1e-7, 1e-1],
-        'guess': 1e-4, # .05
+        'guess': .05
     },
     'optimization_steps': {
         'type': 'bounded',
@@ -157,13 +157,13 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .3
+        'guess': .6
     }
 }
 hypers['pg_model'] = {
     'baseline_mode': {
         'type': 'bool',
-        'guess': True,
+        'guess': False,
         'hydrate': lambda x, flat: {
             False: {'baseline_mode': None},
             True: {
@@ -209,10 +209,7 @@ hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('o
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
-    'indicators': {
-        'type': 'bool',
-        'guess': True
-    },
+    'indicators': True,
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 4],
@@ -228,7 +225,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [32, 512],
-        'guess': 128,
+        'guess': 80,
         'pre': bins_of_8
     },
     'net.funnel': {
@@ -238,7 +235,7 @@ hypers['custom'] = {
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
-        'vals': ['tanh', 'elu'],  # , 'relu', 'selu'],
+        'vals': ['tanh', 'elu', 'relu'],  # 'selu'],
         'guess': 'tanh'
     },
     'net.dropout': {
@@ -250,12 +247,12 @@ hypers['custom'] = {
     'net.l2': {
         'type': 'bounded',
         'vals': [1e-5, .1],
-        'guess': .04
+        'guess': .06
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [1e-5, .1],
-        'guess': .1
+        'guess': .06
     },
     'steps': {
         'type': 'bounded',
@@ -265,21 +262,12 @@ hypers['custom'] = {
     },
     'unimodal': {
         'type': 'bool',
-        'guess': True
-    },
-    'scale': {
-        'type': 'bool',
-        'guess': True
-    },
-    # Repeat-actions intervention: double the reward (False), or punish (True)?
-    'punish_repeats': {
-        'type': 'bool',
         'guess': False
     },
-    'arbitrage': {
-        'type': 'bool',
-        'guess': True
-    }
+    'scale': True,
+    # Repeat-actions intervention: double the reward (False), or punish (True)?
+    'punish_repeats': True,
+    'arbitrage': True
 }
 
 hypers['lstm'] = {
@@ -448,6 +436,7 @@ class HSearchEnv(object):
         n_train, n_test = 250, 30
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
+        env.testing = True
         runner.run(episodes=n_test, deterministic=True) # test
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07

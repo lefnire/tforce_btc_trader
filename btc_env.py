@@ -20,8 +20,8 @@ class Scaler(object):
     STOP_AT = 3e5  # 400k is size of table. Might be able to do with much less, being on safe side
     SKIP = 15
     def __init__(self):
-        self.reward_scaler = RobustScaler()
-        self.state_scaler = RobustScaler()
+        self.reward_scaler = RobustScaler(quantile_range=(10., 90.))
+        self.state_scaler = RobustScaler(quantile_range=(10., 90.))
         self.rewards = []
         self.states = []
         self.done = False
@@ -226,9 +226,8 @@ class BitcoinEnv(Environment):
         total = self.value + self.cash
         reward = total - before
 
-        # Add the "pure" reward now to the total, which is used for human analysis. We'll tweak the reward for
-        # agent optimization going forward
-        self.total_reward += reward
+        # If in testing mode, add reward before we modify it (punishing repeats, etc)
+        if self.testing: self.total_reward += reward
 
         # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior, where false
         # is the opposite (rewarding heterogenous)
@@ -239,8 +238,11 @@ class BitcoinEnv(Environment):
             self.repeat_ct = 1  # reset penalty-growth
         else:
             if self.hypers.punish_repeats:
-                reward -= self.repeat_ct
+                reward -= self.repeat_ct/4
             self.repeat_ct += 1  # grow the penalty with time
+
+        # If in training mode, add rewards after modifications
+        if not self.testing: self.total_reward += reward
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -265,12 +267,9 @@ class BitcoinEnv(Environment):
             self.time = round(time.time() - self.time)
             # average so we can compare runs w/ varying steps
             avg_reward = float(self.total_reward / self.hypers.steps)
-            # Punish (for GP) holders
-            if len(np.unique(self.signals)) < 3:
-                avg_reward -= 20
             # Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
             # RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
-            avg_reward = float(np.clip(avg_reward, -150, 30))
+            avg_reward = float(np.clip(avg_reward, -1000, 30))
             self.episode_rewards.append(avg_reward)
             self._write_results()
         # if self.value <= 0 or self.cash <= 0: terminal = 1
