@@ -121,6 +121,7 @@ def custom_net(hypers, print_net=False, baseline=False):
 
 
 def bins_of_8(x): return int(x // 8) * 8
+def ten_to_the_neg(x, _): return 10**-x
 
 hypers = {}
 hypers['agent'] = {}
@@ -137,8 +138,9 @@ hypers['model'] = {
     'optimizer.type': 'nadam',
     'optimizer.learning_rate': {
         'type': 'bounded',
-        'vals': [1e-7, 1e-1],
-        'guess': .05
+        'vals': [0, 6],
+        'guess': 2,
+        'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
         'type': 'bounded',
@@ -174,7 +176,7 @@ hypers['pg_model'] = {
                     'num_steps': flat['optimization_steps'],
                     'optimizer': {
                         'type': flat['step_optimizer.type'],
-                        'learning_rate': flat['step_optimizer.learning_rate']
+                        'learning_rate': 10**-flat['step_optimizer.learning_rate']
                     }
                 },
             }
@@ -246,13 +248,15 @@ hypers['custom'] = {
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [1e-5, .1],
-        'guess': .06
+        'vals': [0, 5],
+        'guess': 2,
+        'hydrate': ten_to_the_neg
     },
     'net.l1': {
         'type': 'bounded',
-        'vals': [1e-5, .1],
-        'guess': .06
+        'vals': [0, 5],
+        'guess': 2,
+        'hydrate': ten_to_the_neg
     },
     'steps': {
         'type': 'bounded',
@@ -266,7 +270,7 @@ hypers['custom'] = {
     },
     'scale': True,
     # Repeat-actions intervention: double the reward (False), or punish (True)?
-    'punish_repeats': True,
+    'punish_repeats': False,
     'arbitrage': True
 }
 
@@ -399,7 +403,10 @@ class HSearchEnv(object):
         main, custom = DotDict({}), DotDict({})
         for k, v in flat.items():
             obj = main if k in hypers[self.agent] else custom
-            try: obj.update(self.hypers[k]['hydrate'](v, self.flat))
+            try:
+                v = self.hypers[k]['hydrate'](v, self.flat)
+                if type(v) == dict: obj.update(v)
+                else: obj[k] = v
             except: obj[k] = v
         main, custom = main.to_dict(), custom.to_dict()
 

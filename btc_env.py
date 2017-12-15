@@ -20,8 +20,8 @@ class Scaler(object):
     STOP_AT = 3e5  # 400k is size of table. Might be able to do with much less, being on safe side
     SKIP = 15
     def __init__(self):
-        self.reward_scaler = RobustScaler(quantile_range=(10., 90.))
-        self.state_scaler = RobustScaler(quantile_range=(10., 90.))
+        self.reward_scaler = RobustScaler(quantile_range=(5., 95.))
+        self.state_scaler = RobustScaler(quantile_range=(5., 95.))
         self.rewards = []
         self.states = []
         self.done = False
@@ -233,12 +233,12 @@ class BitcoinEnv(Environment):
         # is the opposite (rewarding heterogenous)
         recent_actions = np.array(self.signals[-self.repeat_ct:])
         if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
-            if not self.hypers.punish_repeats:
+            if not self.hypers.punish_repeats and reward > 0:
                 reward *= 2
             self.repeat_ct = 1  # reset penalty-growth
         else:
             if self.hypers.punish_repeats:
-                reward -= self.repeat_ct/4
+                reward -= self.repeat_ct/20
             self.repeat_ct += 1  # grow the penalty with time
 
         # If in training mode, add rewards after modifications
