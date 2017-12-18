@@ -270,7 +270,7 @@ hypers['custom'] = {
     },
     'scale': True,
     # Repeat-actions intervention: double the reward (False), or punish (True)?
-    'punish_repeats': False,
+    'punish_repeats': True,
     'arbitrage': True
 }
 
@@ -443,7 +443,7 @@ class HSearchEnv(object):
         n_train, n_test = 250, 30
         runner = Runner(agent=agent, environment=env)
         runner.run(episodes=n_train)  # train
-        env.testing = True
+        # env.testing = True
         runner.run(episodes=n_test, deterministic=True) # test
         # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07

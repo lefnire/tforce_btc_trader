@@ -52,6 +52,11 @@ class Scaler(object):
         self.rewards.append([reward])
         return self.reward_scaler.fit_transform(self.rewards)[-1][0]
 
+    def avg_reward(self):
+        if self.i < self.SKIP: return 20
+        reward = self.reward_scaler.inverse_transform([[0]])[-1][0]
+        return abs(reward)
+
 # keep this globally around for all runs forever
 scalers = {}
 
@@ -238,7 +243,10 @@ class BitcoinEnv(Environment):
             self.repeat_ct = 1  # reset penalty-growth
         else:
             if self.hypers.punish_repeats:
-                reward -= self.repeat_ct/20
+                # We want a trade every 10 minutes or so. Roughly double the punishment by that step (increasing
+                # over time). Each step ~=1sec
+                # reward -= self.scaler.avg_reward() * (self.repeat_ct/(60*10))
+                reward -= self.repeat_ct/(60*2)
             self.repeat_ct += 1  # grow the penalty with time
 
         # If in training mode, add rewards after modifications
