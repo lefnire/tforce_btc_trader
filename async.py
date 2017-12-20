@@ -17,6 +17,7 @@ from six.moves import xrange, shlex_quote
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-w', '--workers', type=int, default=4, help="Number of worker agents")
+parser.add_argument('--from-db', action="store_true", default=False, help="Load winner from DB or hard-coded guess?")
 args = parser.parse_args()
 
 if __name__ == '__main__':
@@ -48,6 +49,8 @@ if __name__ == '__main__':
             '--workers', workers,
             '--task-index', index,
         ]
+        if args.from_db:
+            cmd_args += ['--from-db']
         if ps:
             cmd_args = ['CUDA_VISIBLE_DEVICES='] + cmd_args + ['--parameter-server']
         return cmd_args

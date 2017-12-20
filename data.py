@@ -20,6 +20,12 @@ Z = 2
 if 'alex' in DB:
     tables = [
     {
+        'name': 'exch_ticker_coinbase_usd',
+        'ts': 'last_update',
+        'cols': dict(last_trade_price=F, last_trade_size=Z, bid_price=F, bid_size=Z, bid_num_orders=Z, ask_price=F,
+                     ask_size=Z, ask_num_orders=Z)
+    },
+    {
         'name': 'exch_ticker_kraken_usd',
         'ts': 'last_update',
         'cols': dict(last_trade_price=F, last_trade_lot_volume=Z, ask_price=F, ask_lot_volume=Z, bid_price=F,
@@ -27,12 +33,6 @@ if 'alex' in DB:
                      number_trades_last24=Z, low=F, low_last24=F, high=F, high_last24=F, open_price=F),
         'ohlcv': dict(open='open_price', high='high', low='low', close='last_trade_price', volume='volume'),
     },
-    {
-        'name': 'exch_ticker_coinbase_usd',
-        'ts': 'last_update',
-        'cols': dict(last_trade_price=F, last_trade_size=Z, bid_price=F, bid_size=Z, bid_num_orders=Z, ask_price=F,
-                     ask_size=Z, ask_num_orders=Z)
-    }
     ]
     target = 'exch_ticker_kraken_usd_last_trade_price'
 elif 'kaggle' in DB:
@@ -169,7 +169,7 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
             fill = {'value': 0} if method == Z else {'method': 'ffill' if method == F else 'bfill'}
             col_name = f"{t['name']}_{k}"
             df[col_name] = df[col_name].fillna(fill)
-    return df
+    return df.astype('float64')
 
 db_to_dataframe = _db_to_dataframe_ohlc if DB == 'coins2'\
     else _db_to_dataframe_main

@@ -20,12 +20,12 @@ column_renames = {
     'Weighted_Price': 'weighted_price'
 }
 
-for filename in ['coinbase', 'coincheck']:
+for filename in ['coinbase', 'coincheck', 'bitstamp']:
     df = pd.read_csv(f'../tmp/kaggle/{filename}.csv')
     df = df.rename(columns=column_renames)
 
     print(f'{filename}: saving to DB')
-    df.to_sql(filename, conn, if_exists='replace')
+    df.to_sql(filename, conn, if_exists='replace', chunksize=200)
 
     print(f'{filename}: modifying columns')
     conn.execute(f"""

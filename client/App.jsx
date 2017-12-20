@@ -1,6 +1,7 @@
 import React, { Component } from 'react';
 import _ from 'lodash';
 import ReactTable from 'react-table';
+import update from 'immutability-helper';
 require('react-table/react-table.css');
 const d3 = require('d3');
 const uuidv4 = require('uuid/v4');
@@ -22,6 +23,7 @@ class App extends Component {
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
         });
+        d.reward_avg = _.mean(d.rewards.slice(-15));
         d.unique_sigs = _.uniq(d.actions).length;
         d.id = uuidv4();
       });
@@ -48,33 +50,55 @@ class App extends Component {
 
   onFilteredChange = () => {
     this.mountChart(_.map(this.refs.reactTable.state.sortedData, '_original'));
+
+    if (this.refs.reactTable.state.sortedData.length > 0) {
+      let filtered = this.refs.reactTable.state.sortedData;
+      let averages = _.mapValues(filtered[0], (v,k) => {
+        if (typeof v === 'string') return this._modeBy(filtered, k);
+        if (typeof v === 'number') return _.meanBy(filtered, k);
+        return v;
+      });
+      averages = _.pickBy(averages, (v,k) => ~k.indexOf('hypers'));
+      console.log(averages);
+      // this.setState(update(this.state, {
+      //   data: {0: {$set: averages}}
+      // }))
+    }
+  };
+
+  _modeBy = (data, k) => {
+    let arr = _.map(data, k);
+    return arr.sort((a,b) => arr.filter(v => v===a).length - arr.filter(v => v===b).length).pop();
   };
 
   renderTable = () => {
     let {data} = this.state;
     if (!data) return;
-    let columns = ['unique_sigs', 'reward_avg'/*, 'source'*/].map(k => ({Header: k, accessor: k}));
+    let columns = ['unique_sigs', 'reward_avg'].map(k => ({Header: k, accessor: k}));
+
     columns = columns.concat(
       _(data)
         .map(d => _.keys(d.hypers))
         .flatten()
         .uniq()
-        .without('net_type', 'step_optimizer_type')
+        .filter(k => _(data).map(d => d.hypers[k]).uniq().size() > 1) // remove hardcoded
         .map(k => ({Header: k, accessor: 'hypers.' + k}))
         .value()
     );
 
-    return <ReactTable
-      ref='reactTable'
-      minRows={2}
-      data={data}
-      columns={columns}
-      filterable={true}
-      defaultFilterMethod={this.defaultFilterMethod}
-      onFilteredChange={_.debounce(this.onFilteredChange, 400)}
-      defaultSorted={[{id:'reward_avg', desc:true}]}
-      defaultPageSize={10}
-    />
+    return (
+      <ReactTable
+        ref='reactTable'
+        minRows={2}
+        data={data}
+        columns={columns}
+        filterable={true}
+        defaultFilterMethod={this.defaultFilterMethod}
+        onFilteredChange={_.debounce(this.onFilteredChange, 400)}
+        defaultSorted={[{id:'reward_avg', desc:true}]}
+        defaultPageSize={10}
+      />
+    )
   };
 
   render() {

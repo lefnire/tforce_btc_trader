@@ -138,8 +138,8 @@ hypers['model'] = {
     'optimizer.type': 'nadam',
     'optimizer.learning_rate': {
         'type': 'bounded',
-        'vals': [0, 6],
-        'guess': 2,
+        'vals': [0, 8],
+        'guess': 5.6,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
@@ -148,18 +148,14 @@ hypers['model'] = {
         'guess': 10,
         'pre': int
     },
-    'discount': {
-        'type': 'bounded',
-        'vals': [.95, .99],
-        'guess': .975
-    },
+    'discount': .975,
     # TODO variable_noise
 }
 hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .6
+        'guess': .55
     }
 }
 hypers['pg_model'] = {
@@ -193,7 +189,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .5,
+        'guess': .65,
         'post': lambda x, others: None if x < .1 else x
     }
 }
@@ -215,19 +211,19 @@ hypers['custom'] = {
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 4],
-        'guess': 1,
+        'guess': 2,
         'pre': int
     },
     'net.depth_post': {
         'type': 'bounded',
         'vals': [1, 4],
-        'guess': 1,
+        'guess': 2,
         'pre': int
     },
     'net.width': {
         'type': 'bounded',
         'vals': [32, 512],
-        'guess': 80,
+        'guess': 216,
         'pre': bins_of_8
     },
     'net.funnel': {
@@ -237,37 +233,29 @@ hypers['custom'] = {
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
-        'vals': ['tanh', 'elu', 'relu'],  # 'selu'],
+        'vals': ['tanh', 'elu'], # relu, selu
         'guess': 'tanh'
     },
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
-        'guess': .3,
+        'guess': .2,
         'pre': lambda x: None if x < .1 else x
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [0, 5],
-        'guess': 2,
+        'vals': [0, 7],
+        'guess': 3.5,
         'hydrate': ten_to_the_neg
     },
     'net.l1': {
         'type': 'bounded',
-        'vals': [0, 5],
-        'guess': 2,
+        'vals': [0, 7],
+        'guess': 4.4,
         'hydrate': ten_to_the_neg
     },
-    'steps': {
-        'type': 'bounded',
-        'vals': [2048*3+3, 3*(2048*3+3)],
-        'guess': 2*(2048*3+3),
-        'pre': int
-    },
-    'unimodal': {
-        'type': 'bool',
-        'guess': False
-    },
+    'steps': 2048*4+4,
+    'unimodal': False,
     'scale': True,
     # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': True,
@@ -278,7 +266,7 @@ hypers['lstm'] = {
     'net.depth_pre': {
         'type': 'bounded',
         'vals': [0, 3],
-        'guess': 1,
+        'guess': 0,
         'pre': int,
     },
 }
@@ -476,7 +464,7 @@ class HSearchEnv(object):
 
     def get_winner(self, from_db=True):
         if from_db:
-            sql = "select id, hypers from runs where flag is null and agent=:agent order by reward_avg desc limit 1"
+            sql = "select id, hypers from runs where agent=:agent order by reward_avg desc limit 1"
             winner = self.conn.execute(text(sql), agent=self.agent).fetchone()
             print(f'Using winner {winner.id}')
             winner = winner.hypers
