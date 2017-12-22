@@ -43,18 +43,21 @@ if __name__ == '__main__':
         **hydrated
     )
 
+    n_train, n_test = 30, 3
     runner = Runner(agent=agent, environment=env)
     if not is_main:
         runner.run()
     else:
-        n_train, n_test = 30, 5
         while True:
             print("Train")
             env.testing = False
             runner.run(episodes=n_train)  # train
             print("Test")
-            env.testing = True
-            runner.run(episodes=n_test, deterministic=True)  # test
+            for i in range(n_test):  # test
+                env.testing = True
+                next_state, terminal = env.reset(), False
+                while not terminal:
+                    next_state, terminal, reward = env.execute(agent.act(next_state, deterministic=True))
 
 
     rewards = env.episode_rewards

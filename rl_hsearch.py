@@ -211,7 +211,7 @@ hypers['custom'] = {
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 4],
-        'guess': 2,
+        'guess': 1,
         'pre': int
     },
     'net.depth_post': {
