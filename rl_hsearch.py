@@ -139,7 +139,7 @@ hypers['model'] = {
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0, 8],
-        'guess': 5.6,
+        'guess': 5.5,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
@@ -161,7 +161,7 @@ hypers['distribution_model'] = {
 hypers['pg_model'] = {
     'baseline_mode': {
         'type': 'bool',
-        'guess': False,
+        'guess': True,
         'hydrate': lambda x, flat: {
             False: {'baseline_mode': None},
             True: {
@@ -182,7 +182,7 @@ hypers['pg_model'] = {
         'type': 'bounded',
         'vals': [.85, .99],
         'guess': .97,
-        'post': lambda x, others: x if others['baseline_mode'] and x > .9 else None
+        'post': lambda x, others: x if (x and x > .9) and others['baseline_mode'] else None
     },
 }
 hypers['pg_prob_ration_model'] = {
@@ -190,7 +190,7 @@ hypers['pg_prob_ration_model'] = {
         'type': 'bounded',
         'vals': [0., 1.],
         'guess': .65,
-        'post': lambda x, others: None if x < .1 else x
+        'post': lambda x, others: x if (x and x > .1) else None
     }
 }
 
@@ -223,10 +223,10 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [32, 512],
-        'guess': 216,
+        'guess': 312,
         'pre': bins_of_8
     },
-    'net.funnel': {
+    'net.funnel': {  # True for width > 300
         'type': 'bool',
         'guess': False
     },
@@ -245,13 +245,13 @@ hypers['custom'] = {
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 3.5,
+        'guess': 4.5,
         'hydrate': ten_to_the_neg
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 4.4,
+        'guess': 4.5,
         'hydrate': ten_to_the_neg
     },
     'steps': 2048*4+4,
@@ -462,10 +462,10 @@ class HSearchEnv(object):
         runner.close()
         return reward
 
-    def get_winner(self, from_db=True):
-        if from_db:
-            sql = "select id, hypers from runs where agent=:agent order by reward_avg desc limit 1"
-            winner = self.conn.execute(text(sql), agent=self.agent).fetchone()
+    def get_winner(self, id=None):
+        if id:
+            sql = "select id, hypers from runs where id=:id"
+            winner = self.conn.execute(text(sql), id=id).fetchone()
             print(f'Using winner {winner.id}')
             winner = winner.hypers
         else:
@@ -495,14 +495,13 @@ def print_feature_importances(X, Y, feat_names):
 
 
 def main_gp():
-    import gp, GPyOpt
+    import gp
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-g', '--gpu_split', type=float, default=.3, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
-    parser.add_argument('--gpyopt', action="store_true", default=False, help="Use GPyOpt library? Or use basic sklearn GP implementation?")
     parser.add_argument('--random', action="store_true", default=False, help="Have this worker do random search forever")
     args = parser.parse_args()
 
@@ -529,18 +528,14 @@ def main_gp():
     vectorizer.fit(mat.T.to_dict().values())
     feat_names = vectorizer.get_feature_names()
 
-    # Map TensorForce actions to GPyOpt-compatible `domain`
+    # Map TensorForce actions to GP-compatible `domain`
     # instantiate just to get actions (get them from hypers above?)
     bounds = []
     for k in feat_names:
         hyper = hypers_.get(k, False)
         if hyper:
             bounded, min_, max_ = hyper['type'] == 'bounded', min(hyper['vals']), max(hyper['vals'])
-        if args.gpyopt:
-            b = {'name': k, 'type': 'discrete', 'domain': (0, 1)}
-            if bounded: b.update(type='continuous', domain=(min_, max_))
-        else:
-            b = [min_, max_] if bounded else [0, 1]
+        b = [min_, max_] if bounded else [0, 1]
         bounds.append(b)
 
     def hypers2vec(obj):
@@ -555,8 +550,7 @@ def main_gp():
         # Reverse the encoding
         # https://stackoverflow.com/questions/22548731/how-to-reverse-sklearn-onehotencoder-transform-to-recover-original-data
         # https://github.com/scikit-learn/scikit-learn/issues/4414
-        if not args.gpyopt: vec = [vec]  # gp.py passes as flat, GPyOpt as wrapped
-        reversed = vectorizer.inverse_transform(vec)[0]
+        reversed = vectorizer.inverse_transform([vec])[0]
         obj = {}
         for k, v in reversed.items():
             if '=' not in k:
@@ -612,24 +606,14 @@ def main_gp():
             Y.append([None])
             args.guess = False
 
-        if args.gpyopt:
-            pretrain = {'X': np.array(X), 'Y': np.array(Y)} if X else {}
-            opt = GPyOpt.methods.BayesianOptimization(
-                f=loss_fn,
-                domain=bounds,
-                maximize=True,
-                **pretrain
-            )
-            opt.run_optimization(max_iter=1)
-        else:
-            gp.bayesian_optimisation2(
-                n_pre_samples=999 if args.random else 5,
-                n_iters=1,
-                loss_fn=loss_fn,
-                bounds=np.array(bounds),
-                x_list=X,
-                y_list=Y
-            )
+        gp.bayesian_optimisation2(
+            n_pre_samples=999 if args.random else 5,
+            n_iters=1,
+            loss_fn=loss_fn,
+            bounds=np.array(bounds),
+            x_list=X,
+            y_list=Y
+        )
 
 if __name__ == '__main__':
     main_gp()

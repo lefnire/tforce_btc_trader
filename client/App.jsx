@@ -12,7 +12,11 @@ class App extends Component {
     super();
     this.state = {
       data: null,
-      showSignals: false
+      showSignals: false,
+
+      page: 0,
+      pageSize: 10,
+      filter: null
     };
   }
 
@@ -25,12 +29,10 @@ class App extends Component {
         });
         d.reward_avg = _.mean(d.rewards.slice(-15));
         d.unique_sigs = _.uniq(d.actions).length;
-        d.id = uuidv4();
+        // d.id = uuidv4();
       });
       this.orig_data = data;
-      this.setState({data}, () => {
-        this.mountChart(data);
-      });
+      this.setState({data});
     });
   }
 
@@ -48,14 +50,24 @@ class App extends Component {
     return false;
   };
 
-  onFilteredChange = () => {
-    this.mountChart(_.map(this.refs.reactTable.state.sortedData, '_original'));
+  componentDidUpdate(prevProps, prevState) {
+    // Re-mount charts if we changed page, pageSize, or filter
+    let { page, pageSize, filter } = this.state;
+    if (prevState.page !== page || prevState.pageSize !== pageSize || prevState.filter !== filter) {
+      const { page, pageSize } = this.state;
+      let data = this.refs.reactTable.state.sortedData;
+      let paged = data.slice(page*pageSize, page*pageSize+pageSize-1);
+      this.mountChart(_.map(paged, '_original'));
+    }
+  }
 
-    if (this.refs.reactTable.state.sortedData.length > 0) {
-      let filtered = this.refs.reactTable.state.sortedData;
-      let averages = _.mapValues(filtered[0], (v,k) => {
-        if (typeof v === 'string') return this._modeBy(filtered, k);
-        if (typeof v === 'number') return _.meanBy(filtered, k);
+  onFilteredChange = () => {
+    this.setState({filter: +new Date}); // actually don't care what the filter is, handled internally by reactTable. Just care about an update
+    let data = this.refs.reactTable.state.sortedData;
+    if (data.length > 0) {
+      let averages = _.mapValues(data[0], (v,k) => {
+        if (typeof v === 'string') return this._modeBy(data, k);
+        if (typeof v === 'number') return _.meanBy(data, k);
         return v;
       });
       averages = _.pickBy(averages, (v,k) => ~k.indexOf('hypers'));
@@ -71,10 +83,13 @@ class App extends Component {
     return arr.sort((a,b) => arr.filter(v => v===a).length - arr.filter(v => v===b).length).pop();
   };
 
+  onPageChange = (page) => this.setState({page});
+  onPageSizeChange = (pageSize) => this.setState({pageSize});
+
   renderTable = () => {
     let {data} = this.state;
     if (!data) return;
-    let columns = ['unique_sigs', 'reward_avg'].map(k => ({Header: k, accessor: k}));
+    let columns = ['id', 'unique_sigs', 'reward_avg'].map(k => ({Header: k, accessor: k}));
 
     columns = columns.concat(
       _(data)
@@ -93,6 +108,8 @@ class App extends Component {
         data={data}
         columns={columns}
         filterable={true}
+        onPageChange={this.onPageChange}
+        onPageSizeChange={this.onPageSizeChange}
         defaultFilterMethod={this.defaultFilterMethod}
         onFilteredChange={_.debounce(this.onFilteredChange, 400)}
         defaultSorted={[{id:'reward_avg', desc:true}]}
@@ -198,11 +215,12 @@ class App extends Component {
       .direction('sw')
       .html(d => {
         let str = `
+          id: ${d.parent.id}<br/>
           reward: ${d.y}<br/>
           reward_avg: ${d.parent.reward_avg}<br/>
-          source: ${d.parent.source}<br/>
           uniques: ${_.uniq(d.parent.actions).length}<br/><br/>
         `;
+          // source: ${d.parent.source}<br/>
 
         return str + JSON.stringify(d.parent.hypers, null, 2).replace(/\n/g,'<br/>')
       });
