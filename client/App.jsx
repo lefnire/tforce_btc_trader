@@ -27,9 +27,7 @@ class App extends Component {
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
         });
-        d.reward_avg = _.mean(d.rewards.slice(-15));
         d.unique_sigs = _.uniq(d.actions).length;
-        // d.id = uuidv4();
       });
       this.orig_data = data;
       this.setState({data});
@@ -141,7 +139,10 @@ class App extends Component {
     let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
     let rewards = data.map(d => {
-      return d.rewards.map((v,i) => ({y:_.clamp(v,-300,300), x:i, parent:d})); // note clamp so we don't break the graph
+      return d.rewards_human.map((v,i) => ({
+        y: _.clamp((d.rewards_agent[i] + v)/2, -100, 100), // clamp so we don't break the graph
+        x:i, parent:d
+      }));
     });
     let all_rewards = _.flatten(rewards);
 

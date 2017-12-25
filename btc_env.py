@@ -69,9 +69,9 @@ class BitcoinEnv(Environment):
         self.agent_name = name
         self.start_cap = 1e3
         self.window = 150
-        self.episode_rewards = []
+        self.episode = 0
+        self.episode_rewards = {'human': [], 'agent': []}
         self.testing = False
-
         self.conn = engine.connect()
 
         # Action space
@@ -169,12 +169,13 @@ class BitcoinEnv(Environment):
             raise NotImplementedError('TODO Implement conv2d features depth > 2')
 
     def reset(self):
+        self.episode += 1
         self.time = time.time()
         self.cash = self.value = self.start_cap
         start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
-        self.total_reward = 0
+        self.step_rewards = {'human': [], 'agent': []}
         self.repeat_ct = 1
 
         # Fetch random slice of rows from the database (based on limit)
@@ -231,8 +232,8 @@ class BitcoinEnv(Environment):
         total = self.value + self.cash
         reward = total - before
 
-        # If in testing mode, add reward before we modify it (punishing repeats, etc)
-        if self.testing: self.total_reward += reward
+        # Add reward before we modify it (punishing repeats, etc)
+        self.step_rewards['human'].append(reward)
 
         # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior, where false
         # is the opposite (rewarding heterogenous)
@@ -249,8 +250,8 @@ class BitcoinEnv(Environment):
                 reward -= self.repeat_ct/(60*2)
             self.repeat_ct += 1  # grow the penalty with time
 
-        # If in training mode, add rewards after modifications
-        if not self.testing: self.total_reward += reward
+        # Add rewards after modifications
+        self.step_rewards['agent'].append(reward)
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -270,23 +271,23 @@ class BitcoinEnv(Environment):
             reward = self.scaler.transform_reward(reward)
 
         terminal = int(self.timestep + 1 >= len(self.observations))
-        if terminal:
+        if terminal and self.testing:
             self.signals.append(0)  # Add one last signal (to match length)
             self.time = round(time.time() - self.time)
-            # average so we can compare runs w/ varying steps
-            avg_reward = float(self.total_reward / self.hypers.steps)
-            # Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
-            # RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
-            avg_reward = float(np.clip(avg_reward, -1000, 30))
-            self.episode_rewards.append(avg_reward)
-            self._write_results()
+            for k in ['human', 'agent']:
+                # - average so we can compare runs w/ varying steps
+                # - Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
+                #   RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
+                avg_reward = np.mean(self.step_rewards[k])
+                avg_reward = float(np.clip(avg_reward, -1000, 30))
+                self.episode_rewards[k].append(avg_reward)
+            self._print_episode()
+
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, terminal, reward
 
-    def _write_results(self):
-        rewards = self.episode_rewards
-        episode = len(rewards)
-        if not self.testing and episode % 5 != 0: return
+    def _print_episode(self):
+        rewards = self.episode_rewards['human']
         common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
         reward, high, low = rewards[-1], max(self.signals), min(self.signals)
-        print(f"{episode}\t⌛:{self.time}s\tR:{'%.2f'%reward}\tA:{common}(high={'%.2f'%high},low={'%.2f'%low})")
+        print(f"{self.episode}\t⌛:{self.time}s\tR:{'%.2f'%reward}\tA:{common}(high={'%.2f'%high},low={'%.2f'%low})")

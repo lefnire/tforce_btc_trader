@@ -180,9 +180,9 @@ hypers['pg_model'] = {
     },
     'gae_lambda': {
         'type': 'bounded',
-        'vals': [.85, .99],
+        'vals': [0., 1.],
         'guess': .97,
-        'post': lambda x, others: x if (x and x > .9) and others['baseline_mode'] else None
+        'post': lambda x, others: x if (x and x > .1) and others['baseline_mode'] else None
     },
 }
 hypers['pg_prob_ration_model'] = {
@@ -255,7 +255,10 @@ hypers['custom'] = {
         'hydrate': ten_to_the_neg
     },
     'steps': 2048*4+4,
-    'unimodal': False,
+    'unimodal': {
+        'type': 'bool',
+        'guess': False
+    },
     'scale': True,
     # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': True,
@@ -427,31 +430,45 @@ class HSearchEnv(object):
             **hydrated
         )
 
-        # n_train, n_test = 2, 1
-        n_train, n_test = 250, 30
-        runner = Runner(agent=agent, environment=env)
-        runner.run(episodes=n_train)  # train
-        # env.testing = True
-        runner.run(episodes=n_test, deterministic=True) # test
-        # You may need to remove runner.py's close() calls so you have access to runner.episode_rewards, see
+        # n_total, n_train_batch, n_test, i = 6, 2, 4, 0
+        n_total, n_train_batch, n_test, i = 250, 10, 4, 0
+        # Note: Remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
+        runner = Runner(agent=agent, environment=env)
+
+        def test_episode():
+            env.testing = True
+            next_state, terminal = env.reset(), False
+            while not terminal:
+                next_state, terminal, reward = env.execute(agent.act(next_state, deterministic=True))
+
+        while i <= n_total:
+            env.testing = False
+            runner.run(episodes=n_train_batch)
+            # One testing iteration every so often (to chart progress)
+            test_episode()
+            i += n_train_batch
+        # Final batch of test-runs
+        for i in range(n_test): test_episode()
 
         # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
-        rewards = env.episode_rewards
-        reward = np.mean(rewards[-n_test:])
-        print(flat, f"\nReward={reward}\n\n")
+        r_human, r_agent = env.episode_rewards['human'], env.episode_rewards['agent']
+        r_avg_human, r_avg_agent = np.mean(r_human[-n_test:]), np.mean(r_agent[-n_test:])
+        print(flat, f"\nReward(human)={r_avg_human}, Reward(agent)={r_avg_agent}\n\n")
 
         sql = """
-          insert into runs (hypers, reward_avg, rewards, agent, prices, actions, flag) 
-          values (:hypers, :reward_avg, :rewards, :agent, :prices, :actions, :flag)
+          insert into runs (hypers, reward_avg_human, reward_avg_agent, rewards_human, rewards_agent, agent, prices, actions, flag) 
+          values (:hypers, :reward_avg_human, :reward_avg_agent, :rewards_human, :rewards_agent, :agent, :prices, :actions, :flag)
         """
         try:
             self.conn.execute(
                 text(sql),
                 hypers=json.dumps(flat),
-                reward_avg=reward,
-                rewards=rewards,
-                agent='ppo_agent',
+                reward_avg_human=r_avg_human,
+                reward_avg_agent=r_avg_agent,
+                rewards_human=r_human,
+                rewards_agent=r_agent,
+                agent=self.agent,
                 prices=env.prices.tolist(),
                 actions=env.signals,
                 flag=self.net_type
@@ -460,7 +477,7 @@ class HSearchEnv(object):
             pdb.set_trace()
 
         runner.close()
-        return reward
+        return r_avg_agent
 
     def get_winner(self, id=None):
         if id:
@@ -584,13 +601,14 @@ def main_gp():
         but this allows to distribute across servers easily
         """
         conn = data.engine.connect()
-        sql = "select hypers, reward_avg from runs where flag=:f"
+        sql = "select hypers, reward_avg_agent, reward_avg_human from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([run.reward_avg])
+            r_avg = (run.reward_avg_agent + run.reward_avg_human) / 2
+            Y.append([r_avg])
         print_feature_importances(X, Y, feat_names)
 
         # Evidently duplicate values break GP. Many of these are ints, so they're definite duplicates. Either way,

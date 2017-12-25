@@ -43,24 +43,20 @@ if __name__ == '__main__':
         **hydrated
     )
 
-    n_train, n_test = 30, 3
     runner = Runner(agent=agent, environment=env)
-    if not is_main:
-        runner.run()
+    if not is_main: runner.run()
     else:
         while True:
-            print("Train")
+            # Train
             env.testing = False
-            runner.run(episodes=n_train)  # train
-            print("Test")
-            for i in range(n_test):  # test
-                env.testing = True
-                next_state, terminal = env.reset(), False
-                while not terminal:
-                    next_state, terminal, reward = env.execute(agent.act(next_state, deterministic=True))
+            runner.run(episodes=10)
+            # Test
+            env.testing = True
+            next_state, terminal = env.reset(), False
+            while not terminal:
+                next_state, terminal, reward = env.execute(agent.act(next_state, deterministic=True))
 
-
-    rewards = env.episode_rewards
-    reward = np.mean(rewards[-n_test:])
-    print(flat, f"\nReward={reward}\n\n")
-    runner.close()
+    # rewards = env.episode_rewards
+    # reward = np.mean(rewards[-n_test:])
+    # print(flat, f"\nReward={reward}\n\n")
+    # runner.close()

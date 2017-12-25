@@ -22,8 +22,8 @@ def send_data():
     for row in conn.execute('select * from runs').fetchall():
         row = dict(row.items())
         rows.append(row)
-        # row['reward_avg'] = float(np.mean(row['rewards'][-15:]))
         X.append(row['hypers'])
+        row['reward_avg'] = (row['reward_avg_human'] + row['reward_avg_agent']) / 2
         Y.append([row['reward_avg']])
     conn.close()
 
