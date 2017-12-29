@@ -24,6 +24,7 @@ class App extends Component {
     // fetch('http://localhost:5000').then(res => res.json()).then(data => {
     fetch('dumps/alex.json').then(res => res.json()).then(data => {
       data.forEach(d => {
+        // d.reward_avg = _.filter(d.rewards_human.slice(-15), r => r > 0).length;
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
         });
@@ -54,7 +55,7 @@ class App extends Component {
     if (prevState.page !== page || prevState.pageSize !== pageSize || prevState.filter !== filter) {
       const { page, pageSize } = this.state;
       let data = this.refs.reactTable.state.sortedData;
-      let paged = data.slice(page*pageSize, page*pageSize+pageSize-1);
+      let paged = data.slice(page*pageSize, page*pageSize+pageSize);
       this.mountChart(_.map(paged, '_original'));
     }
   }
@@ -111,7 +112,8 @@ class App extends Component {
         defaultFilterMethod={this.defaultFilterMethod}
         onFilteredChange={_.debounce(this.onFilteredChange, 400)}
         defaultSorted={[{id:'reward_avg', desc:true}]}
-        defaultPageSize={10}
+        pageSizeOptions={[1, 2, 3, 4, 5]}
+        defaultPageSize={1}
       />
     )
   };
@@ -138,12 +140,14 @@ class App extends Component {
     svg.select('g').remove(); // start clean
     let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-    let rewards = data.map(d => {
-      return d.rewards_human.map((v,i) => ({
-        y: _.clamp((d.rewards_agent[i] + v)/2, -100, 100), // clamp so we don't break the graph
+    let rewards = data.map(d => d.rewards_human.map((v,i) => {
+      let y = v; // just human
+      // let y = (d.rewards_agent[i] + v)/2; // human-agent average
+      return {
+        y: _.clamp(y, -3, 3), // clamp so we don't break the graph
         x:i, parent:d
-      }));
-    });
+      }
+    }));
     let all_rewards = _.flatten(rewards);
 
     let colorScale = d3.scaleOrdinal(d3.schemeCategory10)
@@ -179,7 +183,7 @@ class App extends Component {
         .x(d => x(d.x))
         .y(d => y(d.y));
 
-    let radius = 2.5,
+    let radius = 3,
       lineWidth = 1.5;
 
     rewards.forEach((row, i) => {
@@ -219,7 +223,7 @@ class App extends Component {
           id: ${d.parent.id}<br/>
           reward: ${d.y}<br/>
           reward_avg: ${d.parent.reward_avg}<br/>
-          uniques: ${_.uniq(d.parent.actions).length}<br/><br/>
+          uniques: ${d.parent.uniques[d.x]}<br/><br/>
         `;
           // source: ${d.parent.source}<br/>
 
@@ -231,6 +235,10 @@ class App extends Component {
       .enter()
         .append("circle")
         .classed('dot', true)
+        .style('fill', d => {
+          let { uniques } = d.parent;
+          return !uniques ? 'black' : uniques[d.x] > 5 ? 'green' : uniques[d.x] > 1 ? 'yellow' : 'red';
+        })
         .attr("r", radius)
         .attr("cx", d => x(d.x))
         .attr("cy", d => y(d.y))

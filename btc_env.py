@@ -71,6 +71,7 @@ class BitcoinEnv(Environment):
         self.window = 150
         self.episode = 0
         self.episode_rewards = {'human': [], 'agent': []}
+        self.episode_uniques = []
         self.testing = False
         self.conn = engine.connect()
 
@@ -281,6 +282,7 @@ class BitcoinEnv(Environment):
                 avg_reward = np.mean(self.step_rewards[k])
                 avg_reward = float(np.clip(avg_reward, -1000, 30))
                 self.episode_rewards[k].append(avg_reward)
+            self.episode_uniques.append(float(len(np.unique(self.signals))))
             self._print_episode()
 
         # if self.value <= 0 or self.cash <= 0: terminal = 1

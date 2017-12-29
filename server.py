@@ -21,9 +21,13 @@ def send_data():
     conn = engine.connect()
     for row in conn.execute('select * from runs').fetchall():
         row = dict(row.items())
+        for i, u in enumerate(row['uniques']):
+            if u == 1: row['rewards_human'][i] = -.5
+        row['reward_avg_human'] = float(np.mean(row['rewards_human'][-4:]))
+        row['reward_avg'] = row['reward_avg_human']
+
         rows.append(row)
         X.append(row['hypers'])
-        row['reward_avg'] = (row['reward_avg_human'] + row['reward_avg_agent']) / 2
         Y.append([row['reward_avg']])
     conn.close()
 

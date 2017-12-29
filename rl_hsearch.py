@@ -430,7 +430,7 @@ class HSearchEnv(object):
             **hydrated
         )
 
-        # n_total, n_train_batch, n_test, i = 6, 2, 4, 0
+        # n_total, n_train_batch, n_test, i = 2, 1, 1, 0
         n_total, n_train_batch, n_test, i = 250, 10, 4, 0
         # Note: Remove runner.py's close() calls so you have access to runner.episode_rewards, see
         # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
@@ -452,13 +452,13 @@ class HSearchEnv(object):
         for i in range(n_test): test_episode()
 
         # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
-        r_human, r_agent = env.episode_rewards['human'], env.episode_rewards['agent']
+        r_human, r_agent, uniques = env.episode_rewards['human'], env.episode_rewards['agent'], env.episode_uniques
         r_avg_human, r_avg_agent = np.mean(r_human[-n_test:]), np.mean(r_agent[-n_test:])
         print(flat, f"\nReward(human)={r_avg_human}, Reward(agent)={r_avg_agent}\n\n")
 
         sql = """
-          insert into runs (hypers, reward_avg_human, reward_avg_agent, rewards_human, rewards_agent, agent, prices, actions, flag) 
-          values (:hypers, :reward_avg_human, :reward_avg_agent, :rewards_human, :rewards_agent, :agent, :prices, :actions, :flag)
+          insert into runs (hypers, reward_avg_human, reward_avg_agent, rewards_human, rewards_agent, uniques, agent, prices, actions, flag) 
+          values (:hypers, :reward_avg_human, :reward_avg_agent, :rewards_human, :rewards_agent, :uniques, :agent, :prices, :actions, :flag)
         """
         try:
             self.conn.execute(
@@ -468,6 +468,7 @@ class HSearchEnv(object):
                 reward_avg_agent=r_avg_agent,
                 rewards_human=r_human,
                 rewards_agent=r_agent,
+                uniques=uniques,
                 agent=self.agent,
                 prices=env.prices.tolist(),
                 actions=env.signals,
@@ -601,13 +602,18 @@ def main_gp():
         but this allows to distribute across servers easily
         """
         conn = data.engine.connect()
-        sql = "select hypers, reward_avg_agent, reward_avg_human from runs where flag=:f"
+        sql = "select hypers, uniques, rewards_human from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            r_avg = (run.reward_avg_agent + run.reward_avg_human) / 2
+
+            # Custom-created reward_avg_human to account for unique signals
+            for i, u in enumerate(run['uniques']):
+                if u == 1: run['rewards_human'][i] = -.5
+            r_avg = float(np.mean(run['rewards_human'][-4:]))
+
             Y.append([r_avg])
         print_feature_importances(X, Y, feat_names)
 

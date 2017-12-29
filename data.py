@@ -187,6 +187,7 @@ def setup_runs_table(conn):
             flag varchar(16),
             rewards_human double precision[],
             rewards_agent double precision[],
+            uniques double precision[],
             agent varchar(64) default 'ppo_agent'::character varying not null,
             actions double precision[],
             prices double precision[]
