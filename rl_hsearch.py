@@ -122,32 +122,44 @@ def custom_net(hypers, print_net=False, baseline=False):
 
 def bins_of_8(x): return int(x // 8) * 8
 def ten_to_the_neg(x, _): return 10**-x
+def min_threshold(thresh, fallback):
+    return lambda x, _: x if (x and x > thresh) else fallback
+def hydrate_baseline(x, flat):
+    return {
+        False: {'baseline_mode': None},
+        True: {
+            'baseline': {'type': 'custom'},
+            'baseline_mode': 'states',
+            'baseline_optimizer': {
+                'type': 'multi_step',
+                'num_steps': flat['optimization_steps'],
+                'optimizer': {
+                    'type': flat['step_optimizer.type'],
+                    'learning_rate': 10 ** -flat['step_optimizer.learning_rate']
+                }
+            },
+        }
+    }[x]
 
 hypers = {}
 hypers['agent'] = {}
 hypers['batch_agent'] = {
-    'batch_size': {
-        'type': 'bounded',
-        'vals': [8, 2048],
-        'guess': 1024,
-        'pre': bins_of_8
-    },
+    'batch_size': 1024,
     # 'keep_last_timestep': True
 }
 hypers['model'] = {
-    'optimizer.type': 'nadam',
+    'optimizer.type': {
+        'type': 'int',
+        'vals': ['nadam', 'adam'],
+        'guess': 'nadam'
+    },
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0, 8],
         'guess': 5.5,
         'hydrate': ten_to_the_neg
     },
-    'optimization_steps': {
-        'type': 'bounded',
-        'vals': [1, 20],
-        'guess': 10,
-        'pre': int
-    },
+    'optimization_steps': 10,
     'discount': .975,
     # TODO variable_noise
 }
@@ -155,34 +167,17 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .55
+        'guess': .55,
+        'hydrate': min_threshold(.05, None)
     }
 }
 hypers['pg_model'] = {
-    'baseline_mode': {
-        'type': 'bool',
-        'guess': True,
-        'hydrate': lambda x, flat: {
-            False: {'baseline_mode': None},
-            True: {
-                'baseline': {'type': 'custom'},
-                'baseline_mode': 'states',
-                'baseline_optimizer': {
-                    'type': 'multi_step',
-                    'num_steps': flat['optimization_steps'],
-                    'optimizer': {
-                        'type': flat['step_optimizer.type'],
-                        'learning_rate': 10**-flat['step_optimizer.learning_rate']
-                    }
-                },
-            }
-        }[x]
-    },
+    'baseline_mode': True,
     'gae_lambda': {
         'type': 'bounded',
         'vals': [0., 1.],
         'guess': .97,
-        'post': lambda x, others: x if (x and x > .1) and others['baseline_mode'] else None
+        'hydrate': min_threshold(.1, None)
     },
 }
 hypers['pg_prob_ration_model'] = {
@@ -190,7 +185,7 @@ hypers['pg_prob_ration_model'] = {
         'type': 'bounded',
         'vals': [0., 1.],
         'guess': .65,
-        'post': lambda x, others: x if (x and x > .1) else None
+        'hydrate': min_threshold(.05, None)
     }
 }
 
@@ -226,39 +221,29 @@ hypers['custom'] = {
         'guess': 312,
         'pre': bins_of_8
     },
-    'net.funnel': {  # True for width > 300
-        'type': 'bool',
-        'guess': False
-    },
+    'net.funnel': False,
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
-    'net.activation': {
-        'type': 'int',
-        'vals': ['tanh', 'elu'], # relu, selu
-        'guess': 'tanh'
-    },
+    'net.activation': 'tanh',
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
         'guess': .2,
-        'pre': lambda x: None if x < .1 else x
+        'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [0, 7],
+        'vals': [0, 6],
         'guess': 4.5,
-        'hydrate': ten_to_the_neg
+        'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'net.l1': {
         'type': 'bounded',
-        'vals': [0, 7],
+        'vals': [0, 6],
         'guess': 4.5,
-        'hydrate': ten_to_the_neg
+        'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'steps': 2048*4+4,
-    'unimodal': {
-        'type': 'bool',
-        'guess': False
-    },
+    'unimodal': True,
     'scale': True,
     # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': True,
@@ -266,12 +251,7 @@ hypers['custom'] = {
 }
 
 hypers['lstm'] = {
-    'net.depth_pre': {
-        'type': 'bounded',
-        'vals': [0, 3],
-        'guess': 0,
-        'pre': int,
-    },
+    'net.depth_pre': 0,
 }
 hypers['conv2d'] = {
     # 'net.bias': {'type': 'bool'},
@@ -403,6 +383,9 @@ class HSearchEnv(object):
 
         network = custom_net(custom, print_net=True)
         if flat['baseline_mode']:
+            if type(self.hypers['baseline_mode']) == bool:
+                main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
+
             main['baseline']['network_spec'] = custom_net(custom, baseline=True)
 
         # GPU split
@@ -635,7 +618,7 @@ def main_gp():
             # Custom-created reward_avg_human to account for unique signals
             for i, u in enumerate(run['uniques']):
                 if u == 1: run['rewards_human'][i] = -.5
-            r_avg = float(np.mean(run['rewards_human'][-4:]))
+            r_avg = float(np.mean(run['rewards_human'][-8:]))
 
             Y.append([r_avg])
         boost_model = print_feature_importances(X, Y, feat_names)

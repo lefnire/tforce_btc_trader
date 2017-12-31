@@ -112,7 +112,7 @@ class App extends Component {
         defaultFilterMethod={this.defaultFilterMethod}
         onFilteredChange={_.debounce(this.onFilteredChange, 400)}
         defaultSorted={[{id:'reward_avg', desc:true}]}
-        pageSizeOptions={[1, 2, 3, 4, 5]}
+        pageSizeOptions={[1, 2, 3, 4, 5, 10]}
         defaultPageSize={1}
       />
     )
