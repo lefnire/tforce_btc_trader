@@ -144,7 +144,12 @@ def hydrate_baseline(x, flat):
 hypers = {}
 hypers['agent'] = {}
 hypers['batch_agent'] = {
-    'batch_size': 1024,
+    'batch_size': {
+        'type': 'bounded',
+        'vals': [8, 2048],
+        'guess': 1024,
+        'pre': bins_of_8
+    },
     # 'keep_last_timestep': True
 }
 hypers['model'] = {
@@ -159,7 +164,12 @@ hypers['model'] = {
         'guess': 5.5,
         'hydrate': ten_to_the_neg
     },
-    'optimization_steps': 10,
+    'optimization_steps': {
+        'type': 'bounded',
+        'vals': [1, 20],
+        'guess': 10,
+        'pre': int
+    },
     'discount': .975,
     # TODO variable_noise
 }
@@ -223,7 +233,11 @@ hypers['custom'] = {
     },
     'net.funnel': False,
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
-    'net.activation': 'tanh',
+    'net.activation': {
+        'type': 'int',
+        'vals': ['tanh', 'selu'],
+        'guess': 'tanh'
+    },
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
@@ -233,16 +247,20 @@ hypers['custom'] = {
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 6],
-        'guess': 4.5,
+        'guess': 3,
         'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 6],
-        'guess': 4.5,
+        'guess': 3,
         'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
-    'steps': 2048*4+4,
+    'pct_change': {
+        'type': 'bool',
+        'guess': False
+    },
+    'steps': -1,
     'unimodal': True,
     'scale': True,
     # Repeat-actions intervention: double the reward (False), or punish (True)?
@@ -413,44 +431,32 @@ class HSearchEnv(object):
             **hydrated
         )
 
-        # n_total, n_train_batch, n_test, i = 2, 1, 1, 0
-        n_total, n_train_batch, n_test, i = 250, 10, 4, 0
-        # Note: Remove runner.py's close() calls so you have access to runner.episode_rewards, see
-        # https://github.com/lefnire/tensorforce/commit/976405729abd7510d375d6aa49659f91e2d30a07
-        runner = Runner(agent=agent, environment=env)
+        env.train_and_test(agent)
 
-        def test_episode():
-            env.testing = True
-            next_state, terminal = env.reset(), False
-            while not terminal:
-                next_state, terminal, reward = env.execute(agent.act(next_state, deterministic=True))
-
-        while i <= n_total:
-            env.testing = False
-            runner.run(episodes=n_train_batch)
-            # One testing iteration every so often (to chart progress)
-            test_episode()
-            i += n_train_batch
-        # Final batch of test-runs
-        for i in range(n_test): test_episode()
-
-        # I personally save away the results so I can play with them manually w/ scikitlearn & SQL
-        r_human, r_agent, uniques = env.episode_rewards['human'], env.episode_rewards['agent'], env.episode_uniques
-        r_avg_human, r_avg_agent = np.mean(r_human[-n_test:]), np.mean(r_agent[-n_test:])
-        print(flat, f"\nReward(human)={r_avg_human}, Reward(agent)={r_avg_agent}\n\n")
+        last_few = 8
+        rewards, advantages, scores, uniques = env.reward_avgs['reward'], \
+                                    env.reward_avgs['advantage'], \
+                                    env.reward_avgs['score'], \
+                                    env.episode_uniques
+        reward_avg, adv_avg, score_avg = np.mean(rewards[-last_few:]), \
+                                         np.mean(advantages[-last_few:]), \
+                                         np.mean(scores[-last_few:])
+        print(flat, f"\nReward={reward_avg} Advantage={adv_avg} Score={score_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, reward_avg_human, reward_avg_agent, rewards_human, rewards_agent, uniques, agent, prices, actions, flag) 
-          values (:hypers, :reward_avg_human, :reward_avg_agent, :rewards_human, :rewards_agent, :uniques, :agent, :prices, :actions, :flag)
+          insert into runs (reward_avg, advantage_avg, score_avg, rewards, advantages, scores, hypers, uniques, agent, prices, actions, flag) 
+          values (:reward_avg, :advantage_avg, :score_avg, :rewards, :advantages, :scores, :hypers, :uniques, :agent, :prices, :actions, :flag)
         """
         try:
             self.conn.execute(
                 text(sql),
+                reward_avg=reward_avg,
+                advantage_avg=adv_avg,
+                score_avg=score_avg,
+                rewards=rewards,
+                advantages=advantages,
+                scores=advantages,
                 hypers=json.dumps(flat),
-                reward_avg_human=r_avg_human,
-                reward_avg_agent=r_avg_agent,
-                rewards_human=r_human,
-                rewards_agent=r_agent,
                 uniques=uniques,
                 agent=self.agent,
                 prices=env.prices.tolist(),
@@ -460,8 +466,9 @@ class HSearchEnv(object):
         except Exception as e:
             pdb.set_trace()
 
-        runner.close()
-        return r_avg_agent
+        agent.close()
+        env.close()
+        return score_avg
 
     def get_winner(self, id=None):
         if id:
@@ -523,7 +530,7 @@ def main_gp():
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu_split', type=float, default=.3, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('-g', '--gpu_split', type=float, default=4, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
@@ -608,18 +615,13 @@ def main_gp():
         but this allows to distribute across servers easily
         """
         conn = data.engine.connect()
-        sql = "select hypers, uniques, rewards_human from runs where flag=:f"
+        sql = "select hypers, score_avg from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-
-            # Custom-created reward_avg_human to account for unique signals
-            for i, u in enumerate(run['uniques']):
-                if u == 1: run['rewards_human'][i] = -.5
-            r_avg = float(np.mean(run['rewards_human'][-8:]))
-
+            r_avg = float(np.mean(run['score_avg'][-8:]))
             Y.append([r_avg])
         boost_model = print_feature_importances(X, Y, feat_names)
 

@@ -70,7 +70,7 @@ class BitcoinEnv(Environment):
         self.start_cap = 1e3
         self.window = 150
         self.episode = 0
-        self.episode_rewards = {'human': [], 'agent': []}
+        self.reward_avgs = dict(reward=[], advantage=[], score=[])
         self.episode_uniques = []
         self.testing = False
         self.conn = engine.connect()
@@ -123,7 +123,8 @@ class BitcoinEnv(Environment):
         return change.values
 
     def _diff(self, arr):
-        diff = pd.Series(arr).diff()
+        series = pd.Series(arr)
+        diff = series.pct_change() if self.hypers.pct_change else series.diff()
         diff.iloc[0] = 0  # always NaN, nothing to compare to
         return diff.replace([np.inf, -np.inf], np.nan).ffill().fillna(0).values
 
@@ -160,7 +161,6 @@ class BitcoinEnv(Environment):
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/self.cash after each action
         return states, prices
 
-
     def _reshape_window_for_conv2d(self, window):
         if len(data.tables) == 1:
             return np.expand_dims(window, -1)
@@ -170,19 +170,21 @@ class BitcoinEnv(Environment):
             raise NotImplementedError('TODO Implement conv2d features depth > 2')
 
     def reset(self):
-        self.episode += 1
-        self.time = time.time()
         self.cash = self.value = self.start_cap
         start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         self.timestep = start_timestep
         self.signals = [0] * start_timestep
-        self.step_rewards = {'human': [], 'agent': []}
+        self.rewards = dict(reward=[], advantage=[], score=[])
         self.repeat_ct = 1
 
         # Fetch random slice of rows from the database (based on limit)
         row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
-        offset = random.randint(0, row_ct - self.hypers.steps)
-        df = data.db_to_dataframe(self.conn, limit=self.hypers.steps, offset=offset, arbitrage=self.hypers.arbitrage)
+        if self.hypers.steps == -1:
+            print('Using all data')
+            offset, limit = 0, 'ALL'
+        else:
+            offset, limit = random.randint(0, row_ct - self.hypers.steps), self.hypers.steps
+        df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self._pct_change(self.prices)
 
@@ -197,6 +199,36 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             first_state = self.scaler.transform_state(first_state)
         return first_state
+
+    def train_start(self):
+        self.testing = False
+
+    def test_start(self):
+        self.testing = True
+        self.cash = self.value = self.start_cap  # FIXME this will likely confuse the LSTM (suddenly I have $ again?) Reconsider
+        self.episode += 1
+        self.time = time.time()
+
+    def test_stop(self, n_test):
+        self.time = round(time.time() - self.time)
+        signals = self.signals[-n_test:]
+        for k in ['reward', 'advantage']:
+            # - average so we can compare runs w/ varying steps
+            # - Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
+            #   RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
+            avg = np.mean(self.rewards[k][-n_test:])
+            avg = float(np.clip(avg, -1000, 30))
+            self.reward_avgs[k].append(avg)
+        self.reward_avgs['score'].append(self.rewards['score'][-1] - self.rewards['score'][-n_test])
+        self.episode_uniques.append(float(len(np.unique(signals))))
+
+        # Print
+        reward, advantage, score = self.reward_avgs['reward'][-1], \
+                                   self.reward_avgs['advantage'][-1], \
+                                   self.reward_avgs['score'][-1]
+        common = dict((round(k), v) for k, v in Counter(signals).most_common(5))
+        high, low = max(signals), min(signals)
+        print(f"{self.episode}|⌛:{self.time}s\tR:{'%.2f'%reward}\tA:{'%.2f'%advantage}\tS:{'%.2f'%score}\t{common}(high={'%.2f'%high},low={'%.2f'%low})")
 
     def execute(self, actions):
         min_trade = 24  # gdax min order size = .01btc ($118); krakken = .002btc ($23.60)
@@ -215,44 +247,34 @@ class BitcoinEnv(Environment):
         self.signals.append(float(signal))
 
         fee = 0.0026  # https://www.kraken.com/en-us/help/fees
+        reward = 0
         abs_sig = abs(signal)
-        before = self.cash + self.value
+        before = Box(cash=self.cash, value=self.value, total=self.cash+self.value)
         if signal > 0:
-            if self.cash >= abs_sig:
-                self.value += abs_sig - abs_sig*fee
+            self.value += abs_sig - abs_sig*fee
             self.cash -= abs_sig
         elif signal < 0:
-            if self.value >= abs_sig:
-                self.cash += abs_sig - abs_sig*fee
+            self.cash += abs_sig - abs_sig*fee
             self.value -= abs_sig
+        if self.cash < 0 or self.value < 0:
+            reward -= 1
 
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         diff_loc = self.timestep if self.conv2d else self.timestep + 1
         pct_change = self.prices_diff[diff_loc]
         self.value += pct_change * self.value
         total = self.value + self.cash
-        reward = total - before
+        reward += total - before.total
+        self.rewards['reward'].append(reward)
+        self.rewards['score'].append(total)
 
-        # Add reward before we modify it (punishing repeats, etc)
-        self.step_rewards['human'].append(reward)
+        # calculate what the reward would be "if I held", to calculate the actual reward's _advantage_ over holding
+        if_i_held_value = before.value + pct_change * before.value
+        if_i_held_reward = (if_i_held_value + before.cash) - before.total
+        advantage = reward - if_i_held_reward  # as far as the agent is concerned
+        self.rewards['advantage'].append(advantage)
 
-        # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior, where false
-        # is the opposite (rewarding heterogenous)
-        recent_actions = np.array(self.signals[-self.repeat_ct:])
-        if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
-            if not self.hypers.punish_repeats and reward > 0:
-                reward *= 2
-            self.repeat_ct = 1  # reset penalty-growth
-        else:
-            if self.hypers.punish_repeats:
-                # We want a trade every 10 minutes or so. Roughly double the punishment by that step (increasing
-                # over time). Each step ~=1sec
-                # reward -= self.scaler.avg_reward() * (self.repeat_ct/(60*10))
-                reward -= self.repeat_ct/(60*2)
-            self.repeat_ct += 1  # grow the penalty with time
-
-        # Add rewards after modifications
-        self.step_rewards['agent'].append(reward)
+        reward = reward + advantage
 
         self.timestep += 1
         # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
@@ -269,27 +291,37 @@ class BitcoinEnv(Environment):
 
         if self.hypers.scale:
             next_state = self.scaler.transform_state(next_state)
-            reward = self.scaler.transform_reward(reward)
+            # reward = self.scaler.transform_reward(reward)
 
         terminal = int(self.timestep + 1 >= len(self.observations))
-        if terminal and self.testing:
+        if terminal:
             self.signals.append(0)  # Add one last signal (to match length)
-            self.time = round(time.time() - self.time)
-            for k in ['human', 'agent']:
-                # - average so we can compare runs w/ varying steps
-                # - Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
-                #   RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
-                avg_reward = np.mean(self.step_rewards[k])
-                avg_reward = float(np.clip(avg_reward, -1000, 30))
-                self.episode_rewards[k].append(avg_reward)
-            self.episode_uniques.append(float(len(np.unique(self.signals))))
-            self._print_episode()
 
         # if self.value <= 0 or self.cash <= 0: terminal = 1
         return next_state, terminal, reward
 
-    def _print_episode(self):
-        rewards = self.episode_rewards['human']
-        common = dict((round(k), v) for k, v in Counter(self.signals).most_common(5))
-        reward, high, low = rewards[-1], max(self.signals), min(self.signals)
-        print(f"{self.episode}\t⌛:{self.time}s\tR:{'%.2f'%reward}\tA:{common}(high={'%.2f'%high},low={'%.2f'%low})")
+    def train_and_test(self, agent):
+        n_rows = data.count_rows(self.conn, self.hypers.arbitrage)
+
+        split = .85
+        episodes, n_test_points = 3, 60
+        n_test_points = n_test_points / episodes
+        n_train = int(n_rows * split / n_test_points)
+        n_test = int(n_rows * (1-split) / n_test_points)
+
+        for _ in range(episodes):
+            agent.reset()
+            next_state, terminal = self.reset(), False
+            while not terminal:
+                self.train_start()
+                for _ in range(n_train):
+                    next_state, terminal, reward = self.execute(agent.act(next_state))
+                    if terminal: break
+                if terminal: break
+
+                self.test_start()
+                for _ in range(n_test):
+                    next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
+                    if terminal: break
+                self.test_stop(n_test)
+
