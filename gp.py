@@ -182,13 +182,7 @@ def bayesian_optimisation(n_iters, sample_loss, bounds, x0=None, n_pre_samples=5
     return xp, yp
 
 
-def bayesian_optimisation2(n_iters, loss_fn, bounds, x_list=[], y_list=[], n_pre_samples=5, alpha=1e-5, epsilon=1e-7):
-    # Handle any specifically-asked for "guesses" first
-    for i, v in enumerate(y_list):
-        if v[0] is None:
-            print("Running guess values")
-            y_list[i] = loss_fn(x_list[i])
-
+def bayesian_optimisation2(loss_fn, bounds, x_list=[], y_list=[], n_pre_samples=5, alpha=1e-5, epsilon=1e-7):
     n_pre_samples -= len(x_list)
     if n_pre_samples > 0:
         for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (n_pre_samples, bounds.shape[0])):
@@ -207,26 +201,15 @@ def bayesian_optimisation2(n_iters, loss_fn, bounds, x_list=[], y_list=[], n_pre
         normalize_y=True
     )
 
-    for n in range(n_iters):
-        print("Fitting GP")
-        model.fit(xp, yp)
+    print("Fitting GP")
+    model.fit(xp, yp)
 
-        # Sample next hyperparameter
-        next_sample = sample_next_hyperparameter(expected_improvement, model, yp, greater_is_better=True, bounds=bounds, n_restarts=100)
+    # Sample next hyperparameter
+    next_sample = sample_next_hyperparameter(expected_improvement, model, yp, greater_is_better=True, bounds=bounds, n_restarts=100)
 
-        # Duplicates will break the GP. In case of a duplicate, we will randomly sample a next query point.
-        if np.any(np.abs(next_sample - xp) <= epsilon):
-            next_sample = np.random.uniform(bounds[:, 0], bounds[:, 1], bounds.shape[0])
+    # Duplicates will break the GP. In case of a duplicate, we will randomly sample a next query point.
+    if np.any(np.abs(next_sample - xp) <= epsilon):
+        next_sample = np.random.uniform(bounds[:, 0], bounds[:, 1], bounds.shape[0])
 
-        # Sample loss for new set of parameters
-        cv_score = loss_fn(next_sample)
-
-        # Update lists
-        x_list.append(next_sample)
-        y_list.append(cv_score)
-
-        # Update xp and yp
-        xp = np.array(x_list)
-        yp = np.array(y_list)
-
-    return xp, yp
+    # Sample loss for new set of parameters
+    loss_fn(next_sample)

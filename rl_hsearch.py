@@ -510,6 +510,29 @@ def print_feature_importances(X, Y, feat_names):
                          reverse=True)
     print('\n\n--- Feature Importances ---\n')
     print('\n'.join([f'{x[1]}: {round(x[0],4)}' for x in feature_imp]))
+    return model
+
+
+def boost_optimization(model, loss_fn, bounds, x_list=[], y_list=[], n_pre_samples=5):
+    # Handle any specifically-asked for "guesses" first
+    for i, v in enumerate(y_list):
+        if v[0] is None:
+            print("Running guess values")
+            y_list[i] = loss_fn(x_list[i])
+
+    n_pre_samples -= len(x_list)
+    if n_pre_samples > 0:
+        for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (n_pre_samples, bounds.shape[0])):
+            x_list.append(params)
+            y_list.append(loss_fn(params))
+
+    best_params, best_score = None, -1000
+    for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (int(1e6), bounds.shape[0])):
+        prediction = model.predict([params])[0]
+        if prediction > best_score:
+            best_params = params
+            best_score = prediction
+    loss_fn(best_params)
 
 
 def main_gp():
@@ -520,7 +543,7 @@ def main_gp():
     parser.add_argument('-g', '--gpu_split', type=float, default=.3, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
-    parser.add_argument('--random', action="store_true", default=False, help="Have this worker do random search forever")
+    parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
     args = parser.parse_args()
 
     # Encode features
@@ -615,29 +638,36 @@ def main_gp():
             r_avg = float(np.mean(run['rewards_human'][-4:]))
 
             Y.append([r_avg])
-        print_feature_importances(X, Y, feat_names)
-
-        # Evidently duplicate values break GP. Many of these are ints, so they're definite duplicates. Either way,
-        # tack on some small epsilon to make them different (1e-6 < gp.py's min threshold, make sure that #'s not a
-        # problem). Subtracting since many vals are int()'d, which is floor()
-        for x in X:
-            for i,v in enumerate(x):
-                x[i] += np.random.random() * 1e-6
+        boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess:
             guesses = {k: v['guess'] for k, v in hypers_.items()}
-            X.append(hypers2vec(guesses))
-            Y.append([None])
+            loss_fn(hypers2vec(guesses))
             args.guess = False
+            continue
 
-        gp.bayesian_optimisation2(
-            n_pre_samples=999 if args.random else 5,
-            n_iters=1,
-            loss_fn=loss_fn,
-            bounds=np.array(bounds),
-            x_list=X,
-            y_list=Y
-        )
+        if args.boost:
+            print('Using gradient-boosting')
+            boost_optimization(
+                model=boost_model,
+                loss_fn=loss_fn,
+                bounds=np.array(bounds),
+                x_list=X,
+                y_list=Y
+            )
+        else:
+            # Evidently duplicate values break GP. Many of these are ints, so they're definite duplicates. Either way,
+            # tack on some small epsilon to make them different (1e-6 < gp.py's min threshold, make sure that #'s not a
+            # problem). Subtracting since many vals are int()'d, which is floor()
+            for x in X:
+                for i, v in enumerate(x):
+                    x[i] += np.random.random() * 1e-6
+            gp.bayesian_optimisation2(
+                loss_fn=loss_fn,
+                bounds=np.array(bounds),
+                x_list=X,
+                y_list=Y
+            )
 
 if __name__ == '__main__':
     main_gp()
