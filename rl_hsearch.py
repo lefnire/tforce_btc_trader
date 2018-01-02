@@ -621,8 +621,7 @@ def main_gp():
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            r_avg = float(np.mean(run['score_avg'][-8:]))
-            Y.append([r_avg])
+            Y.append([run['score_avg']])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess:

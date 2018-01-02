@@ -115,25 +115,24 @@ class BitcoinEnv(Environment):
         np.random.seed(seed)
         tf.set_random_seed(seed)
 
-    def _pct_change(self, arr):
-        change = pd.Series(arr).pct_change()
-        change.iloc[0] = 0  # always NaN, nothing to compare to
-        if change.isin([np.nan, np.inf, -np.inf]).any():
-            raise Exception(f"NaN or inf detected in _pct_change()!")
-        return change.values
-
-    def _diff(self, arr):
+    def _diff(self, arr, percent=False):
         series = pd.Series(arr)
-        diff = series.pct_change() if self.hypers.pct_change else series.diff()
+        diff = series.pct_change() if percent else series.diff()
         diff.iloc[0] = 0  # always NaN, nothing to compare to
-        return diff.replace([np.inf, -np.inf], np.nan).ffill().fillna(0).values
+
+        # Remove outliers (turn them to NaN)
+        q = diff.quantile(0.99)
+        diff = diff.mask(diff > q, np.nan)
+
+        return diff.replace([np.inf, -np.inf], np.nan).ffill().bfill().values
 
     def _xform_data(self, df):
         columns = []
         tables_ = data.get_tables(self.hypers.arbitrage)
+        percent = self.hypers.pct_change
         for table in tables_:
             name, cols, ohlcv = table['name'], table['cols'], table.get('ohlcv', {})
-            columns += [self._diff(df[f'{name}_{k}']) for k in cols]
+            columns += [self._diff(df[f'{name}_{k}'], percent) for k in cols]
 
             # Add extra indicator columns
             if ohlcv and self.hypers.indicators:
@@ -143,10 +142,10 @@ class BitcoinEnv(Environment):
                     ind[k] = df[f"{name}_{v}"]
                 columns += [
                     ## Original indicators from boilerplate
-                    self._diff(SMA(ind, timeperiod=15)),
-                    self._diff(SMA(ind, timeperiod=60)),
-                    self._diff(RSI(ind, timeperiod=14)),
-                    self._diff(ATR(ind, timeperiod=14)),
+                    self._diff(SMA(ind, timeperiod=15), percent),
+                    self._diff(SMA(ind, timeperiod=60), percent),
+                    self._diff(RSI(ind, timeperiod=14), percent),
+                    self._diff(ATR(ind, timeperiod=14), percent),
 
                     ## Indicators from "How to Day Trade For a Living" (try these)
                     ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
@@ -186,7 +185,7 @@ class BitcoinEnv(Environment):
             offset, limit = random.randint(0, row_ct - self.hypers.steps), self.hypers.steps
         df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
         self.observations, self.prices = self._xform_data(df)
-        self.prices_diff = self._pct_change(self.prices)
+        self.prices_diff = self._diff(self.prices, percent=True)
 
         if self.conv2d:
             window = self.observations[self.timestep - self.window:self.timestep]
@@ -213,11 +212,14 @@ class BitcoinEnv(Environment):
         self.time = round(time.time() - self.time)
         signals = self.signals[-n_test:]
         for k in ['reward', 'advantage']:
-            # - average so we can compare runs w/ varying steps
-            # - Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
-            #   RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
+            # average so we can compare runs w/ varying steps
             avg = np.mean(self.rewards[k][-n_test:])
-            avg = float(np.clip(avg, -1000, 30))
+
+            # Clamp to reasonable bounds (data corruption). How-to automatic calculation rather than hard-coded?
+            # RobustScaler handles outliers for agent; this is for human & GP. float() b/c numpy=>psql
+            # TODO remove this? currently removing outliers in self._diff(), this may be uneceessary
+            # avg = float(np.clip(avg, -1000, 30))
+
             self.reward_avgs[k].append(avg)
         self.reward_avgs['score'].append(self.rewards['score'][-1] - self.rewards['score'][-n_test])
         self.episode_uniques.append(float(len(np.unique(signals))))
