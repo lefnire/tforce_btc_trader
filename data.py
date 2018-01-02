@@ -182,18 +182,12 @@ def setup_runs_table(conn):
         (
             id serial not null,
             hypers jsonb not null,
-            reward_avg double precision not null,
             advantage_avg double precision not null,
-            score_avg double precision not null,
-            flag varchar(16),
-            
-            rewards double precision[],
             advantages double precision[],
-            scores double precision[],
-            
-            uniques double precision[],
-            agent varchar(64) default 'ppo_agent'::character varying not null,
             actions double precision[],
-            prices double precision[]
+            prices double precision[],
+            uniques double precision[],
+            flag varchar(16),
+            agent varchar(64) default 'ppo_agent'::character varying not null
         );
     """)

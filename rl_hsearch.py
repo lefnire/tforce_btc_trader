@@ -8,7 +8,6 @@ from sqlalchemy.sql import text
 from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks.layer import Dense
 from tensorforce.core.networks.network import LayeredNetwork
-from tensorforce.execution import Runner
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
 
@@ -166,11 +165,15 @@ hypers['model'] = {
     },
     'optimization_steps': {
         'type': 'bounded',
-        'vals': [1, 20],
+        'vals': [1, 100],
         'guess': 10,
         'pre': int
     },
-    'discount': .975,
+    'discount': {
+        'type': 'bounded',
+        'vals': [.9, .99],
+        'guess': .975
+    },
     # TODO variable_noise
 }
 hypers['distribution_model'] = {
@@ -194,7 +197,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .65,
+        'guess': .2,
         'hydrate': min_threshold(.05, None)
     }
 }
@@ -235,7 +238,7 @@ hypers['custom'] = {
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
-        'vals': ['tanh', 'selu'],
+        'vals': ['tanh', 'selu', 'relu'],
         'guess': 'tanh'
     },
     'net.dropout': {
@@ -261,15 +264,29 @@ hypers['custom'] = {
         'guess': False
     },
     'steps': -1,
-    'unimodal': True,
-    'scale': True,
+    'unimodal': {
+        'type': 'bool',
+        'guess': True
+    },
+    'scale': {
+        'type': 'bool',
+        'guess': True
+    },
     # Repeat-actions intervention: double the reward (False), or punish (True)?
-    'punish_repeats': True,
+    'punish_repeats': {
+        'type': 'bool',
+        'guess': False
+    },
     'arbitrage': True
 }
 
 hypers['lstm'] = {
-    'net.depth_pre': 0,
+    'net.depth_pre': {
+        'type': 'bounded',
+        'vals': [0, 3],
+        'guess': 0,
+        'pre': int
+    },
 }
 hypers['conv2d'] = {
     # 'net.bias': {'type': 'bool'},
@@ -434,41 +451,29 @@ class HSearchEnv(object):
         env.train_and_test(agent)
 
         last_few = 8
-        rewards, advantages, scores, uniques = env.reward_avgs['reward'], \
-                                    env.reward_avgs['advantage'], \
-                                    env.reward_avgs['score'], \
-                                    env.episode_uniques
-        reward_avg, adv_avg, score_avg = np.mean(rewards[-last_few:]), \
-                                         np.mean(advantages[-last_few:]), \
-                                         np.mean(scores[-last_few:])
-        print(flat, f"\nReward={reward_avg} Advantage={adv_avg} Score={score_avg}\n\n")
+        episode_acc, batch_acc = env.acc.episode, env.acc.batch
+        adv_avg = np.mean(episode_acc.advantages[-last_few:])
+        print(flat, f"\nAdvantage={adv_avg}\n\n")
 
         sql = """
-          insert into runs (reward_avg, advantage_avg, score_avg, rewards, advantages, scores, hypers, uniques, agent, prices, actions, flag) 
-          values (:reward_avg, :advantage_avg, :score_avg, :rewards, :advantages, :scores, :hypers, :uniques, :agent, :prices, :actions, :flag)
+          insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag) 
+          values (:hypers, :advantage_avg, :advantages, :uniques, :prices, :actions, :agent, :flag)
         """
-        try:
-            self.conn.execute(
-                text(sql),
-                reward_avg=reward_avg,
-                advantage_avg=adv_avg,
-                score_avg=score_avg,
-                rewards=rewards,
-                advantages=advantages,
-                scores=advantages,
-                hypers=json.dumps(flat),
-                uniques=uniques,
-                agent=self.agent,
-                prices=env.prices.tolist(),
-                actions=env.signals,
-                flag=self.net_type
-            )
-        except Exception as e:
-            pdb.set_trace()
+        self.conn.execute(
+            text(sql),
+            hypers=json.dumps(flat),
+            advantage_avg=adv_avg,
+            advantages=episode_acc.advantages,
+            uniques=episode_acc.uniques,
+            prices=batch_acc.prices,
+            actions=batch_acc.signals,
+            agent=self.agent,
+            flag=self.net_type
+        )
 
         agent.close()
         env.close()
-        return score_avg
+        return adv_avg
 
     def get_winner(self, id=None):
         if id:
@@ -532,7 +537,7 @@ def main_gp():
     parser = argparse.ArgumentParser()
     parser.add_argument('-g', '--gpu_split', type=float, default=4, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='lstm', help="(lstm|conv2d) Which network arch to use")
-    parser.add_argument('--guess', action="store_true", default=False, help="Run the hard-coded 'guess' values first before exploring")
+    parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
     args = parser.parse_args()
 
@@ -615,19 +620,45 @@ def main_gp():
         but this allows to distribute across servers easily
         """
         conn = data.engine.connect()
-        sql = "select hypers, score_avg from runs where flag=:f"
+        sql = "select hypers, advantage_avg from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([run['score_avg']])
+            Y.append([run['advantage_avg']])
         boost_model = print_feature_importances(X, Y, feat_names)
 
-        if args.guess:
-            guesses = {k: v['guess'] for k, v in hypers_.items()}
-            loss_fn(hypers2vec(guesses))
-            args.guess = False
+        if args.guess != -1:
+            guess = {k: v['guess'] for k, v in hypers_.items()}
+            guess_overrides = [
+                {},  # main
+                {'step_optimizer.learning_rate': 4},
+                {'pct_change': True},
+                {'unimodal': False},
+
+                {'scale': False},
+                {'step_optimizer.learning_rate': 3},
+                {'punish_repeats': True},
+                {'net.activation': 'selu'},
+
+                {'net.dropout': .01, 'net.l2': 2, 'net.l1': 2},
+                {'discount': .99},
+                {'batch_size': 2048},
+                {'optimization_steps': 20},
+
+                {'batch_size': 512},
+                {'likelihood_ratio_clipping': .65},
+                {'net.depth_mid': 2},
+                {'net.l2': 4.5, 'net.l1': 4.5},
+            ]
+            guess.update(guess_overrides[args.guess])
+            loss_fn(hypers2vec(guess))
+
+            args.guess += args.gpu_split  # Go to the next mod() in line (FIXME this is brittle!)
+            if args.guess > len(guess_overrides)-1:
+                args.guess = -1  # start on GP
+
             continue
 
         if args.boost:

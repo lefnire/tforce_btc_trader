@@ -24,7 +24,7 @@ class App extends Component {
     // fetch('http://localhost:5000').then(res => res.json()).then(data => {
     fetch('dumps/alex.json').then(res => res.json()).then(data => {
       data.forEach(d => {
-        // d.reward_avg = _.filter(d.rewards_human.slice(-15), r => r > 0).length;
+        d.reward_avg = d.advantage_avg;
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
         });
@@ -140,11 +140,12 @@ class App extends Component {
     svg.select('g').remove(); // start clean
     let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-    let rewards = data.map(d => d.rewards_human.map((v,i) => {
+    let rewards = data.map(d => d.advantages.map((v,i) => {
       let y = v; // just human
       // let y = (d.rewards_agent[i] + v)/2; // human-agent average
+      // y = _.clamp(y, -3, 3); // clamp so we don't break the graph
       return {
-        y: _.clamp(y, -3, 3), // clamp so we don't break the graph
+        y,
         x:i, parent:d
       }
     }));

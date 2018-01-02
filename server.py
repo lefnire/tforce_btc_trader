@@ -17,20 +17,11 @@ engine = create_engine(db_url)
 @app.route("/")
 def send_data():
     rows = []
-    X, Y = [], []
     conn = engine.connect()
     for row in conn.execute('select * from runs').fetchall():
         row = dict(row.items())
-        row['reward_avg'] = float(np.mean(row['scores']))
-
         rows.append(row)
-        X.append(row['hypers'])
-        Y.append([row['reward_avg']])
     conn.close()
 
-    X = pd.get_dummies(pd.DataFrame(X))
-    X.fillna(0., inplace=True)
-    print('#rows:', len(X))
-    print_feature_importances(X, Y, X.columns.values)
-
+    print(len(rows), 'rows')
     return jsonify(rows)
