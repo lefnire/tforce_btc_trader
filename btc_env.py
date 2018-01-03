@@ -7,10 +7,12 @@ from sqlalchemy.sql import text
 import tensorflow as tf
 from box import Box
 from tensorforce.environments import Environment
+from tensorforce.execution import Runner
 from sklearn.preprocessing import RobustScaler, robust_scale
 import pdb
 
 ALLOW_SEED = False
+TIMESTEPS = int(1.5e6)
 
 import data
 from data import engine
@@ -75,8 +77,7 @@ class BitcoinEnv(Environment):
                 advantages=[],
                 uniques=[]
             ),
-            step=dict(i=0),  # set in reset()
-            batch=dict(i=0)  # set in [train|test]_start()
+            step=dict(i=0)  # setup in reset()
         )
         self.testing = False
         self.conn = engine.connect()
@@ -163,7 +164,7 @@ class BitcoinEnv(Environment):
 
         states = np.nan_to_num(np.column_stack(columns))
         prices = df[data.target].values
-        # Note: don't scale/normalize here, since we'll normalize w/ self.price/self.cash after each action
+        # Note: don't scale/normalize here, since we'll normalize w/ self.price/step_acc.cash after each action
         return states, prices
 
     def _reshape_window_for_conv2d(self, window):
@@ -174,25 +175,32 @@ class BitcoinEnv(Environment):
         else:
             raise NotImplementedError('TODO Implement conv2d features depth > 2')
 
+    def set_testing(self, testing):
+        """Make sure to call this before reset()!"""
+        print("Testing" if testing else "Training")
+        self.testing = testing
+        row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
+        split = .85
+        n_train, n_test = int(row_ct * split), int(row_ct * (1 - split))
+        limit, offset = (n_test, n_train) if testing else (n_train, 0)
+        df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
+
+        self.observations, self.prices = self._xform_data(df)
+        self.prices_diff = self._diff(self.prices, percent=True)
+
     def reset(self):
-        step_acc = self.acc.step
-        self.cash = self.value = self.start_cap
+        self.time = time.time()
+        step_acc, ep_acc = self.acc.step, self.acc.episode
+        # Cash & value are the real scores - how much we end up with at the end of an episode
+        step_acc.cash = step_acc.value = self.start_cap
+        # But for our purposes, we care more about "how much better is what we made than if we held". We're training
+        # a trading bot, not an investing bot. So we compare these at the end, calling it "advantage"
+        step_acc.hold = Box(value=self.start_cap, cash=self.start_cap)
         start_timestep = self.window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
         step_acc.repeats = 1
-        self.acc.episode.i += 1
-
-        # Fetch random slice of rows from the database (based on limit)
-        row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
-        if self.hypers.steps == -1:
-            print('Using all data')
-            offset, limit = 0, 'ALL'
-        else:
-            offset, limit = random.randint(0, row_ct - self.hypers.steps), self.hypers.steps
-        df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
-        self.observations, self.prices = self._xform_data(df)
-        self.prices_diff = self._diff(self.prices, percent=True)
+        ep_acc.i += 1
 
         if self.conv2d:
             window = self.observations[start_timestep - self.window:start_timestep]
@@ -205,37 +213,6 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             first_state = self.scaler.transform_state(first_state)
         return first_state
-
-    def _reset_batch(self):
-        self.time = time.time()
-        batch_acc = self.acc.batch
-        total = self.cash + self.value
-        batch_acc.score = Box(start=total, end=None)
-        batch_acc.hold = Box(start=total, value=self.value, cash=self.cash)
-
-    def train_start(self):
-        self.testing = False
-        self._reset_batch()
-
-    def test_start(self):
-        self.testing = True
-        self.acc.batch.i += 1
-        self._reset_batch()
-
-    def test_stop(self, n_test):
-        time_ = round(time.time() - self.time)
-        step_acc, batch_acc = self.acc.step, self.acc.batch
-        batch_acc.prices = self.prices[-n_test:].tolist()
-        batch_acc.signals = step_acc.signals[-n_test:]
-        advantage = (batch_acc.score.end - batch_acc.score.start) - \
-                    ((batch_acc.hold.value + batch_acc.hold.cash) - batch_acc.hold.start)
-        self.acc.episode.advantages.append(advantage)
-        self.acc.episode.uniques.append(float(len(np.unique(batch_acc.signals))))
-
-        # Print
-        common = dict((round(k), v) for k, v in Counter(batch_acc.signals).most_common(5))
-        high, low = max(batch_acc.signals), min(batch_acc.signals)
-        print(f"{batch_acc.i}|⌛:{time_}s\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
 
     def execute(self, actions):
         min_trade = 24  # gdax min order size = .01btc ($118); krakken = .002btc ($23.60)
@@ -251,36 +228,30 @@ class BitcoinEnv(Environment):
             elif signal < 0: signal -= min_trade
             elif signal > 0: signal += min_trade
 
-        step_acc, batch_acc = self.acc.step, self.acc.batch
+        step_acc = self.acc.step
 
         step_acc.signals.append(float(signal))
 
         fee = 0.0026  # https://www.kraken.com/en-us/help/fees
         reward = 0
         abs_sig = abs(signal)
-        before = Box(cash=self.cash, value=self.value, total=self.cash+self.value)
+        before = Box(cash=step_acc.cash, value=step_acc.value, total=step_acc.cash+step_acc.value)
         if signal > 0:
-            self.value += abs_sig - abs_sig*fee
-            self.cash -= abs_sig
+            step_acc.value += abs_sig - abs_sig*fee
+            step_acc.cash -= abs_sig
         elif signal < 0:
-            self.cash += abs_sig - abs_sig*fee
-            self.value -= abs_sig
-
-        # punish every step we're in "overdraft" (the floor is lava)
-        # FIXME terminate episode instead; need big changes for that
-        if self.cash < 0: reward -= 500
-        if self.value < 0: reward -= 500
+            step_acc.cash += abs_sig - abs_sig*fee
+            step_acc.value -= abs_sig
 
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         diff_loc = step_acc.i if self.conv2d else step_acc.i + 1
         pct_change = self.prices_diff[diff_loc]
-        self.value += pct_change * self.value
-        total = self.value + self.cash
-        batch_acc.score.end = total
+        step_acc.value += pct_change * step_acc.value
+        total = step_acc.value + step_acc.cash
         reward += total - before.total
 
         # calculate what the reward would be "if I held", to calculate the actual reward's _advantage_ over holding
-        before = batch_acc.hold
+        before = step_acc.hold
         before.value += pct_change * before.value
 
         # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior
@@ -296,9 +267,9 @@ class BitcoinEnv(Environment):
                 step_acc.repeats += 1  # grow the penalty with time
 
         step_acc.i += 1
-        # 0 if before['cash'] == 0 else (self.cash - before['cash']) / before['cash'],
-        # 0 if before['value'] == 0 else (self.value - before['value']) / before['value'],
-        cash_scaled, val_scaled = self.cash / self.start_cap,  self.value / self.start_cap
+        # 0 if before['cash'] == 0 else (step_acc.cash - before['cash']) / before['cash'],
+        # 0 if before['value'] == 0 else (step_acc.value - before['value']) / before['value'],
+        cash_scaled, val_scaled = step_acc.cash / self.start_cap,  step_acc.value / self.start_cap
         if self.conv2d:
             window = self.observations[step_acc.i - self.window:step_acc.i]
             next_state = dict(
@@ -313,36 +284,41 @@ class BitcoinEnv(Environment):
             reward = self.scaler.transform_reward(reward)
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
+        if step_acc.cash < 0 or step_acc.value < 0:
+            reward -= 1000
+            terminal = True
         if terminal:
             step_acc.signals.append(0)  # Add one last signal (to match length)
 
-        # if self.value <= 0 or self.cash <= 0: terminal = 1
+        # if step_acc.value <= 0 or step_acc.cash <= 0: terminal = 1
         return next_state, terminal, reward
 
+    def episode_finished(self, runner):
+        step_acc, ep_acc = self.acc.step, self.acc.episode
+        if self.testing is False and step_acc.i < 5000:
+            return True
+        time_ = round(time.time() - self.time)
+        signals = step_acc.signals
+
+        advantage = ((step_acc.cash + step_acc.value) - self.start_cap * 2) - \
+                    ((step_acc.hold.value + step_acc.hold.cash) - self.start_cap * 2)
+        self.acc.episode.advantages.append(advantage)
+        self.acc.episode.uniques.append(float(len(np.unique(signals))))
+
+        # Print (limit to note-worthy)
+        common = dict((round(k), v) for k, v in Counter(signals).most_common(5))
+        high, low = max(signals), min(signals)
+        completion = ""
+        if not self.testing:
+            completion = int(runner.timestep / TIMESTEPS * 100)
+            completion = f"|{completion}%"
+        print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
+        return True
+
     def train_and_test(self, agent):
-        n_rows = data.count_rows(self.conn, self.hypers.arbitrage)
-
-        split = .85
-        episodes, n_test_points = 1, 60
-        n_test_points = n_test_points / episodes
-        n_train = int(n_rows * split / n_test_points)
-        n_test = int(n_rows * (1-split) / n_test_points)
-
-        for _ in range(episodes):
-            agent.reset()
-            next_state, terminal = self.reset(), False
-            while not terminal:
-                self.train_start()
-                for _ in range(n_train):
-                    next_state, terminal, reward = self.execute(agent.act(next_state))
-                    agent.observe(terminal=terminal, reward=reward)
-                    if terminal: break
-                if terminal: break
-
-                self.test_start()
-                for _ in range(n_test):
-                    next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
-                    agent.observe(terminal=terminal, reward=reward)
-                    if terminal: break
-                self.test_stop(n_test)
-
+        runner = Runner(agent=agent, environment=self)
+        self.set_testing(False)
+        runner.run(timesteps=TIMESTEPS, episode_finished=self.episode_finished)
+        self.set_testing(True)
+        # TODO run 3-4 tests, but limit timesteps?
+        runner.run(deterministic=True, episode_finished=self.episode_finished, episodes=1)

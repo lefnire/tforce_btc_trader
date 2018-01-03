@@ -450,9 +450,8 @@ class HSearchEnv(object):
 
         env.train_and_test(agent)
 
-        last_few = 8
-        episode_acc, batch_acc = env.acc.episode, env.acc.batch
-        adv_avg = np.mean(episode_acc.advantages[-last_few:])
+        step_acc, ep_acc = env.acc.step, env.acc.episode
+        adv_avg = ep_acc.advantages[-1]
         print(flat, f"\nAdvantage={adv_avg}\n\n")
 
         sql = """
@@ -463,10 +462,10 @@ class HSearchEnv(object):
             text(sql),
             hypers=json.dumps(flat),
             advantage_avg=adv_avg,
-            advantages=episode_acc.advantages,
-            uniques=episode_acc.uniques,
-            prices=batch_acc.prices,
-            actions=batch_acc.signals,
+            advantages=list(ep_acc.advantages),
+            uniques=list(ep_acc.uniques),
+            prices=list(env.prices),
+            actions=list(step_acc.signals),
             agent=self.agent,
             flag=self.net_type
         )
