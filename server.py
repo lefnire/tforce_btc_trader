@@ -18,6 +18,7 @@ engine = create_engine(db_url)
 def send_data():
     rows = []
     conn = engine.connect()
+    # TODO all except signals,prices (separate route)
     for row in conn.execute('select * from runs').fetchall():
         row = dict(row.items())
         rows.append(row)

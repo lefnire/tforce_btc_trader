@@ -185,12 +185,16 @@ hypers['distribution_model'] = {
     }
 }
 hypers['pg_model'] = {
-    'baseline_mode': True,
+    'baseline_mode': {
+        'type': 'bool',
+        'guess': False,
+        'hydrate': hydrate_baseline
+    },
     'gae_lambda': {
         'type': 'bounded',
         'vals': [0., 1.],
         'guess': .97,
-        'hydrate': min_threshold(.1, None)
+        'hydrate': lambda x, others: x if (x and x > .1 and others['baseline_mode']) else None
     },
 }
 hypers['pg_prob_ration_model'] = {
@@ -234,7 +238,10 @@ hypers['custom'] = {
         'guess': 312,
         'pre': bins_of_8
     },
-    'net.funnel': False,
+    'net.funnel': {
+        'type': 'bool',
+        'guess': False
+    },
     # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
@@ -619,13 +626,15 @@ def main_gp():
         but this allows to distribute across servers easily
         """
         conn = data.engine.connect()
-        sql = "select hypers, advantage_avg from runs where flag=:f"
+        sql = "select hypers, advantages, advantage_avg from runs where flag=:f"
         runs = conn.execute(text(sql), f=args.net_type).fetchall()
         conn.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([run['advantage_avg']])
+            # r_avg = run['advantage_avg']
+            r_avg = len([r for r in run['advantages'] if r > 0])
+            Y.append([r_avg])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:
