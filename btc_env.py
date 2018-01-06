@@ -176,7 +176,7 @@ class BitcoinEnv(Environment):
         else:
             raise NotImplementedError('TODO Implement conv2d features depth > 2')
 
-    def set_testing(self, testing):
+    def use_dataset(self, testing):
         """Make sure to call this before reset()!"""
         print("Testing" if testing else "Training")
         self.testing = testing
@@ -287,7 +287,8 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000:
+        if step_acc.cash < 0 or step_acc.value < 0 or \
+                (step_acc.repeats >= 20000 and not self.testing):
             reward -= 1000
             terminal = True
         if terminal:
@@ -313,17 +314,26 @@ class BitcoinEnv(Environment):
         print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
         return True
 
-    def train_and_test(self, agent):
+    def train_and_test(self, agent, early_stop=False, final_tests=1):
         timesteps, n_tests = int(2e6), 40
         n_train = timesteps // n_tests
         i = 0
 
         runner = Runner(agent=agent, environment=self)
-        self.set_testing(False)
+        self.use_dataset(testing=False)
         while i <= n_tests:
             runner.run(timesteps=n_train, max_episode_timesteps=n_train)
             runner.run(deterministic=True, episode_finished=self.episode_finished, episodes=1)
+            if early_stop:
+                in_a_row = 8
+                advantages = np.array(self.acc.episode.advantages[-in_a_row:])
+                if i >= in_a_row and np.all(advantages > 0):
+                    i = n_tests
             i += 1
         # Last test is the biggie (test set)
-        self.set_testing(True)
-        runner.run(deterministic=True, episode_finished=self.episode_finished, episodes=1)
+        self.use_dataset(testing=True)
+        for _ in range(final_tests):
+            next_state, terminal = self.reset(), False
+            while not terminal:
+                next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
+            self.episode_finished(None)

@@ -12,7 +12,6 @@ engine = create_engine(config_json['DB_URL'])
 
 # Methods for imputing NaN. F=ffill, B=bfill, Z=zero. Generally we want volume/size-based features to be 0-filled
 # (indicating no trading during this blank period) and prices to ffill (maintain where the price left off). Right?
-# TODO Alex can you answer that question?
 F = 0
 B = 1
 Z = 2
@@ -66,17 +65,11 @@ def n_cols(conv2d=False, indicators=False, arbitrage=True):
         cols += 2  # [self.cash, self.value] are added in downstream dense
     return cols
 
-mode = 'ALL'  # ALL|TRAIN|TEST
-def set_mode(m):
-    global mode
-    mode = m
-
 
 row_count = 0
-train_test_split = 0
 already_asked = False
 def count_rows(conn, arbitrage=True):
-    global row_count, train_test_split, already_asked
+    global row_count, already_asked
     if row_count:
         return row_count  # cached
     elif already_asked:
@@ -84,23 +77,12 @@ def count_rows(conn, arbitrage=True):
     already_asked = True
 
     row_count = db_to_dataframe(conn, just_count=True, arbitrage=arbitrage)
-    if mode == 'ALL':
-        print('mode: ', mode, ' row_count: ', row_count)
-        return row_count
-    train_test_split = int(row_count * .8)
-    print('mode: ', mode, ' row_count: ', row_count, ' split: ', train_test_split)
-    row_count = train_test_split if mode == 'TRAIN' else row_count - train_test_split
+    print('row_count: ', row_count)
     return row_count
 
 
-def _get_offset(offset):
-    global mode, train_test_split
-    return offset + train_test_split if mode == 'TEST' else offset
-
 def _db_to_dataframe_ohlc(conn, limit='ALL', offset=0, just_count=False, arbitrage=True):
     # 600, 300, 1800
-    offset = _get_offset(offset)
-
     if just_count:
         select = 'select count(*) over () '
         limit, offset = 1, 0
@@ -125,7 +107,6 @@ def _db_to_dataframe_ohlc(conn, limit='ALL', offset=0, just_count=False, arbitra
 
 def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitrage=True):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
-    offset = _get_offset(offset)
     tables_ = get_tables(arbitrage)
 
     if just_count:
