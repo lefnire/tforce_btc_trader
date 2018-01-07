@@ -40,7 +40,6 @@ def build_net_spec(hypers, baseline=False):
 
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
-    conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
     lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
     lstm_baseline = net.type == 'lstm' and baseline
 
@@ -56,17 +55,10 @@ def build_net_spec(hypers, baseline=False):
 
     # Mid-layer
     if not lstm_baseline:
-        n_cols = data.n_cols(conv2d=net.type == 'conv2d', indicators=indicators, arbitrage=arbitrage)
+        n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
         for i in range(net.depth_mid):
-            if net.type == 'conv2d':
-                size = max([32, int(net.width/4)])
-                if i == 0: size = int(size/2) # FIXME most convs have their first layer smaller... right? just the first, or what?
-                arr.append({'size': size, 'window': (net.window, n_cols), 'stride': (net.stride, 1), **conv2d})
-            else:
-                # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
-                arr.append({'size': net.width, **lstm})
-        if net.type == 'conv2d':
-            arr.append({'type': 'flatten'})
+            # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
+            arr.append({'size': net.width, **lstm})
 
     # Dense
     for i in range(net.depth_post):
@@ -81,42 +73,7 @@ def custom_net(hypers, print_net=False, baseline=False):
     net = Box(hypers['net'])
     layers_spec = build_net_spec(hypers, baseline)
     if print_net: pprint(layers_spec)
-    if net.type != 'conv2d': return layers_spec
-
-    class ConvNetwork(LayeredNetwork):
-        def __init__(self, **kwargs):
-            super(ConvNetwork, self).__init__(layers_spec, **kwargs)
-
-        def tf_apply(self, x, internals, update, return_internals=False):
-            image = x['state0']  # 150x7x2-dim, float
-            money = x['state1']  # 1x2-dim, float
-            x = image
-
-            internal_outputs = list()
-            index = 0
-
-            apply_money_here = None
-            for i, layer in enumerate(self.layers):
-                if isinstance(layer, Dense):
-                    apply_money_here = i
-                    if not net.money_last: break  # this pegs money at the first Dense.
-
-            for i, layer in enumerate(self.layers):
-                layer_internals = [internals[index + n] for n in range(layer.num_internals)]
-                index += layer.num_internals
-                if i == apply_money_here:
-                    x = tf.concat([x, money], axis=1)
-                x = layer.apply(x, update, *layer_internals)
-
-                if not isinstance(x, tf.Tensor):
-                    internal_outputs.extend(x[1])
-                    x = x[0]
-
-            if return_internals:
-                return x, internal_outputs
-            else:
-                return x
-    return ConvNetwork
+    return layers_spec
 
 
 def bins_of_8(x): return int(x // 8) * 8
@@ -242,7 +199,6 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': False
     },
-    # 'net.type': {'type': 'int', 'vals': ['lstm', 'conv2d']},  # gets set from args.net_type
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'selu', 'relu'],
@@ -293,25 +249,6 @@ hypers['lstm'] = {
         'vals': [0, 3],
         'guess': 0,
         'pre': int
-    },
-}
-hypers['conv2d'] = {
-    # 'net.bias': {'type': 'bool'},
-    'net.window': {
-        'type': 'bounded',
-        'vals': [3, 8],
-        'guess': 4,
-        'pre': int,
-    },
-    'net.stride': {
-        'type': 'bounded',
-        'vals': [1, 4],
-        'guess': 2,
-        'pre': int,
-    },
-    'net.money_last': {
-        'type': 'bool',
-        'guess': True
     },
 }
 

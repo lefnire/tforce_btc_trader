@@ -78,7 +78,6 @@ class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
-        self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
         self.acc = Box(
             episode=dict(
@@ -98,25 +97,17 @@ class BitcoinEnv(Environment):
         self.min_trade = btc_price * {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
 
         # Action space
+        min_max = self.min_trade + 100
         if self.hypers.unimodal:
-            self.actions_ = dict(type='float', shape=(), min_value=-100, max_value=100)
+            self.actions_ = dict(type='float', shape=(), min_value=-min_max, max_value=min_max)
         else:
             self.actions_ = dict(
                 action=dict(type='int', shape=(), num_actions=3),
-                amount=dict(type='float', shape=(), min_value=-100, max_value=100))
+                amount=dict(type='float', shape=(), min_value=-min_max, max_value=min_max))
 
         # Observation space
-        self.cols_ = data.n_cols(conv2d=self.conv2d, indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
-        if self.conv2d:
-            # width = window width (150 time-steps)
-            # height = num_features, but one layer for each table
-            # channels is number of tables (each table is a "layer" of features
-            self.states_ = dict(
-                state0=dict(type='float', min_value=-1, max_value=1, shape=(150, self.cols_, len(data.tables))),  # image 150xNCOLx2
-                state1=dict(type='float', min_value=-1, max_value=1, shape=2)  # money
-            )
-        else:
-            self.states_ = dict(type='float', shape=self.cols_)
+        self.cols_ = data.n_cols(indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
+        self.states_ = dict(type='float', shape=self.cols_)
 
         scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
         if scaler_k not in scalers:
@@ -182,14 +173,6 @@ class BitcoinEnv(Environment):
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/step_acc.cash after each action
         return states, prices
 
-    def _reshape_window_for_conv2d(self, window):
-        if len(data.tables) == 1:
-            return np.expand_dims(window, -1)
-        elif len(data.tables) == 2:  # default (risk arbitrage)
-            return np.transpose([window[:, 0:self.cols_], window[:, self.cols_:]], (1, 2, 0))
-        else:
-            raise NotImplementedError('TODO Implement conv2d features depth > 2')
-
     def use_dataset(self, mode):
         """Make sure to call this before reset()!"""
         print("Mode:", mode.name)
@@ -211,20 +194,13 @@ class BitcoinEnv(Environment):
         # But for our purposes, we care more about "how much better is what we made than if we held". We're training
         # a trading bot, not an investing bot. So we compare these at the end, calling it "advantage"
         step_acc.hold = Box(value=START_CAP, cash=START_CAP)
-        start_timestep = WINDOW if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
         step_acc.repeats = 1
         ep_acc.i += 1
 
-        if self.conv2d:
-            window = self.observations[start_timestep - WINDOW:start_timestep]
-            first_state = dict(
-                state0=self._reshape_window_for_conv2d(window),
-                state1=np.array([1., 1.])
-            )
-        else:
-            first_state = np.append(self.observations[start_timestep], [1., 1.])
+        first_state = np.append(self.observations[start_timestep], [1., 1.])
         if self.hypers.scale:
             first_state = self.scaler.transform_state(first_state)
         return first_state
@@ -265,7 +241,7 @@ class BitcoinEnv(Environment):
             step_acc.value -= abs_sig
 
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
-        diff_loc = step_acc.i if self.conv2d else step_acc.i + 1
+        diff_loc = step_acc.i + 1
         pct_change = self.prices_diff[diff_loc]
         step_acc.value += pct_change * step_acc.value
         total = step_acc.value + step_acc.cash
@@ -292,14 +268,7 @@ class BitcoinEnv(Environment):
         # 0 if before['cash'] == 0 else (step_acc.cash - before['cash']) / before['cash'],
         # 0 if before['value'] == 0 else (step_acc.value - before['value']) / before['value'],
         cash_scaled, val_scaled = step_acc.cash / START_CAP,  step_acc.value / START_CAP
-        if self.conv2d:
-            window = self.observations[step_acc.i - WINDOW:step_acc.i]
-            next_state = dict(
-                state0=self._reshape_window_for_conv2d(window),
-                state1=np.array([cash_scaled, val_scaled])
-            )
-        else:
-            next_state = np.append(self.observations[step_acc.i], [cash_scaled, val_scaled])
+        next_state = np.append(self.observations[step_acc.i], [cash_scaled, val_scaled])
 
         if self.hypers.scale:
             next_state = self.scaler.transform_state(next_state)

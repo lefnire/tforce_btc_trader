@@ -54,15 +54,14 @@ elif 'kaggle' in DB:
 def get_tables(arbitrage=True):
     return tables if arbitrage else [tables[0]]
 
-def n_cols(conv2d=False, indicators=False, arbitrage=True):
+def n_cols(indicators=False, arbitrage=True):
     cols = 0
     tables_ = get_tables(arbitrage)
     for t in tables_:
         cols += len(t['cols'])
         if indicators and 'ohlcv' in t:
             cols += 4  # This is defined in btc_env._get_indicators()
-    if not conv2d:
-        cols += 2  # [self.cash, self.value] are added in downstream dense
+    cols += 2  # [self.cash, self.value] are added in downstream dense
     return cols
 
 
