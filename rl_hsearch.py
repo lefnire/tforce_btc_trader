@@ -6,7 +6,7 @@ import pandas as pd
 import tensorflow as tf
 from sqlalchemy.sql import text
 from tensorforce.agents import agents as agents_dict
-from tensorforce.core.networks.layer import Dense
+from tensorforce.core.networks import layer as TForceLayers
 from tensorforce.core.networks.network import LayeredNetwork
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
@@ -41,21 +41,18 @@ def build_net_spec(hypers, baseline=False):
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
     lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
-    lstm_baseline = net.type == 'lstm' and baseline
 
     arr = []
-    if net.dropout: arr.append({**dropout})
 
     # Pre-layer
-    if 'depth_pre' in net and not lstm_baseline:
+    if 'depth_pre' in net:
         for i in range(net.depth_pre):
             size = int(net.width/(net.depth_pre-i+1)) if net.funnel else net.width
             arr.append({'size': size, **dense})
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
-    if not lstm_baseline:
-        n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
+    if not baseline: #  TODO figure out how to use internals w/ baseline, currently not series-aware
         for i in range(net.depth_mid):
             # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
             arr.append({'size': net.width, **lstm})
@@ -70,10 +67,44 @@ def build_net_spec(hypers, baseline=False):
 
 
 def custom_net(hypers, print_net=False, baseline=False):
-    net = Box(hypers['net'])
     layers_spec = build_net_spec(hypers, baseline)
     if print_net: pprint(layers_spec)
-    return layers_spec
+
+    class CustomNet(LayeredNetwork):
+        def __init__(self, **kwargs):
+            super(CustomNet, self).__init__(layers_spec, **kwargs)
+
+        def tf_apply(self, x, internals, update, return_internals=False):
+            series = x['series']
+            stationary = x['stationary']
+            x = series
+
+            # Apply stationary to the first Dense after the last LSTM. in the case of Baseline, there's no LSTM,
+            # so apply it to the start
+            apply_stationary_here = 0
+            # Find the last LSTM layer, peg to the next layer (a Dense)
+            for i, layer in enumerate(self.layers):
+                if isinstance(layer, TForceLayers.InternalLstm):
+                    apply_stationary_here = i + 1
+
+            internal_outputs = list()
+            index = 0
+            for i, layer in enumerate(self.layers):
+                layer_internals = [internals[index + n] for n in range(layer.num_internals)]
+                index += layer.num_internals
+                if i == apply_stationary_here:
+                    x = tf.concat([x, stationary], axis=1)
+                x = layer.apply(x, update, *layer_internals)
+
+                if not isinstance(x, tf.Tensor):
+                    internal_outputs.extend(x[1])
+                    x = x[0]
+
+            if return_internals:
+                return x, internal_outputs
+            else:
+                return x
+    return CustomNet
 
 
 def bins_of_8(x): return int(x // 8) * 8
@@ -103,7 +134,7 @@ hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
         'vals': [8, 2048],
-        'guess': 1024,
+        'guess': 1208,
         'pre': bins_of_8
     },
     # 'keep_last_timestep': True
@@ -117,19 +148,19 @@ hypers['model'] = {
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0, 8],
-        'guess': 5.5,
+        'guess': 6.82,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
         'type': 'bounded',
         'vals': [1, 100],
-        'guess': 10,
+        'guess': 30,
         'pre': int
     },
     'discount': {
         'type': 'bounded',
         'vals': [.9, .99],
-        'guess': .975
+        'guess': .986
     },
     # TODO variable_noise
 }
@@ -137,20 +168,20 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .55,
+        'guess': .233,
         'hydrate': min_threshold(.05, None)
     }
 }
 hypers['pg_model'] = {
     'baseline_mode': {
         'type': 'bool',
-        'guess': False,
+        'guess': True,
         'hydrate': hydrate_baseline
     },
     'gae_lambda': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .97,
+        'guess': .80,
         'hydrate': lambda x, others: x if (x and x > .1 and others['baseline_mode']) else None
     },
 }
@@ -158,7 +189,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .2,
+        'guess': .877,
         'hydrate': min_threshold(.05, None)
     }
 }
@@ -176,7 +207,10 @@ hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('o
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
-    'indicators': True,
+    'indicators': {
+        'type': 'bool',
+        'guess': True
+    },
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 4],
@@ -192,12 +226,12 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [32, 512],
-        'guess': 312,
+        'guess': 352,
         'pre': bins_of_8
     },
     'net.funnel': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
     'net.activation': {
         'type': 'int',
@@ -207,47 +241,49 @@ hypers['custom'] = {
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
-        'guess': .2,
+        'guess': .3,
         'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 6],
-        'guess': 3,
+        'guess': 5.09,
         'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 6],
-        'guess': 3,
+        'guess': 1.36,
         'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'pct_change': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
-    'steps': -1,
     'unimodal': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
     'scale': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
     # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
-    'arbitrage': True
+    'arbitrage': {
+        'type': 'bool',
+        'guess': True
+    }
 }
 
 hypers['lstm'] = {
     'net.depth_pre': {
         'type': 'bounded',
         'vals': [0, 3],
-        'guess': 0,
+        'guess': 2,
         'pre': int
     },
 }
@@ -576,24 +612,24 @@ def main_gp():
             guess = {k: v['guess'] for k, v in hypers_.items()}
             guess_overrides = [
                 {},  # main
-                {'step_optimizer.learning_rate': 4},
-                {'pct_change': True},
-                {'unimodal': False},
-
-                {'scale': False},
-                {'step_optimizer.learning_rate': 3},
-                {'punish_repeats': True},
+                {'baseline_mode': False},
+                {'entropy_regularization': .55},
+                {'gae_lambda': .97},
+                {'likelihood_ratio_clipping': .2},
                 {'net.activation': 'selu'},
+                {'net.depth_pre': 1, 'net.depth_mid': 2, 'net.depth_post': 2},
+                {'net.l1': 3, 'net.l2': 3},
+                {'pct_change': False, 'scale': True},
+                {'punish_repeats': False},
+                {'unimodal': True},
 
-                {'net.dropout': .01, 'net.l2': 2, 'net.l1': 2},
-                {'discount': .99},
-                {'batch_size': 2048},
-                {'optimization_steps': 20},
-
-                {'batch_size': 512},
-                {'likelihood_ratio_clipping': .65},
-                {'net.depth_mid': 2},
-                {'net.l2': 4.5, 'net.l1': 4.5},
+                # Original winner
+                {'batch_size': 1024, 'step_optimizer.learning_rate': 5.5, 'optimization_steps': 10, 'discount': .975,
+                 'entropy_regularization': .55, 'baseline_mode': False, 'gae_lambda': .97,
+                 'likelihood_ratio_clipping': .2, 'net.width': 312, 'net.funnel': False, 'net.dropout': .2,
+                 'net.l2': 4.5, 'net.l1': 4.5, 'pct_change': False, 'unimodal': True, 'scale': True,
+                 'punish_repeats': False
+                 }
             ]
             guess.update(guess_overrides[args.guess])
             loss_fn(hypers2vec(guess))

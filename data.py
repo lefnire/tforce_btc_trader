@@ -1,4 +1,5 @@
 import time, json, re
+from enum import Enum
 import pandas as pd
 from sqlalchemy import create_engine
 
@@ -9,6 +10,14 @@ engine = create_engine(config_json['DB_URL'])
 # From connecting source file, import engine and run the following code. Need each connection to be separate
 # (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
 # conn = engine.connect()
+
+
+class Exchange(Enum):
+    GDAX = 'gdax'
+    KRAKEN = 'kraken'
+
+
+EXCHANGE = Exchange.GDAX
 
 # Methods for imputing NaN. F=ffill, B=bfill, Z=zero. Generally we want volume/size-based features to be 0-filled
 # (indicating no trading during this blank period) and prices to ffill (maintain where the price left off). Right?
@@ -34,6 +43,12 @@ if 'alex' in DB:
     },
     ]
     target = 'exch_ticker_coinbase_usd_last_trade_price'
+
+    # order of tables counts - first one should be the table containing the target
+    if EXCHANGE == Exchange.KRAKEN:
+        tables[0], tables[1] = tables[1], tables[0]
+        target = 'exch_ticker_kraken_usd_last_trade_price'
+
 elif 'kaggle' in DB:
     tables = [
     {
@@ -61,7 +76,7 @@ def n_cols(indicators=False, arbitrage=True):
         cols += len(t['cols'])
         if indicators and 'ohlcv' in t:
             cols += 4  # This is defined in btc_env._get_indicators()
-    cols += 2  # [self.cash, self.value] are added in downstream dense
+    # Extra 3 cols (self.cash, self.value, self.repeats) are added in downstream dense
     return cols
 
 

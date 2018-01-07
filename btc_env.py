@@ -10,12 +10,8 @@ from box import Box
 from tensorforce.environments import Environment
 from tensorforce.execution import Runner
 from sklearn.preprocessing import RobustScaler, robust_scale
+from data import Exchange, EXCHANGE
 import data
-
-class Exchange(Enum):
-    GDAX = 'gdax'
-    KRAKEN = 'kraken'
-
 
 class Mode(Enum):
     TRAIN = 1
@@ -69,9 +65,8 @@ scalers = {}
 
 ALLOW_SEED = False
 TIMESTEPS = int(2e6)
-START_CAP = 1500
+START_CAP = 3000
 WINDOW = 150
-EXCHANGE = Exchange.GDAX
 
 
 class BitcoinEnv(Environment):
@@ -97,17 +92,22 @@ class BitcoinEnv(Environment):
         self.min_trade = btc_price * {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
 
         # Action space
-        min_max = self.min_trade + 100
+        trade_cap = self.min_trade * 2
         if self.hypers.unimodal:
-            self.actions_ = dict(type='float', shape=(), min_value=-min_max, max_value=min_max)
+            # In unimodal we discard any vals b/w [-min_trade, +min_trade] and call it "hold" (in execute())
+            self.actions_ = dict(type='float', shape=(), min_value=-trade_cap, max_value=trade_cap)
         else:
+            # In multi-modal, hold is an actual action (in which case we discard "amount")
             self.actions_ = dict(
                 action=dict(type='int', shape=(), num_actions=3),
-                amount=dict(type='float', shape=(), min_value=-min_max, max_value=min_max))
+                amount=dict(type='float', shape=(), min_value=self.min_trade, max_value=trade_cap))
 
         # Observation space
         self.cols_ = data.n_cols(indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
-        self.states_ = dict(type='float', shape=self.cols_)
+        self.states_ = dict(
+            series=dict(type='float', shape=self.cols_),  # all state values that are time-ish
+            stationary=dict(type='float', shape=3)  # everything that doesn't care about time (cash, value, n_repeats)
+        )
 
         scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
         if scaler_k not in scalers:
@@ -200,13 +200,13 @@ class BitcoinEnv(Environment):
         step_acc.repeats = 1
         ep_acc.i += 1
 
-        first_state = np.append(self.observations[start_timestep], [1., 1.])
+        first_state = self.observations[start_timestep]
         if self.hypers.scale:
             first_state = self.scaler.transform_state(first_state)
-        return first_state
+        return dict(series=first_state, stationary=[1., 1., 0.])
 
     def execute(self, actions):
-        testing = self.mode == Mode.TEST
+        test_or_live = self.mode in (Mode.TEST, Mode.LIVE)
         if self.hypers.unimodal:
             signal = 0 if -self.min_trade < actions < self.min_trade else actions
         else:
@@ -216,8 +216,7 @@ class BitcoinEnv(Environment):
                 2: 1  # make amount positive
             }[actions['action']] * actions['amount']
             if not signal: signal = 0  # sometimes gives -0.0, dunno if that matters anywhere downstream
-            elif signal < 0: signal -= self.min_trade
-            elif signal > 0: signal += self.min_trade
+            # multi-modal min_trade accounted for in constructor
 
         step_acc, ep_acc = self.acc.step, self.acc.episode
 
@@ -231,12 +230,11 @@ class BitcoinEnv(Environment):
         abs_sig = abs(signal)
         before = Box(cash=step_acc.cash, value=step_acc.value, total=step_acc.cash+step_acc.value)
         # Perform the trade. In training mode, we'll let them dip into negative here, but then kill and punish below.
-        # In testing, we'll just block the trade if they can't afford it (since that's how it is live, unless we enable
-        # borrowing/margin)
-        if signal > 0 and not (testing and abs_sig > step_acc.cash):
+        # In testing/live, we'll just block the trade if they can't afford it
+        if signal > 0 and not (test_or_live and abs_sig > step_acc.cash):
             step_acc.value += abs_sig - abs_sig*fee
             step_acc.cash -= abs_sig
-        elif signal < 0 and not (testing and abs_sig > step_acc.value):
+        elif signal < 0 and not (test_or_live and abs_sig > step_acc.value):
             step_acc.cash += abs_sig - abs_sig*fee
             step_acc.value -= abs_sig
 
@@ -253,30 +251,28 @@ class BitcoinEnv(Environment):
 
         # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior
         recent_actions = np.array(step_acc.signals[-step_acc.repeats:])
+        too_many_repeats = 60 * 2  # Desire a trade every ~x minutes. Increase punishment over time
         if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
             step_acc.repeats = 1  # reset penalty-growth
         else:
             if self.hypers.punish_repeats:
-                # We want a trade every x minutes. Increase punishment over time until it's 1 at that step
-                # reward -= self.scaler.avg_reward() * (step_acc.repeats/(60*10))
-                n_minutes = 2
-                reward -= step_acc.repeats / (60 * n_minutes)
+                reward -= step_acc.repeats / too_many_repeats
             step_acc.repeats += 1  # grow the penalty with time
 
         step_acc.i += 1
         ep_acc.total_steps += 1
-        # 0 if before['cash'] == 0 else (step_acc.cash - before['cash']) / before['cash'],
-        # 0 if before['value'] == 0 else (step_acc.value - before['value']) / before['value'],
         cash_scaled, val_scaled = step_acc.cash / START_CAP,  step_acc.value / START_CAP
-        next_state = np.append(self.observations[step_acc.i], [cash_scaled, val_scaled])
+        repeats_scaled = step_acc.repeats / too_many_repeats
 
+        next_state = self.observations[step_acc.i]
         if self.hypers.scale:
             next_state = self.scaler.transform_state(next_state)
             reward = self.scaler.transform_reward(reward)
+        next_state = dict(series=next_state, stationary=[cash_scaled, val_scaled, repeats_scaled])
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if not testing and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
+        if not test_or_live and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
             reward -= 1000
             terminal = True
         if terminal:
@@ -302,16 +298,22 @@ class BitcoinEnv(Environment):
         print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
         return True
 
-    def train_and_test(self, agent, early_stop=False):
-        timesteps, n_tests = int(2e6), 40
-        n_train = timesteps // n_tests
+    def train_and_test(self, agent, early_stop=False, live=False):
+        n_tests = 40
+        n_train = TIMESTEPS // n_tests
         i = 0
-
         runner = Runner(agent=agent, environment=self)
+
+        def run_deterministic(print_results=True):
+            next_state, terminal = self.reset(), False
+            while not terminal:
+                next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
+            if print_results: self.episode_finished(None)
+
         self.use_dataset(Mode.TRAIN)
         while i <= n_tests:
             runner.run(timesteps=n_train, max_episode_timesteps=n_train)
-            runner.run(deterministic=True, episode_finished=self.episode_finished, episodes=1)
+            run_deterministic()
             if early_stop:
                 in_a_row = 8
                 advantages = np.array(self.acc.episode.advantages[-in_a_row:])
@@ -320,7 +322,8 @@ class BitcoinEnv(Environment):
             i += 1
         # Last test is the biggie (test set)
         self.use_dataset(Mode.TEST)
-        next_state, terminal = self.reset(), False
-        while not terminal:
-            next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
-        self.episode_finished(None)
+        run_deterministic()
+
+        if live and self.acc.episode.advantages[-1] > 0:
+            self.use_dataset(Mode.LIVE)
+            run_deterministic(False)
