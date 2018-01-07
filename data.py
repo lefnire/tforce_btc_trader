@@ -33,7 +33,7 @@ if 'alex' in DB:
         'ohlcv': dict(open='open_price', high='high', low='low', close='last_trade_price', volume='volume'),
     },
     ]
-    target = 'exch_ticker_kraken_usd_last_trade_price'
+    target = 'exch_ticker_coinbase_usd_last_trade_price'
 elif 'kaggle' in DB:
     tables = [
     {

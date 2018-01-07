@@ -4,9 +4,7 @@ from flask import Flask, jsonify
 import data
 from flask_cors import CORS
 from sqlalchemy import create_engine
-import pandas as pd
-import numpy as np
-from rl_hsearch import print_feature_importances
+import utils
 
 app = Flask(__name__)
 CORS(app)
@@ -18,9 +16,10 @@ engine = create_engine(db_url)
 def send_data():
     rows = []
     conn = engine.connect()
-    # TODO all except signals,prices (separate route)
-    for row in conn.execute('select * from runs').fetchall():
+    # TODO prices/actions in separate route
+    for row in conn.execute('select id, hypers, advantage_avg, advantages, uniques from runs').fetchall():
         row = dict(row.items())
+        row['advantage_avg'] = utils.calculate_score(row)
         rows.append(row)
     conn.close()
 

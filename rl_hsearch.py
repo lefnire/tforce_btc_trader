@@ -13,7 +13,7 @@ from sklearn.model_selection import GridSearchCV
 
 
 from btc_env import BitcoinEnv
-import data
+import data, utils
 
 """
 Each hyper is specified as `key: {type, vals, requires, hook}`. 
@@ -632,9 +632,7 @@ def main_gp():
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            # r_avg = run['advantage_avg']
-            r_avg = len([r for r in run['advantages'] if r > 0])
-            Y.append([r_avg])
+            Y.append([utils.calculate_score(run)])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:

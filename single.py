@@ -25,7 +25,7 @@ def main():
         **hydrated
     )
 
-    env.train_and_test(agent, early_stop=True, final_tests=100)
+    env.train_and_test(agent, early_stop=True)
     agent.close()
     env.close()
 

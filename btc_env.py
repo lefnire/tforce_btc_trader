@@ -1,4 +1,5 @@
-import random, time, re, math
+import random, time, re, math, requests, pdb
+from enum import Enum
 import numpy as np
 import pandas as pd
 from talib.abstract import SMA, RSI, ATR, EMA
@@ -9,15 +10,17 @@ from box import Box
 from tensorforce.environments import Environment
 from tensorforce.execution import Runner
 from sklearn.preprocessing import RobustScaler, robust_scale
-import pdb
-
-ALLOW_SEED = False
-TIMESTEPS = int(2e6)
-START_CAP = 1500
-WINDOW = 150
-
 import data
-from data import engine
+
+class Exchange(Enum):
+    GDAX = 'gdax'
+    KRAKEN = 'kraken'
+
+
+class Mode(Enum):
+    TRAIN = 1
+    TEST = 2
+    LIVE = 3
 
 
 class Scaler(object):
@@ -64,6 +67,12 @@ class Scaler(object):
 # keep this globally around for all runs forever
 scalers = {}
 
+ALLOW_SEED = False
+TIMESTEPS = int(2e6)
+START_CAP = 1500
+WINDOW = 150
+EXCHANGE = Exchange.GDAX
+
 
 class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent'):
@@ -80,8 +89,13 @@ class BitcoinEnv(Environment):
             ),
             step=dict(i=0)  # setup in reset()
         )
-        self.testing = False
-        self.conn = engine.connect()
+        self.mode = Mode.TEST
+        self.conn = data.engine.connect()
+
+        # TODO this might need to be placed somewhere that updates relatively often
+        # gdax min order size = .01btc; krakken = .002btc
+        btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
+        self.min_trade = btc_price * {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
 
         # Action space
         if self.hypers.unimodal:
@@ -176,14 +190,14 @@ class BitcoinEnv(Environment):
         else:
             raise NotImplementedError('TODO Implement conv2d features depth > 2')
 
-    def use_dataset(self, testing):
+    def use_dataset(self, mode):
         """Make sure to call this before reset()!"""
-        print("Testing" if testing else "Training")
-        self.testing = testing
+        print("Mode:", mode.name)
+        self.mode = mode
         self.row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
         split = .9
         n_train, n_test = int(self.row_ct * split), int(self.row_ct * (1 - split))
-        limit, offset = (n_test, n_train) if testing else (n_train, 0)
+        limit, offset = (n_test, n_train) if mode == mode.TEST else (n_train, 0)
         df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
 
         self.observations, self.prices = self._xform_data(df)
@@ -216,9 +230,9 @@ class BitcoinEnv(Environment):
         return first_state
 
     def execute(self, actions):
-        min_trade = 24  # gdax min order size = .01btc ($118); krakken = .002btc ($23.60)
+        testing = self.mode == Mode.TEST
         if self.hypers.unimodal:
-            signal = 0 if -min_trade < actions < min_trade else actions
+            signal = 0 if -self.min_trade < actions < self.min_trade else actions
         else:
             signal = {
                 0: -1,  # make amount negative
@@ -226,21 +240,27 @@ class BitcoinEnv(Environment):
                 2: 1  # make amount positive
             }[actions['action']] * actions['amount']
             if not signal: signal = 0  # sometimes gives -0.0, dunno if that matters anywhere downstream
-            elif signal < 0: signal -= min_trade
-            elif signal > 0: signal += min_trade
+            elif signal < 0: signal -= self.min_trade
+            elif signal > 0: signal += self.min_trade
 
         step_acc, ep_acc = self.acc.step, self.acc.episode
 
         step_acc.signals.append(float(signal))
 
-        fee = 0.0026  # https://www.kraken.com/en-us/help/fees
+        fee = {
+            Exchange.GDAX: 0.0025, # https://support.gdax.com/customer/en/portal/articles/2425097-what-are-the-fees-on-gdax-
+            Exchange.KRAKEN: 0.0026  # https://www.kraken.com/en-us/help/fees
+        }[EXCHANGE]
         reward = 0
         abs_sig = abs(signal)
         before = Box(cash=step_acc.cash, value=step_acc.value, total=step_acc.cash+step_acc.value)
-        if signal > 0:
+        # Perform the trade. In training mode, we'll let them dip into negative here, but then kill and punish below.
+        # In testing, we'll just block the trade if they can't afford it (since that's how it is live, unless we enable
+        # borrowing/margin)
+        if signal > 0 and not (testing and abs_sig > step_acc.cash):
             step_acc.value += abs_sig - abs_sig*fee
             step_acc.cash -= abs_sig
-        elif signal < 0:
+        elif signal < 0 and not (testing and abs_sig > step_acc.value):
             step_acc.cash += abs_sig - abs_sig*fee
             step_acc.value -= abs_sig
 
@@ -287,8 +307,7 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if step_acc.cash < 0 or step_acc.value < 0 or \
-                (step_acc.repeats >= 20000 and not self.testing):
+        if not testing and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
             reward -= 1000
             terminal = True
         if terminal:
@@ -314,13 +333,13 @@ class BitcoinEnv(Environment):
         print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
         return True
 
-    def train_and_test(self, agent, early_stop=False, final_tests=1):
+    def train_and_test(self, agent, early_stop=False):
         timesteps, n_tests = int(2e6), 40
         n_train = timesteps // n_tests
         i = 0
 
         runner = Runner(agent=agent, environment=self)
-        self.use_dataset(testing=False)
+        self.use_dataset(Mode.TRAIN)
         while i <= n_tests:
             runner.run(timesteps=n_train, max_episode_timesteps=n_train)
             runner.run(deterministic=True, episode_finished=self.episode_finished, episodes=1)
@@ -331,9 +350,8 @@ class BitcoinEnv(Environment):
                     i = n_tests
             i += 1
         # Last test is the biggie (test set)
-        self.use_dataset(testing=True)
-        for _ in range(final_tests):
-            next_state, terminal = self.reset(), False
-            while not terminal:
-                next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
-            self.episode_finished(None)
+        self.use_dataset(Mode.TEST)
+        next_state, terminal = self.reset(), False
+        while not terminal:
+            next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
+        self.episode_finished(None)

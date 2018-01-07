@@ -24,7 +24,7 @@ class App extends Component {
     // fetch('http://localhost:5000').then(res => res.json()).then(data => {
     fetch('dumps/alex.json').then(res => res.json()).then(data => {
       data.forEach(d => {
-        d.reward_avg = _.filter(d.advantages, r => r > 0).length;
+        d.reward_avg = d.advantage_avg
         d.hypers = _.transform(d.hypers, (m,v,k) => {
           m[k.replace(/\./g, '_')] = typeof v == 'boolean' ? ~~v : v;
         });
