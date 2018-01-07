@@ -21,8 +21,7 @@ class App extends Component {
   }
 
   componentDidMount() {
-    // fetch('http://localhost:5000').then(res => res.json()).then(data => {
-    fetch('dumps/alex.json').then(res => res.json()).then(data => {
+    fetch('http://localhost:5000').then(res => res.json()).then(data => {
       data.forEach(d => {
         d.reward_avg = d.advantage_avg
         d.hypers = _.transform(d.hypers, (m,v,k) => {
@@ -143,7 +142,7 @@ class App extends Component {
     let rewards = data.map(d => d.advantages.map((v,i) => {
       let y = v; // just human
       // let y = (d.rewards_agent[i] + v)/2; // human-agent average
-      // y = _.clamp(y, -3, 3); // clamp so we don't break the graph
+      y = _.clamp(y, -100, 100); // clamp so we don't break the graph
       return {
         y,
         x:i, parent:d
@@ -263,7 +262,13 @@ class App extends Component {
   };
 
   mountSignals = () => {
-    let {actions, prices} = this.clickedDatum;
+    const {id} = this.clickedDatum;
+    fetch(`http://localhost:5000/actions/${id}`).then(res => res.json()).then(this._mountSignals);
+  };
+
+  _mountSignals = (data) => {
+    let {actions, prices} = data;
+
     let svg = d3.select("svg#signals");
     svg.select('g').remove(); // start fresh
     let margin = {top: 20, right: 20, bottom: 30, left: 50},

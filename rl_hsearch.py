@@ -11,7 +11,6 @@ from tensorforce.core.networks.network import LayeredNetwork
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
 
-
 from btc_env import BitcoinEnv
 import data, utils
 
@@ -181,7 +180,7 @@ hypers['pg_model'] = {
     'gae_lambda': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .80,
+        'guess': .97,
         'hydrate': lambda x, others: x if (x and x > .1 and others['baseline_mode']) else None
     },
 }
@@ -247,13 +246,13 @@ hypers['custom'] = {
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 6],
-        'guess': 5.09,
+        'guess': 3,
         'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 6],
-        'guess': 1.36,
+        'guess': 3,
         'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
     },
     'pct_change': {
@@ -356,9 +355,11 @@ class HSearchEnv(object):
         self.gpu_split = gpu_split
         self.net_type = net_type
         self.conn = data.engine.connect()
+        self.conn_runs = data.engine_runs.connect()
 
     def close(self):
         self.conn.close()
+        self.conn_runs.close()
 
     def get_hypers(self, actions):
         """
@@ -438,7 +439,7 @@ class HSearchEnv(object):
           insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag) 
           values (:hypers, :advantage_avg, :advantages, :uniques, :prices, :actions, :agent, :flag)
         """
-        self.conn.execute(
+        self.conn_runs.execute(
             text(sql),
             hypers=json.dumps(flat),
             advantage_avg=adv_avg,
@@ -457,7 +458,7 @@ class HSearchEnv(object):
     def get_winner(self, id=None):
         if id:
             sql = "select id, hypers from runs where id=:id"
-            winner = self.conn.execute(text(sql), id=id).fetchone()
+            winner = self.conn_runs.execute(text(sql), id=id).fetchone()
             print(f'Using winner {winner.id}')
             winner = winner.hypers
         else:
@@ -598,10 +599,10 @@ def main_gp():
         Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk, 
         but this allows to distribute across servers easily
         """
-        conn = data.engine.connect()
+        conn_runs = data.engine_runs.connect()
         sql = "select hypers, advantages, advantage_avg from runs where flag=:f"
-        runs = conn.execute(text(sql), f=args.net_type).fetchall()
-        conn.close()
+        runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
+        conn_runs.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
@@ -613,28 +614,23 @@ def main_gp():
             guess_overrides = [
                 {},  # main
                 {'baseline_mode': False},
-                {'entropy_regularization': .55},
-                {'gae_lambda': .97},
-                {'likelihood_ratio_clipping': .2},
-                {'net.activation': 'selu'},
-                {'net.depth_pre': 1, 'net.depth_mid': 2, 'net.depth_post': 2},
-                {'net.l1': 3, 'net.l2': 3},
-                {'pct_change': False, 'scale': True},
                 {'punish_repeats': False},
-                {'unimodal': True},
 
-                # Original winner
-                {'batch_size': 1024, 'step_optimizer.learning_rate': 5.5, 'optimization_steps': 10, 'discount': .975,
-                 'entropy_regularization': .55, 'baseline_mode': False, 'gae_lambda': .97,
-                 'likelihood_ratio_clipping': .2, 'net.width': 312, 'net.funnel': False, 'net.dropout': .2,
-                 'net.l2': 4.5, 'net.l1': 4.5, 'pct_change': False, 'unimodal': True, 'scale': True,
-                 'punish_repeats': False
-                 }
+                {'pct_change': False, 'scale': True},
+                {'unimodal': True},
+                {'net.depth_pre': 1, 'net.depth_mid': 2, 'net.depth_post': 2},
+
+                {'gae_lambda': .99, 'discount': .99},
+                {'net.activation': 'selu'},
+                {'likelihood_ratio_clipping': .2},
+
+                {'net.l1': 3, 'net.l2': 3},
+                {'entropy_regularization': .55},
             ]
             guess.update(guess_overrides[args.guess])
             loss_fn(hypers2vec(guess))
 
-            args.guess += args.gpu_split  # Go to the next mod() in line (FIXME this is brittle!)
+            args.guess += int(args.gpu_split)  # Go to the next mod() in line (FIXME this is brittle!)
             if args.guess > len(guess_overrides)-1:
                 args.guess = -1  # start on GP
 

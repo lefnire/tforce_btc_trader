@@ -1,0 +1,15 @@
+Flask==0.12.2
+Flask-Cors==3.0.3
+gdax==1.0.6
+GPy==1.8.4
+-e git+https://github.com/SheffieldML/GPyOpt.git@fff3f65c4e76bed69ce6dc55c459a5d37db5b243#egg=GPyOpt
+numpy==1.13.3
+pandas==0.20.3
+psycopg2==2.7.3
+python-box==3.1.1
+requests==2.13.0
+scikit-learn==0.19.1
+sklearn==0.0
+SQLAlchemy==1.1.12
+TA-Lib==0.4.10
+tensorflow==1.4.0

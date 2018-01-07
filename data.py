@@ -2,10 +2,13 @@ import time, json, re
 from enum import Enum
 import pandas as pd
 from sqlalchemy import create_engine
+from sqlalchemy import text
 
 config_json = json.load(open('config.json'))
 DB = config_json['DB_URL'].split('/')[-1]
 engine = create_engine(config_json['DB_URL'])
+engine_live = create_engine(config_json['LIVE_DB_URL'])
+engine_runs = create_engine(config_json['RUNS_DB_URL'])
 
 # From connecting source file, import engine and run the following code. Need each connection to be separate
 # (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
@@ -25,7 +28,7 @@ F = 0
 B = 1
 Z = 2
 
-if 'alex' in DB:
+if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
     tables = [
     {
         'name': 'exch_ticker_coinbase_usd',
@@ -118,8 +121,7 @@ def _db_to_dataframe_ohlc(conn, limit='ALL', offset=0, just_count=False, arbitra
 
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
-
-def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitrage=True):
+def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitrage=True, last_timestamp=False):
     """Fetches all relevant data in database and returns as a Pandas dataframe"""
     tables_ = get_tables(arbitrage)
 
@@ -164,10 +166,28 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
             fill = {'value': 0} if method == Z else {'method': 'ffill' if method == F else 'bfill'}
             col_name = f"{t['name']}_{k}"
             df[col_name] = df[col_name].fillna(fill)
-    return df.astype('float64')
+    df = df.astype('float64')
 
-db_to_dataframe = _db_to_dataframe_ohlc if DB == 'coins2'\
-    else _db_to_dataframe_main
+    if last_timestamp:
+        # Save away last-timestamp (used in LIVE mode to inform how many new steps are added between polls
+        query = f"select {first['ts']} from {first['name']} order by {first['ts']} desc limit 1"
+        last_timestamp = conn.execute(query).fetchone()[first['ts']]
+        return df, last_timestamp
+    return df
+
+
+db_to_dataframe = _db_to_dataframe_ohlc if 'coins' in DB else _db_to_dataframe_main
+
+
+def fetch_more(conn, last_timestamp, arbitrage):
+    # FIXME this count approach won't work in inner-join-arbitrage mode
+    t = tables[0]
+    query = f"select count(*) as ct from {t['name']} where {t['ts']} > :last_timestamp"
+    n_new = conn.execute(text(query), last_timestamp=last_timestamp).fetchone()['ct']
+    if n_new == 0:
+        return None, 0, last_timestamp
+    new_data, latest_timestamp = db_to_dataframe(conn, limit=n_new, arbitrage=arbitrage, last_timestamp=True)
+    return new_data, n_new, latest_timestamp
 
 
 def setup_runs_table(conn):

@@ -1,4 +1,4 @@
-import random, time, re, math, requests, pdb
+import random, time, re, math, requests, pdb, gdax
 from enum import Enum
 import numpy as np
 import pandas as pd
@@ -17,6 +17,7 @@ class Mode(Enum):
     TRAIN = 1
     TEST = 2
     LIVE = 3
+    TEST_LIVE = 4
 
 
 class Scaler(object):
@@ -83,13 +84,16 @@ class BitcoinEnv(Environment):
             ),
             step=dict(i=0)  # setup in reset()
         )
-        self.mode = Mode.TEST
+        self.mode = Mode.TRAIN
         self.conn = data.engine.connect()
 
         # TODO this might need to be placed somewhere that updates relatively often
         # gdax min order size = .01btc; krakken = .002btc
-        btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
-        self.min_trade = btc_price * {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
+        try:
+            self.btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
+            self.min_trade = self.btc_price * {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
+        except:
+            self.min_trade = 150
 
         # Action space
         trade_cap = self.min_trade * 2
@@ -173,18 +177,31 @@ class BitcoinEnv(Environment):
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/step_acc.cash after each action
         return states, prices
 
-    def use_dataset(self, mode):
+    def use_dataset(self, mode, no_kill=False):
         """Make sure to call this before reset()!"""
-        print("Mode:", mode.name)
+        before_time = time.time()
         self.mode = mode
-        self.row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
-        split = .9
-        n_train, n_test = int(self.row_ct * split), int(self.row_ct * (1 - split))
-        limit, offset = (n_test, n_train) if mode == mode.TEST else (n_train, 0)
-        df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
+        self.no_kill = no_kill
+        if mode in (Mode.LIVE, Mode.TEST_LIVE):
+            self.conn = data.engine_live.connect()
+            # Work with 6000 timesteps up until the present (play w/ diff numbers, depends on LSTM)
+            # Offset=0 data.py currently pulls recent-to-oldest, then reverses
+            limit, offset = 6000, 0
+            df, self.last_timestamp = data.db_to_dataframe(
+                self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage, last_timestamp=True)
+            # save away for now so we can keep transforming it as we add new data (find a more efficient way)
+            self.df = df
+        else:
+            self.row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
+            split = .9
+            n_train, n_test = int(self.row_ct * split), int(self.row_ct * (1 - split))
+            limit, offset = (n_test, n_train) if mode == mode.TEST else (n_train, 0)
+            df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
 
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self._diff(self.prices, percent=True)
+        after_time = round(time.time() - before_time)
+        # print(f"Loading {mode.name} took {after_time}s")
 
     def reset(self):
         self.time = time.time()
@@ -206,7 +223,6 @@ class BitcoinEnv(Environment):
         return dict(series=first_state, stationary=[1., 1., 0.])
 
     def execute(self, actions):
-        test_or_live = self.mode in (Mode.TEST, Mode.LIVE)
         if self.hypers.unimodal:
             signal = 0 if -self.min_trade < actions < self.min_trade else actions
         else:
@@ -223,7 +239,7 @@ class BitcoinEnv(Environment):
         step_acc.signals.append(float(signal))
 
         fee = {
-            Exchange.GDAX: 0.0025, # https://support.gdax.com/customer/en/portal/articles/2425097-what-are-the-fees-on-gdax-
+            Exchange.GDAX: 0.0025,  # https://support.gdax.com/customer/en/portal/articles/2425097-what-are-the-fees-on-gdax-
             Exchange.KRAKEN: 0.0026  # https://www.kraken.com/en-us/help/fees
         }[EXCHANGE]
         reward = 0
@@ -231,10 +247,10 @@ class BitcoinEnv(Environment):
         before = Box(cash=step_acc.cash, value=step_acc.value, total=step_acc.cash+step_acc.value)
         # Perform the trade. In training mode, we'll let them dip into negative here, but then kill and punish below.
         # In testing/live, we'll just block the trade if they can't afford it
-        if signal > 0 and not (test_or_live and abs_sig > step_acc.cash):
+        if signal > 0 and not (self.no_kill and abs_sig > step_acc.cash):
             step_acc.value += abs_sig - abs_sig*fee
             step_acc.cash -= abs_sig
-        elif signal < 0 and not (test_or_live and abs_sig > step_acc.value):
+        elif signal < 0 and not (self.no_kill and abs_sig > step_acc.value):
             step_acc.cash += abs_sig - abs_sig*fee
             step_acc.value -= abs_sig
 
@@ -272,11 +288,57 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if not test_or_live and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
+        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
             reward -= 1000
             terminal = True
-        if terminal:
+        if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
+            # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
+        if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
+            # Only do real buy/sell on last step if LIVE (in case there are multiple steps b/w, we only care about
+            # present). Then we unset terminal, after we fetch some new data (keep going)
+            # GDAX https://github.com/danpaquin/gdax-python
+            live = self.mode == Mode.LIVE
+            if signal < 0:
+                if live:
+                    self.gdax_client.sell(
+                        price=str(abs_sig),  # USD
+                        # size='0.01',  # BTC
+                        product_id='BTC-USD')
+                print(f"Sold {signal}!")
+            elif signal > 0:
+                if live:
+                    self.gdax_client.buy(
+                        price=str(abs_sig),  # USD
+                        # size='0.01',  # BTC
+                        product_id='BTC-USD')
+                print(f"Bought {signal}!")
+            elif step_acc.i % 10 == 0:
+                print(".")
+
+            new_data = None
+            while new_data is None:
+                new_data, n_new, new_timestamp = data.fetch_more(
+                    conn=self.conn, last_timestamp=self.last_timestamp, arbitrage=self.hypers.arbitrage)
+                time.sleep(20)
+            self.last_timestamp = new_timestamp
+            self.df = pd.concat([self.df, new_data], axis=0)
+            self.observations, self.prices = self._xform_data(self.df)
+            self.prices_diff = self._diff(self.prices, percent=True)
+            step_acc.i = self.df.shape[0] - n_new - 1
+
+            if live:
+                accounts = self.gdax_client.get_accounts()
+                step_acc.cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
+                step_acc.value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
+            if signal != 0:
+                print(f"New total: {step_acc.cash + step_acc.value}")
+            next_state['stationary'] = [
+                step_acc.cash / START_CAP,
+                step_acc.value / START_CAP,
+                repeats_scaled  # TODO do I need to handle specifically for live?
+            ]
+            terminal = False
 
         # if step_acc.value <= 0 or step_acc.cash <= 0: terminal = 1
         return next_state, terminal, reward
@@ -298,32 +360,49 @@ class BitcoinEnv(Environment):
         print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
         return True
 
-    def train_and_test(self, agent, early_stop=False, live=False):
-        n_tests = 40
+    def run_deterministic(self, runner, print_results=True):
+        next_state, terminal = self.reset(), False
+        while not terminal:
+            next_state, terminal, reward = self.execute(runner.agent.act(next_state, deterministic=True))
+        if print_results: self.episode_finished(None)
+
+    def train_and_test(self, agent, early_stop=-1, n_tests=40):
         n_train = TIMESTEPS // n_tests
         i = 0
         runner = Runner(agent=agent, environment=self)
 
-        def run_deterministic(print_results=True):
-            next_state, terminal = self.reset(), False
-            while not terminal:
-                next_state, terminal, reward = self.execute(agent.act(next_state, deterministic=True))
-            if print_results: self.episode_finished(None)
-
-        self.use_dataset(Mode.TRAIN)
         while i <= n_tests:
+            self.use_dataset(Mode.TRAIN)
             runner.run(timesteps=n_train, max_episode_timesteps=n_train)
-            run_deterministic()
-            if early_stop:
-                in_a_row = 8
-                advantages = np.array(self.acc.episode.advantages[-in_a_row:])
-                if i >= in_a_row and np.all(advantages > 0):
+            self.use_dataset(Mode.TEST)
+            self.run_deterministic(runner, print_results=True)
+            if early_stop > 0:
+                advantages = np.array(self.acc.episode.advantages[-early_stop:])
+                if i >= early_stop and np.all(advantages > 0):
                     i = n_tests
             i += 1
-        # Last test is the biggie (test set)
-        self.use_dataset(Mode.TEST)
-        run_deterministic()
 
-        if live and self.acc.episode.advantages[-1] > 0:
-            self.use_dataset(Mode.LIVE)
-            run_deterministic(False)
+        # On last "how would it have done IRL?" run
+        self.use_dataset(Mode.TEST, no_kill=True)
+        self.run_deterministic(runner, print_results=True)
+
+    def run_test(self, agent):
+        runner = Runner(agent=agent, environment=self)
+        self.use_dataset(Mode.TEST_LIVE, no_kill=True)
+        self.run_deterministic(runner, print_results=True)
+
+    def run_live(self, agent):
+        gdax_conf = data.config_json['GDAX']
+        # TODO how to use sandbox?
+        self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'])
+        # self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'],
+        #                                        api_url="https://api-public.sandbox.gdax.com")
+
+        accounts = self.gdax_client.get_accounts()
+        cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
+        value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
+        print(f'Starting total: {cash + value}')
+
+        runner = Runner(agent=agent, environment=self)
+        self.use_dataset(Mode.LIVE, no_kill=True)
+        self.run_deterministic(runner, print_results=True)

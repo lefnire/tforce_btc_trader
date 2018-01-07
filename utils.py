@@ -1,6 +1,16 @@
+import numpy as np
+
+
 def calculate_score(run):
-    # return run['advantage_avg']
     advantages = run['advantages']
+
+    # Mean
+    return np.mean(advantages)
+
+    ## Last advantage
+    # return advantages[-1]
+
+    # Max number of consecutive positives
     score, curr_consec = 0, 0
     for i, adv in enumerate(advantages):
         if adv > 0:
