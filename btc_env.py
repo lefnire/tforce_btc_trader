@@ -67,13 +67,13 @@ scalers = {}
 ALLOW_SEED = False
 TIMESTEPS = int(2e6)
 START_CAP = 3000
-WINDOW = 150
 
 
 class BitcoinEnv(Environment):
     def __init__(self, hypers, name='ppo_agent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
+        self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
         self.acc = Box(
             episode=dict(
@@ -112,6 +112,12 @@ class BitcoinEnv(Environment):
             series=dict(type='float', shape=self.cols_),  # all state values that are time-ish
             stationary=dict(type='float', shape=3)  # everything that doesn't care about time (cash, value, n_repeats)
         )
+
+        if self.conv2d:
+            # width = window width (150 time-steps)
+            # height = num_features, but one layer for each table
+            # channels = 1 (for now); revisit with arbitrage when exchanges have same ncols
+            self.states_['series']['shape'] = (self.hypers.step_window, self.cols_, 1)
 
         scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
         if scaler_k not in scalers:
@@ -177,6 +183,10 @@ class BitcoinEnv(Environment):
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/step_acc.cash after each action
         return states, prices
 
+    def _reshape_window_for_conv2d(self, window):
+        return np.expand_dims(window, -1)
+        # see 0447710a87770eaf0e2ff99e0479e6602793c3b1 for 3d arbitrage
+
     def use_dataset(self, mode, no_kill=False):
         """Make sure to call this before reset()!"""
         before_time = time.time()
@@ -186,7 +196,7 @@ class BitcoinEnv(Environment):
             self.conn = data.engine_live.connect()
             # Work with 6000 timesteps up until the present (play w/ diff numbers, depends on LSTM)
             # Offset=0 data.py currently pulls recent-to-oldest, then reverses
-            limit, offset = 6000, 0
+            limit, offset = (6000, 0) if not self.conv2d else (self.hypers.step_window, 0)
             df, self.last_timestamp = data.db_to_dataframe(
                 self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage, last_timestamp=True)
             # save away for now so we can keep transforming it as we add new data (find a more efficient way)
@@ -211,7 +221,7 @@ class BitcoinEnv(Environment):
         # But for our purposes, we care more about "how much better is what we made than if we held". We're training
         # a trading bot, not an investing bot. So we compare these at the end, calling it "advantage"
         step_acc.hold = Box(value=START_CAP, cash=START_CAP)
-        start_timestep = 1  # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = self.hypers.step_window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
         step_acc.repeats = 1
@@ -220,6 +230,9 @@ class BitcoinEnv(Environment):
         first_state = self.observations[start_timestep]
         if self.hypers.scale:
             first_state = self.scaler.transform_state(first_state)
+        if self.conv2d:
+            window = self.observations[start_timestep - self.hypers.step_window:start_timestep]
+            first_state = self._reshape_window_for_conv2d(window)
         return dict(series=first_state, stationary=[1., 1., 0.])
 
     def execute(self, actions):
@@ -255,7 +268,7 @@ class BitcoinEnv(Environment):
             step_acc.value -= abs_sig
 
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
-        diff_loc = step_acc.i + 1
+        diff_loc = step_acc.i if self.conv2d else step_acc.i + 1
         pct_change = self.prices_diff[diff_loc]
         step_acc.value += pct_change * step_acc.value
         total = step_acc.value + step_acc.cash
@@ -284,6 +297,9 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             next_state = self.scaler.transform_state(next_state)
             reward = self.scaler.transform_reward(reward)
+        if self.conv2d:
+            window = self.observations[step_acc.i - self.hypers.step_window:step_acc.i]
+            next_state = self._reshape_window_for_conv2d(window)
         next_state = dict(series=next_state, stationary=[cash_scaled, val_scaled, repeats_scaled])
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
