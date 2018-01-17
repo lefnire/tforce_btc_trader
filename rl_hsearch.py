@@ -40,7 +40,12 @@ def build_net_spec(hypers, baseline=False):
     dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
     dropout = {'type': 'dropout', 'rate': net.dropout}
     lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
-    conv2d = {'type': 'conv2d', 'bias': True, 'l2_regularization': net.l2, 'l1_regularization': net.l1}  # TODO bias as hyper?
+    conv2d = {
+        'type': 'conv2d',
+        'bias': net.bias,
+        'l2_regularization': net.l2,
+        'l1_regularization': net.l1
+    }
 
     arr = []
 
@@ -54,15 +59,28 @@ def build_net_spec(hypers, baseline=False):
     # Mid-layer
     # TODO figure out how to use internals w/ baseline, currently not series-aware
     if not (net.type == 'lstm' and baseline):
+        n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
         for i in range(net.depth_mid):
-            if net.type == 'conv2d':
-                n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
-                size = max([32, int(net.width / 4)])
-                if i == 0: size = int(size / 2)  # FIXME most convs have their first layer smaller... right? just the first, or what?
-                arr.append({'size': size, 'window': (net.window, n_cols), 'stride': (net.stride, 1), **conv2d})
-            else:
+            if net.type == 'lstm':
                 # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
                 arr.append({'size': net.width, **lstm})
+
+            elif net.type == 'conv2d':
+                # TODO dynamic window/stride division for each layer (currently very destructive)
+                step_window = math.ceil(hypers['step_window'] / (net.window * 10))
+                feature_window = math.ceil(n_cols / net.window)
+
+                step_stride = math.ceil(step_window / net.stride)
+                feature_stride = math.ceil(feature_window / net.stride)
+
+                size = max([32, int(net.width / 4)])
+                if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
+                arr.append({
+                    'size': size,
+                    'window': (step_window, feature_window),
+                    'stride': (step_stride, feature_stride),
+                    **conv2d
+                })
         if net.type == 'conv2d':
             arr.append({'type': 'flatten'})
 
@@ -117,9 +135,17 @@ def custom_net(hypers, print_net=False, baseline=False):
 
 
 def bins_of_8(x): return int(x // 8) * 8
+
+def two_to_the(x): return 2**int(x)
+
 def ten_to_the_neg(x, _): return 10**-x
+
 def min_threshold(thresh, fallback):
     return lambda x, _: x if (x and x > thresh) else fallback
+
+def min_ten_neg(thresh, fallback):
+    return lambda x, _: min_threshold(thresh, fallback)(ten_to_the_neg(x, _), _)
+
 def hydrate_baseline(x, flat):
     return {
         False: {'baseline_mode': None},
@@ -142,11 +168,14 @@ hypers['agent'] = {}
 hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
-        'vals': [8, 2048],
-        'guess': 1816,
-        'pre': bins_of_8
+        'vals': [3, 12],
+        'guess': 10,  # 1024
+        'pre': two_to_the
     },
-    # 'keep_last_timestep': True
+    'keep_last_timestep': {
+        'type': 'bool',
+        'guess': True
+    }
 }
 hypers['model'] = {
     'optimizer.type': {
@@ -156,29 +185,29 @@ hypers['model'] = {
     },
     'optimizer.learning_rate': {
         'type': 'bounded',
-        'vals': [0, 8],
+        'vals': [0., 8.],
         'guess': 6.5,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
         'type': 'bounded',
-        'vals': [1, 40],  # would like to try up to 100, but way too slow to test
-        'guess': 9,
+        'vals': [1, 30],  # want to try higher, but too slow to test
+        'guess': 10,
         'pre': int
     },
     'discount': {
         'type': 'bounded',
         'vals': [.9, .99],
-        'guess': .98
+        'guess': .99
     },
     # TODO variable_noise
 }
 hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
-        'vals': [0., 1.],
-        'guess': .71,
-        'hydrate': min_threshold(.05, None)
+        'vals': [0, 5],
+        'guess': 2,
+        'hydrate': min_ten_neg(1e-4, 0.)
     }
 }
 hypers['pg_model'] = {
@@ -189,16 +218,16 @@ hypers['pg_model'] = {
     },
     'gae_lambda': {
         'type': 'bounded',
-        'vals': [0., 1.],
-        'guess': .44,
-        'hydrate': lambda x, others: x if (x and x > .1 and others['baseline_mode']) else None
+        'vals': [.8, 1.],
+        'guess': .95,
+        'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
     },
 }
 hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .48,
+        'guess': .2,
         'hydrate': min_threshold(.05, None)
     }
 }
@@ -218,7 +247,7 @@ hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.
 hypers['custom'] = {
     'indicators': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
     'net.depth_mid': {
         'type': 'bounded',
@@ -234,9 +263,9 @@ hypers['custom'] = {
     },
     'net.width': {
         'type': 'bounded',
-        'vals': [32, 512],
-        'guess': 64,
-        'pre': bins_of_8
+        'vals': [3, 10],
+        'guess': 6,  # 64
+        'hydrate': lambda x, _: 2**int(x)  # bins of 8, 16, 32, 64, ... (10 = 2014, but is ceil so actual max is 512)
     },
     'net.funnel': {
         'type': 'bool',
@@ -244,26 +273,26 @@ hypers['custom'] = {
     },
     'net.activation': {
         'type': 'int',
-        'vals': ['tanh', 'selu', 'relu'],
-        'guess': 'selu'
+        'vals': ['tanh', 'relu'],
+        'guess': 'tanh'
     },
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
-        'guess': .15,
+        'guess': .5,
         'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [0, 6],
-        'guess': 3.7,
-        'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
+        'vals': [0, 7],
+        'guess': 3,
+        'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
         'type': 'bounded',
-        'vals': [0, 6],
-        'guess': .6,
-        'hydrate': lambda x, _: min_threshold(1e-5, 0.)(ten_to_the_neg(x, _), _)
+        'vals': [0, 7],
+        'guess': 7,  # turn off. setting to 0 causes issues in GP code
+        'hydrate': min_ten_neg(1e-6, 0.)
     },
     'pct_change': {
         'type': 'bool',
@@ -297,23 +326,28 @@ hypers['lstm'] = {
     },
 }
 hypers['conv2d'] = {
-    # 'net.bias': {'type': 'bool'},
+    'net.bias': {
+        'type': 'bool',
+        'guess': True
+    },
     'net.window': {
         'type': 'bounded',
-        'vals': [4, 40],
-        'guess': 4,
+        # FIXME this isn't great!
+        # window t-shirt sizes, smaller # = more destructive
+        'vals': [1, 4],
+        'guess': 2,
         'pre': int,
     },
     'net.stride': {
         'type': 'bounded',
-        'vals': [1, 5],
+        # how many ways to divide a window? 1 = no-overlap, 2 = half-overlap (smaller # = more destructive)
+        'vals': [1, 4],
         'guess': 2,
-        'pre': int,
-        'hydrate': lambda x, others: math.ceil(others['net.window'] / x)
+        'pre': int
     },
     'step_window': {
         'type': 'bounded',
-        'vals': [100, 600],
+        'vals': [100, 400],
         'guess': 150,
         'pre': int,
     }
@@ -547,7 +581,7 @@ def main_gp():
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu_split', type=float, default=4, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('-g', '--gpu_split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net_type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
@@ -626,6 +660,7 @@ def main_gp():
         hsearch.close()
         return [reward]
 
+    guess_i = 0
     while True:
         """
         Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk, 
@@ -644,24 +679,50 @@ def main_gp():
         if args.guess != -1:
             guess = {k: v['guess'] for k, v in hypers_.items()}
             guess_overrides = [
-                {},
-                {'punish_repeats': True},
-                {'baseline_mode': False},
-                {'optimization_steps': 20},
-                {'likelihood_ratio_clipping': .2},
-                
-                #{'pct_change': True, 'scale': False},
-                #{'unimodal': True},
-                #{'gae_lambda': .99, 'discount': .99},
-                #{'net.activation': 'relu'},
-                #{'net.l1': 3, 'net.l2': 3},
-                #{'entropy_regularization': .55},
+                [
+                    {},
+                    {'baseline_mode': False},
+                    {'net.window': 1},
+                    {'net.l1': 3., 'net.l2': 0., 'net.dropout': 0.},  # l1
+                    {'optimization_steps': 15},
+                    {'step_window': 400}
+                ],
+                [
+                    {'scale': False},
+                    {'net.l1': 0., 'net.l2': 0., 'net.dropout': 0.},  # none
+                    {'net.window': 3},
+                    {'net.depth_mid': 3, 'net.depth_post': 1},
+                    {'net.stride': 1},
+                ],
+                [
+                    {'punish_repeats': True},
+                    {'net.width': 4},
+                    {'net.width': 8},
+                    {'net.depth_mid': 3},
+                    {'net.l1': 0., 'net.l2': 0., 'net.dropout': .5},  # dropout
+                ],
+                [
+                    {'pct_change': True},
+                    {'net.activation': 'relu'},
+                    {'net.l1': 0., 'net.l2': 3., 'net.dropout': 0.},  # l2
+                    {'batch_size': 9},
+                    {'net.stride': 3},
+                ],
+                [
+                    {'unimodal': True},
+                    {'step_optimizer.learning_rate': 5.5},
+                    {'batch_size': 12},
+                    {'indicators': False},
+                    {'arbitrage': False},
+                    {'net.l1': 3., 'net.l2': 3., 'net.dropout': 0.5},  # all
+                ],
+
             ]
-            guess.update(guess_overrides[args.guess])
+            guess.update(guess_overrides[args.guess][guess_i])
             loss_fn(hypers2vec(guess))
 
-            args.guess += int(args.gpu_split)  # Go to the next mod() in line (FIXME this is brittle!)
-            if args.guess > len(guess_overrides)-1:
+            guess_i += 1
+            if guess_i > len(guess_overrides[args.guess])-1:
                 args.guess = -1  # start on GP
 
             continue
