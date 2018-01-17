@@ -5,7 +5,9 @@ def calculate_score(run):
     advantages = run['advantages']
 
     # Mean
-    return np.mean(advantages)
+    mean = np.mean(advantages)
+    if mean == 0: return -100  # no holders allowed
+    return mean
 
     ## Last advantage
     # return advantages[-1]

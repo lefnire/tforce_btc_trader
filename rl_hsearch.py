@@ -42,7 +42,7 @@ def build_net_spec(hypers, baseline=False):
     lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
     conv2d = {
         'type': 'conv2d',
-        'bias': net.bias,
+        # 'bias': net.bias,
         'l2_regularization': net.l2,
         'l1_regularization': net.l1
     }
@@ -59,28 +59,41 @@ def build_net_spec(hypers, baseline=False):
     # Mid-layer
     # TODO figure out how to use internals w/ baseline, currently not series-aware
     if not (net.type == 'lstm' and baseline):
-        n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
+        if net.type == 'conv2d':
+            n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
+            steps_out, features_out = hypers['step_window'], n_cols
+
         for i in range(net.depth_mid):
             if net.type == 'lstm':
                 # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
                 arr.append({'size': net.width, **lstm})
+                continue
 
-            elif net.type == 'conv2d':
-                # TODO dynamic window/stride division for each layer (currently very destructive)
-                step_window = math.ceil(hypers['step_window'] / (net.window * 10))
-                feature_window = math.ceil(n_cols / net.window)
+            step_window = math.ceil(steps_out / (net.window * 10))
+            feature_window = math.ceil(features_out / net.window)
+            step_stride = math.ceil(step_window / net.stride)
+            feature_stride = math.ceil(feature_window / net.stride)
 
-                step_stride = math.ceil(step_window / net.stride)
-                feature_stride = math.ceil(feature_window / net.stride)
+            # next = (length - window)/stride + 1
+            steps_out = (steps_out - step_window)/step_stride + 1
+            features_out = (features_out - feature_window)/feature_stride + 1
 
-                size = max([32, int(net.width / 4)])
-                if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
-                arr.append({
-                    'size': size,
-                    'window': (step_window, feature_window),
-                    'stride': (step_stride, feature_stride),
-                    **conv2d
-                })
+            # TODO this is ugly
+            # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1 to next layer)
+            min_window, min_stride = 3, 2
+            step_window = max([step_window, min_window])
+            feature_window = max([feature_window, min_window])
+            step_stride = max([step_stride, min_stride])
+            feature_stride = max([feature_stride, min_stride])
+
+            size = max([32, int(net.width / 4)])
+            if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
+            arr.append({
+                'size': size,
+                'window': (step_window, feature_window),
+                'stride': (step_stride, feature_stride),
+                **conv2d
+            })
         if net.type == 'conv2d':
             arr.append({'type': 'flatten'})
 
@@ -136,7 +149,7 @@ def custom_net(hypers, print_net=False, baseline=False):
 
 def bins_of_8(x): return int(x // 8) * 8
 
-def two_to_the(x): return 2**int(x)
+def two_to_the(x, _): return 2**x
 
 def ten_to_the_neg(x, _): return 10**-x
 
@@ -168,9 +181,10 @@ hypers['agent'] = {}
 hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
-        'vals': [3, 12],
+        'vals': [3, 11],
         'guess': 10,  # 1024
-        'pre': two_to_the
+        'pre': round,
+        'hydrate': two_to_the
     },
     'keep_last_timestep': {
         'type': 'bool',
@@ -193,7 +207,7 @@ hypers['model'] = {
         'type': 'bounded',
         'vals': [1, 30],  # want to try higher, but too slow to test
         'guess': 10,
-        'pre': int
+        'pre': round
     },
     'discount': {
         'type': 'bounded',
@@ -251,21 +265,22 @@ hypers['custom'] = {
     },
     'net.depth_mid': {
         'type': 'bounded',
-        'vals': [1, 4],
-        'guess': 2,
-        'pre': int
+        'vals': [1, 3],
+        'guess': 3,
+        'pre': round
     },
     'net.depth_post': {
         'type': 'bounded',
-        'vals': [1, 4],
+        'vals': [1, 3],
         'guess': 2,
-        'pre': int
+        'pre': round
     },
     'net.width': {
         'type': 'bounded',
-        'vals': [3, 10],
+        'vals': [3, 9],
         'guess': 6,  # 64
-        'hydrate': lambda x, _: 2**int(x)  # bins of 8, 16, 32, 64, ... (10 = 2014, but is ceil so actual max is 512)
+        'pre': round,
+        'hydrate': two_to_the
     },
     'net.funnel': {
         'type': 'bool',
@@ -279,19 +294,19 @@ hypers['custom'] = {
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .5],
-        'guess': .5,
+        'guess': .001,
         'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 3,
+        'guess': 7,  # turn off. setting to 0 causes issues in GP code
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 7,  # turn off. setting to 0 causes issues in GP code
+        'guess': 3,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'pct_change': {
@@ -326,30 +341,26 @@ hypers['lstm'] = {
     },
 }
 hypers['conv2d'] = {
-    'net.bias': {
-        'type': 'bool',
-        'guess': True
-    },
+    # 'net.bias': True,
     'net.window': {
         'type': 'bounded',
-        # FIXME this isn't great!
         # window t-shirt sizes, smaller # = more destructive
-        'vals': [1, 4],
+        'vals': [1, 3],
         'guess': 2,
-        'pre': int,
+        'pre': round,
     },
     'net.stride': {
         'type': 'bounded',
         # how many ways to divide a window? 1 = no-overlap, 2 = half-overlap (smaller # = more destructive)
-        'vals': [1, 4],
-        'guess': 2,
-        'pre': int
+        'vals': [1, 3],
+        'guess': 3,
+        'pre': round
     },
     'step_window': {
         'type': 'bounded',
         'vals': [100, 400],
-        'guess': 150,
-        'pre': int,
+        'guess': 200,
+        'pre': round,
     }
 }
 
@@ -473,7 +484,7 @@ class HSearchEnv(object):
         # GPU split
         session_config = None
         if self.gpu_split != 1:
-            fraction = .85 / self.gpu_split if self.gpu_split > 1 else self.gpu_split
+            fraction = .9 / self.gpu_split if self.gpu_split > 1 else self.gpu_split
             session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
         main['session_config'] = session_config
 
@@ -681,40 +692,50 @@ def main_gp():
             guess_overrides = [
                 [
                     {},
-                    {'baseline_mode': False},
-                    {'net.window': 1},
-                    {'net.l1': 3., 'net.l2': 0., 'net.dropout': 0.},  # l1
-                    {'optimization_steps': 15},
-                    {'step_window': 400}
+                    {'net.l1': 7., 'net.l2': 3., 'net.dropout': 0.5},  # l2 + dropout
+                    {'pct_change': True},
+                ],
+                [
+                    {'net.l1': 7., 'net.l2': 7., 'net.dropout': 0.001},  # none
+                    {'optimization_steps': 20},
+                    {'step_optimizer.learning_rate': 5.5},
+
+                ],
+                [
+                    {'net.l1': 7., 'net.l2': 7., 'net.dropout': .5},  # dropout
+                    {'net.width': 4},
+                    {'net.width': 8},
+                ],
+                [
+                    {'net.l1': 7., 'net.l2': 3., 'net.dropout': 0.001},  # l2
+                    {'net.activation': 'relu'},
+                    {'net.stride': 2},
+
+                ],
+                [
+                    {'net.l1': 3., 'net.l2': 3., 'net.dropout': 0.5},  # all
+                    {'step_window': 400},
+                    {'unimodal': True},
                 ],
                 [
                     {'scale': False},
-                    {'net.l1': 0., 'net.l2': 0., 'net.dropout': 0.},  # none
+                    {'baseline_mode': False},
+                    {'net.window': 1},
+                ],
+                [
                     {'net.window': 3},
-                    {'net.depth_mid': 3, 'net.depth_post': 1},
+                    {'net.depth_post': 1},
                     {'net.stride': 1},
                 ],
                 [
+                    {'net.depth_mid': 2},
                     {'punish_repeats': True},
-                    {'net.width': 4},
-                    {'net.width': 8},
-                    {'net.depth_mid': 3},
-                    {'net.l1': 0., 'net.l2': 0., 'net.dropout': .5},  # dropout
-                ],
-                [
-                    {'pct_change': True},
-                    {'net.activation': 'relu'},
-                    {'net.l1': 0., 'net.l2': 3., 'net.dropout': 0.},  # l2
-                    {'batch_size': 9},
-                    {'net.stride': 3},
-                ],
-                [
-                    {'unimodal': True},
-                    {'step_optimizer.learning_rate': 5.5},
-                    {'batch_size': 12},
-                    {'indicators': False},
                     {'arbitrage': False},
-                    {'net.l1': 3., 'net.l2': 3., 'net.dropout': 0.5},  # all
+                ],
+                [
+                    {'batch_size': 9},
+                    {'batch_size': 11},
+                    {'indicators': False},
                 ],
 
             ]
