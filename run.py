@@ -4,7 +4,7 @@ import shutil
 
 import data
 from btc_env import BitcoinEnv
-from rl_hsearch import HSearchEnv
+from hypersearch import HSearchEnv
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu_split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")

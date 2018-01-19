@@ -1,6 +1,9 @@
-""" gp.py
-
+"""
 Bayesian optimisation of loss functions.
+https://github.com/thuijskens/bayesian-optimization
+
+TODO this file comes from ^, the only modification being the added method at the bottom. Let's get this into
+requirements.txt as a git+https requirement, import these fns, and this file will just be the one addition
 """
 
 import os.path

@@ -4,9 +4,8 @@ Note there's a lot of nulls in there, see my empty-handling below & determine if
 
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine
+from data.data import engine
 
-engine = create_engine("postgres://lefnire:lefnire@localhost:5432/kaggle")
 conn = engine.connect()
 
 column_renames = {
@@ -20,8 +19,15 @@ column_renames = {
     'Weighted_Price': 'weighted_price'
 }
 
-for filename in ['coinbase', 'coincheck', 'bitstamp']:
-    df = pd.read_csv(f'../tmp/kaggle/{filename}.csv')
+filenames = {
+    'bitstamp': 'bitstampUSD_1-min_data_2012-01-01_to_2018-01-08.csv',
+    'coinbase': 'coinbaseUSD_1-min_data_2014-12-01_to_2018-01-08.csv',
+    'coincheck': 'coincheckJPY_1-min_data_2014-10-31_to_2018-01-08.csv'
+}
+
+for k in ['coinbase', 'coincheck', 'bitstamp']:
+    filename = filenames[filename]
+    df = pd.read_csv(f'./bitcoin-historical-data/{filename}.csv')
     df = df.rename(columns=column_renames)
 
     print(f'{filename}: saving to DB')

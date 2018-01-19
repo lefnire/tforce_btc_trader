@@ -12,19 +12,24 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
 
 from btc_env import BitcoinEnv
-import data, utils
+import utils
+from data import data
 
 """
-Each hyper is specified as `key: {type, vals, requires, hook}`. 
+Each hyper is specified as `key: {type, vals, guess, pre/post/hydrate}`. 
 - type: (int|bounded|bool). bool is True|False param, bounded is a float between min & max, int is "choose one" 
     eg 'activation' one of (tanh|elu|selu|..)`)
 - vals: the vals this hyper can take on. If type(vals) is primitive, hard-coded at this value. If type is list, then
     (a) min/max specified inside (for bounded); (b) all possible options (for 'int'). If type is dict, then the keys
     are used in the searching (eg, look at the network hyper) and the values are used as the configuration.
 - guess: initial guess (supplied by human) to explore      
-- pre/post (hooks): transform this hyper before plugging it into Configuration(). Eg, we'd use type='bounded' for batch size since
-    we want to range from min to max (insteaad of listing all possible values); but we'd cast it to an int inside
-    hook before using it. (Actually we clamp it to blocks of 8, as you'll see)
+- pre/post/hydrate: hooks that transform this hyper before plugging it. Eg, we'd use type='bounded' for batch size since
+    we want to range from min to max (instead of listing all possible values); but we'd cast it to an int inside
+    hook before using it.
+    - pre: transform it immediately, it'll be saved in the runs table this way
+    - post: transform it after all the pre-hooks are run, in case this depends on other hypers
+    - hydrate: big-time transformation to the whole hypers dict, based on this hyper val. It won't be saved to the 
+        database looking like this. Eg, baseline_mode, when set to True, does a number on many other hypers. 
 
 The special sauce is specifying hypers as dot-separated keys, like `memory.type`. This allows us to easily 
 mix-and-match even within a config-dict. Eg, you can try different combos of hypers within `memory{}` w/o having to 
@@ -592,8 +597,8 @@ def main_gp():
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu_split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    parser.add_argument('-n', '--net_type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
+    parser.add_argument('-g', '--gpu-split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
+    parser.add_argument('-n', '--net-type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
     args = parser.parse_args()

@@ -1,0 +1,10 @@
+{
+  "DB_RUNS": "postgres://user:password@host/runs",
+  "DB_HISTORY": "postgres://user:password@host/history",
+  "DB_HISTORY_LIVE": "postgres://user:password@host/history_live",
+  "GDAX": {
+    "passphrase": "",
+    "key": "",
+    "b64secret": ""
+  }
+}

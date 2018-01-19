@@ -10,8 +10,9 @@ from box import Box
 from tensorforce.environments import Environment
 from tensorforce.execution import Runner
 from sklearn.preprocessing import RobustScaler, robust_scale
-from data import Exchange, EXCHANGE
-import data
+from data.data import Exchange, EXCHANGE
+from data import data
+
 
 class Mode(Enum):
     TRAIN = 1

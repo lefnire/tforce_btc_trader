@@ -3,12 +3,13 @@ from enum import Enum
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy import text
+import os
 
-config_json = json.load(open('config.json'))
-DB = config_json['DB_URL'].split('/')[-1]
-engine = create_engine(config_json['DB_URL'])
-engine_live = create_engine(config_json['LIVE_DB_URL'])
-engine_runs = create_engine(config_json['RUNS_DB_URL'])
+config_json = json.load(open(os.path.dirname(__file__) + '/../config.json'))
+DB = config_json['DB_HISTORY'].split('/')[-1]
+engine = create_engine(config_json['DB_HISTORY'])
+engine_live = create_engine(config_json['DB_HISTORY_LIVE'])
+engine_runs = create_engine(config_json['DB_RUNS'])
 
 # From connecting source file, import engine and run the following code. Need each connection to be separate
 # (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
@@ -190,10 +191,10 @@ def fetch_more(conn, last_timestamp, arbitrage):
     return new_data, n_new, latest_timestamp
 
 
-def setup_runs_table(conn):
-    conn.execute("""
-        --create type if not exists run_flag as enum ('random', 'winner');
-        create table if not exists public.runs
+def setup_runs_table():
+    conn_runs = engine_runs.connect()
+    conn_runs.execute("""
+        create table if not exists runs
         (
             id serial not null,
             hypers jsonb not null,
