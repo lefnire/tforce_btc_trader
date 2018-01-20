@@ -118,7 +118,7 @@ class BitcoinEnv(Environment):
             # width = window width (150 time-steps)
             # height = num_features, but one layer for each table
             # channels = 1 (for now); revisit with arbitrage when exchanges have same ncols
-            self.states_['series']['shape'] = (self.hypers.step_window, self.cols_, 1)
+            self.states_['series']['shape'] = (self.hypers.step_window, 1, self.cols_)
 
         scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
         if scaler_k not in scalers:
@@ -185,8 +185,8 @@ class BitcoinEnv(Environment):
         return states, prices
 
     def _reshape_window_for_conv2d(self, window):
-        return np.expand_dims(window, -1)
-        # see 0447710a87770eaf0e2ff99e0479e6602793c3b1 for 3d arbitrage
+        return np.expand_dims(window, axis=1)
+        # see https://goo.gl/ghTGiU for 3d arbitrage
 
     def use_dataset(self, mode, no_kill=False):
         """Make sure to call this before reset()!"""

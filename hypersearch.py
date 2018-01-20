@@ -66,7 +66,7 @@ def build_net_spec(hypers, baseline=False):
     if not (net.type == 'lstm' and baseline):
         if net.type == 'conv2d':
             n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
-            steps_out, features_out = hypers['step_window'], n_cols
+            steps_out = hypers['step_window']
 
         for i in range(net.depth_mid):
             if net.type == 'lstm':
@@ -75,28 +75,23 @@ def build_net_spec(hypers, baseline=False):
                 continue
 
             step_window = math.ceil(steps_out / (net.window * 10))
-            feature_window = math.ceil(features_out / net.window)
             step_stride = math.ceil(step_window / net.stride)
-            feature_stride = math.ceil(feature_window / net.stride)
 
             # next = (length - window)/stride + 1
             steps_out = (steps_out - step_window)/step_stride + 1
-            features_out = (features_out - feature_window)/feature_stride + 1
 
             # TODO this is ugly
             # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1 to next layer)
             min_window, min_stride = 3, 2
             step_window = max([step_window, min_window])
-            feature_window = max([feature_window, min_window])
             step_stride = max([step_stride, min_stride])
-            feature_stride = max([feature_stride, min_stride])
 
             size = max([32, int(net.width / 4)])
-            if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
+            # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
             arr.append({
                 'size': size,
-                'window': (step_window, feature_window),
-                'stride': (step_stride, feature_stride),
+                'window': (step_window, 1),
+                'stride': (step_stride, 1),
                 **conv2d
             })
         if net.type == 'conv2d':
@@ -742,6 +737,10 @@ def main_gp():
                     {'batch_size': 11},
                     {'indicators': False},
                 ],
+                [
+                    {'batch_size': 5},
+                    {'batch_size': 5, 'step_optimizer.learning_rate': 7.9, 'optimization_steps': 29},
+                ]
 
             ]
             guess.update(guess_overrides[args.guess][guess_i])
