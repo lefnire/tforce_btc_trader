@@ -17,6 +17,7 @@ from data import data
 
 """
 Each hyper is specified as `key: {type, vals, guess, pre/post/hydrate}`. 
+- The key can be dot-separated, like `memory.type` (which will get expanded as dict-form) 
 - type: (int|bounded|bool). bool is True|False param, bounded is a float between min & max, int is "choose one" 
     eg 'activation' one of (tanh|elu|selu|..)`)
 - vals: the vals this hyper can take on. If type(vals) is primitive, hard-coded at this value. If type is list, then
@@ -30,11 +31,6 @@ Each hyper is specified as `key: {type, vals, guess, pre/post/hydrate}`.
     - post: transform it after all the pre-hooks are run, in case this depends on other hypers
     - hydrate: big-time transformation to the whole hypers dict, based on this hyper val. It won't be saved to the 
         database looking like this. Eg, baseline_mode, when set to True, does a number on many other hypers. 
-
-The special sauce is specifying hypers as dot-separated keys, like `memory.type`. This allows us to easily 
-mix-and-match even within a config-dict. Eg, you can try different combos of hypers within `memory{}` w/o having to 
-specify the whole block combo (`memory=({this1,that1}, {this2,that2})`). To use this properly, make sure to specify
-a `requires` field where necessary. 
 """
 
 
@@ -42,15 +38,20 @@ def build_net_spec(hypers, baseline=False):
     """Builds a net_spec from some specifications like width, depth, etc"""
     net, indicators, arbitrage = Box(hypers['net']), hypers['indicators'], hypers['arbitrage']
 
-    dense = {'type': 'dense', 'activation': net.activation, 'l2_regularization': net.l2, 'l1_regularization': net.l1}
-    dropout = {'type': 'dropout', 'rate': net.dropout}
-    lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
+    dense = {
+        'type': 'dense',
+        'activation': net.activation,
+        'l2_regularization': net.l2,
+        'l1_regularization': net.l1
+    }
     conv2d = {
         'type': 'conv2d',
         # 'bias': net.bias,
         'l2_regularization': net.l2,
         'l1_regularization': net.l1
     }
+    lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
+    dropout = {'type': 'dropout', 'rate': net.dropout}
 
     arr = []
 
@@ -182,13 +183,13 @@ hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
         'vals': [3, 11],
-        'guess': 10,  # 1024
+        'guess': 6,
         'pre': round,
         'hydrate': two_to_the
     },
     'keep_last_timestep': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     }
 }
 hypers['model'] = {
@@ -200,19 +201,19 @@ hypers['model'] = {
     'optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0., 8.],
-        'guess': 6.5,
+        'guess': 6,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
         'type': 'bounded',
         'vals': [1, 30],  # want to try higher, but too slow to test
-        'guess': 10,
+        'guess': 20,
         'pre': round
     },
     'discount': {
         'type': 'bounded',
         'vals': [.9, .99],
-        'guess': .99
+        'guess': .96
     },
     # TODO variable_noise
 }
@@ -220,7 +221,7 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0, 5],
-        'guess': 2,
+        'guess': 2.45,
         'hydrate': min_ten_neg(1e-4, 0.)
     }
 }
@@ -233,7 +234,7 @@ hypers['pg_model'] = {
     'gae_lambda': {
         'type': 'bounded',
         'vals': [.8, 1.],
-        'guess': .95,
+        'guess': .96,
         'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
     },
 }
@@ -272,13 +273,13 @@ hypers['custom'] = {
     'net.depth_post': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 2,
+        'guess': 1,
         'pre': round
     },
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 6,  # 64
+        'guess': 6,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -293,20 +294,20 @@ hypers['custom'] = {
     },
     'net.dropout': {
         'type': 'bounded',
-        'vals': [0., .5],
-        'guess': .001,
+        'vals': [0., .2],
+        'guess': .26,
         'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
         'type': 'bounded',
-        'vals': [0, 7],
-        'guess': 7,  # turn off. setting to 0 causes issues in GP code
+        'vals': [0, 7],  # to disable, set to 7 (not 0)
+        'guess': 1.7,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 3,
+        'guess': 5.6,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'pct_change': {
@@ -321,7 +322,6 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': True
     },
-    # Repeat-actions intervention: double the reward (False), or punish (True)?
     'punish_repeats': {
         'type': 'bool',
         'guess': False
@@ -346,7 +346,7 @@ hypers['conv2d'] = {
         'type': 'bounded',
         # window t-shirt sizes, smaller # = more destructive
         'vals': [1, 3],
-        'guess': 2,
+        'guess': 3,
         'pre': round,
     },
     'net.stride': {
@@ -359,7 +359,7 @@ hypers['conv2d'] = {
     'step_window': {
         'type': 'bounded',
         'vals': [100, 400],
-        'guess': 200,
+        'guess': 250,
         'pre': round,
     }
 }
@@ -689,65 +689,11 @@ def main_gp():
 
         if args.guess != -1:
             guess = {k: v['guess'] for k, v in hypers_.items()}
-            guess_overrides = [
-                [
-                    {},
-                    {'net.l1': 7., 'net.l2': 3., 'net.dropout': 0.5},  # l2 + dropout
-                    {'pct_change': True},
-                ],
-                [
-                    {'net.l1': 7., 'net.l2': 7., 'net.dropout': 0.001},  # none
-                    {'optimization_steps': 20},
-                    {'step_optimizer.learning_rate': 5.5},
-
-                ],
-                [
-                    {'net.l1': 7., 'net.l2': 7., 'net.dropout': .5},  # dropout
-                    {'net.width': 4},
-                    {'net.width': 8},
-                ],
-                [
-                    {'net.l1': 7., 'net.l2': 3., 'net.dropout': 0.001},  # l2
-                    {'net.activation': 'relu'},
-                    {'net.stride': 2},
-
-                ],
-                [
-                    {'net.l1': 3., 'net.l2': 3., 'net.dropout': 0.5},  # all
-                    {'step_window': 400},
-                    {'unimodal': True},
-                ],
-                [
-                    {'scale': False},
-                    {'baseline_mode': False},
-                    {'net.window': 1},
-                ],
-                [
-                    {'net.window': 3},
-                    {'net.depth_post': 1},
-                    {'net.stride': 1},
-                ],
-                [
-                    {'net.depth_mid': 2},
-                    {'punish_repeats': True},
-                    {'arbitrage': False},
-                ],
-                [
-                    {'batch_size': 9},
-                    {'batch_size': 11},
-                    {'indicators': False},
-                ],
-                [
-                    {'batch_size': 5},
-                    {'batch_size': 5, 'step_optimizer.learning_rate': 7.9, 'optimization_steps': 29},
-                ]
-
-            ]
-            guess.update(guess_overrides[args.guess][guess_i])
+            guess.update(utils.guess_overrides[args.guess][guess_i])
             loss_fn(hypers2vec(guess))
 
             guess_i += 1
-            if guess_i > len(guess_overrides[args.guess])-1:
+            if guess_i > len(utils.guess_overrides[args.guess])-1:
                 args.guess = -1  # start on GP
 
             continue

@@ -14,6 +14,8 @@ A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin tradin
   - `cd tensorforce && pip install -e .`
   - ^ is because of [issues/1](https://github.com/lefnire/tforce_btc_trader/issues/1) if anyone wants to tackle that.
 
+Note: you'll wanna run this on a beefy rig. Use a solid GPU, these are CNNs - minimum I've had success with is K80; 2-3x perf using 1080ti. Have lots of RAM available, my runs take 8GB+ (this could be greatly optimized the way step windows are buffered). Want my advice, build a PC or use Google Cloud Platform w/ Preemptible P100s.
+
 ### 2. Populate Data
 - Download [mczielinski/bitcoin-historical-data](https://www.kaggle.com/mczielinski/bitcoin-historical-data)
 - Extract to `data/populate/bitcoin-historical-data`

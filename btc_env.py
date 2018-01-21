@@ -67,7 +67,7 @@ scalers = {}
 
 ALLOW_SEED = False
 TIMESTEPS = int(2e6)
-START_CAP = 3000
+START_CAP = 3000.
 
 
 class BitcoinEnv(Environment):
@@ -76,6 +76,7 @@ class BitcoinEnv(Environment):
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
+        self.start_cash = self.start_value = START_CAP
         self.acc = Box(
             episode=dict(
                 i=0,
@@ -197,7 +198,7 @@ class BitcoinEnv(Environment):
             self.conn = data.engine_live.connect()
             # Work with 6000 timesteps up until the present (play w/ diff numbers, depends on LSTM)
             # Offset=0 data.py currently pulls recent-to-oldest, then reverses
-            limit, offset = (6000, 0) if not self.conv2d else (self.hypers.step_window, 0)
+            limit, offset = (6000, 0) # if not self.conv2d else (self.hypers.step_window + 1, 0)
             df, self.last_timestamp = data.db_to_dataframe(
                 self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage, last_timestamp=True)
             # save away for now so we can keep transforming it as we add new data (find a more efficient way)
@@ -218,10 +219,10 @@ class BitcoinEnv(Environment):
         self.time = time.time()
         step_acc, ep_acc = self.acc.step, self.acc.episode
         # Cash & value are the real scores - how much we end up with at the end of an episode
-        step_acc.cash = step_acc.value = START_CAP
+        step_acc.cash, step_acc.value = self.start_cash, self.start_value
         # But for our purposes, we care more about "how much better is what we made than if we held". We're training
         # a trading bot, not an investing bot. So we compare these at the end, calling it "advantage"
-        step_acc.hold = Box(value=START_CAP, cash=START_CAP)
+        step_acc.hold = Box(value=self.start_cash, cash=self.start_value)
         start_timestep = self.hypers.step_window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
@@ -291,7 +292,7 @@ class BitcoinEnv(Environment):
 
         step_acc.i += 1
         ep_acc.total_steps += 1
-        cash_scaled, val_scaled = step_acc.cash / START_CAP,  step_acc.value / START_CAP
+        cash_scaled, val_scaled = step_acc.cash / self.start_cash,  step_acc.value / self.start_value
         repeats_scaled = step_acc.repeats / too_many_repeats
 
         next_state = self.observations[step_acc.i]
@@ -319,15 +320,15 @@ class BitcoinEnv(Environment):
             if signal < 0:
                 if live:
                     self.gdax_client.sell(
-                        price=str(abs_sig),  # USD
-                        # size='0.01',  # BTC
+                        # price=str(abs_sig),  # USD
+                        size=float(self.btc_price * abs_sig),  # BTC
                         product_id='BTC-USD')
                 print(f"Sold {signal}!")
             elif signal > 0:
                 if live:
                     self.gdax_client.buy(
-                        price=str(abs_sig),  # USD
-                        # size='0.01',  # BTC
+                        # price=str(abs_sig),  # USD
+                        size=float(self.btc_price * abs_sig),  # BTC
                         product_id='BTC-USD')
                 print(f"Bought {signal}!")
             elif step_acc.i % 10 == 0:
@@ -349,10 +350,11 @@ class BitcoinEnv(Environment):
                 step_acc.cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
                 step_acc.value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
             if signal != 0:
-                print(f"New total: {step_acc.cash + step_acc.value}")
+                print(f"New Total: {step_acc.cash + step_acc.value}")
+                self.episode_finished(None)  # Fixme refactor, awkward function to call here
             next_state['stationary'] = [
-                step_acc.cash / START_CAP,
-                step_acc.value / START_CAP,
+                step_acc.cash / self.start_cash,
+                step_acc.value / self.start_value,
                 repeats_scaled  # TODO do I need to handle specifically for live?
             ]
             terminal = False
@@ -365,8 +367,8 @@ class BitcoinEnv(Environment):
         time_ = round(time.time() - self.time)
         signals = step_acc.signals
 
-        advantage = ((step_acc.cash + step_acc.value) - START_CAP * 2) - \
-                    ((step_acc.hold.value + step_acc.hold.cash) - START_CAP * 2)
+        advantage = ((step_acc.cash + step_acc.value) - (self.start_cash + self.start_value)) - \
+                    ((step_acc.hold.value + step_acc.hold.cash) - (self.start_cash + self.start_value))
         self.acc.episode.advantages.append(advantage)
         self.acc.episode.uniques.append(float(len(np.unique(signals))))
 
@@ -399,16 +401,11 @@ class BitcoinEnv(Environment):
                     i = n_tests
             i += 1
 
-        # On last "how would it have done IRL?" run
+        # On last "how would it have done IRL?" run, without getting in the way (no killing on repeats, 0-balance)
         self.use_dataset(Mode.TEST, no_kill=True)
         self.run_deterministic(runner, print_results=True)
 
-    def run_test(self, agent):
-        runner = Runner(agent=agent, environment=self)
-        self.use_dataset(Mode.TEST_LIVE, no_kill=True)
-        self.run_deterministic(runner, print_results=True)
-
-    def run_live(self, agent):
+    def run_live(self, agent, test=True):
         gdax_conf = data.config_json['GDAX']
         # TODO how to use sandbox?
         self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'])
@@ -416,10 +413,10 @@ class BitcoinEnv(Environment):
         #                                        api_url="https://api-public.sandbox.gdax.com")
 
         accounts = self.gdax_client.get_accounts()
-        cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
-        value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
-        print(f'Starting total: {cash + value}')
+        self.start_cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
+        self.start_value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
+        print(f'Starting total: {self.start_cash + self.start_value}')
 
         runner = Runner(agent=agent, environment=self)
-        self.use_dataset(Mode.LIVE, no_kill=True)
+        self.use_dataset(Mode.TEST_LIVE if test else Mode.LIVE, no_kill=True)
         self.run_deterministic(runner, print_results=True)

@@ -37,10 +37,8 @@ def main():
         **hydrated
     )
 
-    if args.live:
-        env.run_live(agent)
-    elif args.test_live:
-        env.run_test(agent)
+    if args.live or args.test_live:
+        env.run_live(agent, test=args.test_live)
     else:
         env.train_and_test(agent, early_stop=args.early_stop, n_tests=args.runs)
         agent.close()
