@@ -67,7 +67,6 @@ scalers = {}
 
 ALLOW_SEED = False
 TIMESTEPS = int(2e6)
-START_CAP = 3000.
 
 
 class BitcoinEnv(Environment):
@@ -76,7 +75,7 @@ class BitcoinEnv(Environment):
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
-        self.start_cash = self.start_value = START_CAP
+        self.start_cash, self.start_value = 0.01, .2
         self.acc = Box(
             episode=dict(
                 i=0,
@@ -91,11 +90,11 @@ class BitcoinEnv(Environment):
 
         # TODO this might need to be placed somewhere that updates relatively often
         # gdax min order size = .01btc; krakken = .002btc
+        self.min_trade = {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
         try:
             self.btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
-            self.min_trade = self.btc_price * {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
         except:
-            self.min_trade = 150
+            self.btc_price = 12000
 
         # Action space
         trade_cap = self.min_trade * 2
@@ -306,8 +305,8 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
-            reward -= 1000
+        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 10000):
+            reward -= .05  # BTC, ~$500
             terminal = True
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
@@ -321,14 +320,14 @@ class BitcoinEnv(Environment):
                 if live:
                     self.gdax_client.sell(
                         # price=str(abs_sig),  # USD
-                        size=float(self.btc_price * abs_sig),  # BTC
+                        size=float(abs_sig),  # BTC
                         product_id='BTC-USD')
                 print(f"Sold {signal}!")
             elif signal > 0:
                 if live:
                     self.gdax_client.buy(
                         # price=str(abs_sig),  # USD
-                        size=float(self.btc_price * abs_sig),  # BTC
+                        size=float(abs_sig),  # BTC
                         product_id='BTC-USD')
                 print(f"Bought {signal}!")
             elif step_acc.i % 10 == 0:
@@ -347,8 +346,8 @@ class BitcoinEnv(Environment):
 
             if live:
                 accounts = self.gdax_client.get_accounts()
-                step_acc.cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
-                step_acc.value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
+                step_acc.cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance']) / self.btc_price
+                step_acc.value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance'])
             if signal != 0:
                 print(f"New Total: {step_acc.cash + step_acc.value}")
                 self.episode_finished(None)  # Fixme refactor, awkward function to call here
@@ -373,7 +372,7 @@ class BitcoinEnv(Environment):
         self.acc.episode.uniques.append(float(len(np.unique(signals))))
 
         # Print (limit to note-worthy)
-        common = dict((round(k), v) for k, v in Counter(signals).most_common(5))
+        common = dict((round(k,2), v) for k, v in Counter(signals).most_common(5))
         high, low = max(signals), min(signals)
         completion = f"|{int(ep_acc.total_steps / TIMESTEPS * 100)}%"
         print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
@@ -407,14 +406,13 @@ class BitcoinEnv(Environment):
 
     def run_live(self, agent, test=True):
         gdax_conf = data.config_json['GDAX']
-        # TODO how to use sandbox?
         self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'])
         # self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'],
         #                                        api_url="https://api-public.sandbox.gdax.com")
 
         accounts = self.gdax_client.get_accounts()
-        self.start_cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance'])
-        self.start_value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance']) * self.btc_price
+        self.start_cash = float([a for a in accounts if a['currency'] == 'USD'][0]['balance']) / self.btc_price
+        self.start_value = float([a for a in accounts if a['currency'] == 'BTC'][0]['balance'])
         print(f'Starting total: {self.start_cash + self.start_value}')
 
         runner = Runner(agent=agent, environment=self)

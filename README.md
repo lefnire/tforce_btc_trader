@@ -9,10 +9,7 @@ A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin tradin
   - `cp config.example.json config.json`, pop ^ into `config.json`
 - Install [TA-Lib](https://github.com/mrjbq7/ta-lib) manually.
 - `pip install -r requirements.txt`
-- Install TensorForce (my fork)
-  - `git clone https://github.com/lefnire/tensorforce.git` (somewhere outside this repo)
-  - `cd tensorforce && pip install -e .`
-  - ^ is because of [issues/1](https://github.com/lefnire/tforce_btc_trader/issues/1) if anyone wants to tackle that.
+  - If issues, try installing these deps manually.
 
 Note: you'll wanna run this on a beefy rig. Use a solid GPU, these are CNNs - minimum I've had success with is K80; 2-3x perf using 1080ti. Have lots of RAM available, my runs take 8GB+ (this could be greatly optimized the way step windows are buffered). Want my advice, build a PC or use Google Cloud Platform w/ Preemptible P100s.
 
@@ -24,12 +21,12 @@ Note: you'll wanna run this on a beefy rig. Use a solid GPU, these are CNNs - mi
   - If you have trouble with that, just copy/paste the SQL from that file, execute against your `hyper_runs` DB from above.
 
 ### 3. Hypersearch
-The crux of practical reinforcement learning is finding the right hyper-parameter combo (things like neural-network width/depth, L1 / L2 / Dropout numbers, etc). Some papers have listed optimal default hypers. Eg, the Proximate Policy Optimization (PPO) [paper](https://blog.openai.com/openai-baselines-ppo/) has a set of good defaults. But in my experience, they don't work well for our purposes (time-series / trading). I'll keep my own "best defaults" updated in this project, but YMMV and you'll very likely need to try different hyper combos yourself. The file `hypersearch.py` will search hypers forever, ever honing in on better and better combos (using Bayesian Optimization (BO), see `gp.py`).
+The crux of practical reinforcement learning is finding the right hyper-parameter combo (things like neural-network width/depth, L1 / L2 / Dropout numbers, etc). Some papers have listed optimal default hypers. Eg, the Proximate Policy Optimization (PPO) [paper](https://blog.openai.com/openai-baselines-ppo/) has a set of good defaults. But in my experience, they don't work well for our purposes (time-series / trading). I'll keep my own "best defaults" updated in this project, but YMMV and you'll very likely need to try different hyper combos yourself. The file `hypersearch.py` will search hypers forever, ever honing in on better and better combos (using Bayesian Optimization (BO), see `gp.py`). See Hypersearch section below for more details.
 
 `python hypersearch.py`
 
 Optional flags:
-- `--guess <int>`: sometimes you don't want BO, which is pretty willy-nilly at first, to do the searching. Instead you want to try a hunch or two of your own first. Open `hypersearch.py` and add some hyper-override dicts in the `guess_overrides` array near the bottom, then use `--guess <idx in that array>`. Using `--guess 0`, which is `{}` (aka no overrides) runs hypersearch against the hard-coded default hypers, but you might as well run `run.py` (below).
+- `--guess <int>`: sometimes you don't want BO, which is pretty willy-nilly at first, to do the searching. Instead you want to try a hunch or two of your own first. Open `hypersearch.py` and add some hyper-override dicts in the `guess_overrides` array in `utils.py`, use `--guess <idx in that array>`. Using `--guess 0`, which is `{}` (aka no overrides) runs hypersearch against the hard-coded default hypers, but you might as well run `run.py` (below).
 - `--gpu-split <int>`: number of ways to split a single GPU. Sometimes you'll be using a 1080ti or Tesla V100 - beastly GPUs - and `nvidia-smi -l` will show you're using some 10-20% of your GPU. What a waste. So you can use `--gpu-split 3` to split your V100 3 ways in 3 separate tabs, getting more bang-for-buck.
 - `--net-type <lstm|conv2d>`: see discussion below (LSTM v CNN)
 - `--boost`: you can optionally use gradient boosting when searching for the best hyper combo, instead of BO. BO is more exploratory and thorough, gradient boosting is more "find the best solution _now_". I tend to use `--boost` after say 100 runs are in the database, since BO may still be dilly-dallying till 200-300 and daylight's burning. Boost will suck in the early runs.
@@ -90,6 +87,14 @@ So how does CNN even make sense for time-series? Well we construct an "image" of
 TensorForce has all sorts of models you can play with. This project currently only supports Proximate Policy Optimization (PPO), but I encourage y'all to add in other models (esp VPG, TRPO, DDPG, ACKTR, etc) and submit PRs. ACKTR is the current state-of-the-art Policy Gradient model, but not yet available in TensorForce. PPO is the second-most-state-of-the-art, so we're using that. TRPO is 3rd, VPG is old. DDPG I haven't put much thought into.
 
 Those are the Policy Gradient models. Then there's the Q-Learning approaches (DQNs, etc). We're not using those because they only support discrete actions, not continuous actions. Our agent has one discrete action (buy|sell|hold), and one continuous action (how much?). Without that "how much" continuous flexibility, building an algo-trader would be... well, not so cool. You could do something like (discrete action = (buy-$200, sell-$200, hold)), but I dunno man... continuous is slicker.
+
+### Hypersearch
+
+You're likely familiar with _grid search_ and _random search_ when searching for optimial hyperparameters for machine learning models. Grid search searches literally every possible combo - exhaustive, but takes infinity years (especially w/ the number of hypers we work with in this project). Random search throws a dart at random hyper combos over and over, and you just kill it eventually and take the best. Super naive - it works ok for other ML setups, but in RL hypers are the make-or-break; more than model selection. Seriously, I've found L1 / L2 / Dropout selection more consequential than PPO vs DQN, LSTM vs CNN, etc.
+
+That's why we're using Bayesian Optimization (BO). Or sometimes you'll hear Gaussian Processes (GP), the thing you're optimizing with BO. See `gp.py`. BO starts off like random search, since it doesn't have anything to work with; and over time it hones in on the best hyper combo using Bayesian inference. Super meta - use ML to find the best hypers for your ML - but makes sense. Wait, why not use RL to find the best hypers? We could (and I tried), but deep RL takes 10s of thousands of runs before it starts converging; and each run takes some 8hrs. BO converges much quicker. I've also implemented my own flavor of hypersearch via Gradient Boosting (if you use `--boost` during training); more for my own experimentation.
+
+We're using `gp.py`, which comes from [thuijskens/bayesian-optimization](https://github.com/thuijskens/bayesian-optimization). It uses scikit-learn's in-built GP functions. I also considered dedicated BO modules, like GPyOpt. I found `gp.py` easier to work with, but haven't compared it's relative performance, nor its optimal hypers (yes, BO has its own hypers... it's turtles all the way down. But luckily I hear you can pretty safely use BO's defaults). If anyone wants to explore any of that territory, please indeed!
 
 ### Why open-source this?
 6 months+ of working on this, haven't made a dime. It seems so close! They say "a rising tide lifts all boats" - with our powers combined, perhaps we can crack the code.
