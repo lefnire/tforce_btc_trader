@@ -75,7 +75,7 @@ class BitcoinEnv(Environment):
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
-        self.start_cash, self.start_value = 0.01, .2
+        self.start_cash, self.start_value = .3, .3
         self.acc = Box(
             episode=dict(
                 i=0,
@@ -286,6 +286,7 @@ class BitcoinEnv(Environment):
             step_acc.repeats = 1  # reset penalty-growth
         else:
             if self.hypers.punish_repeats:
+                # FIXME this is too steep since we're trading in BTC. Currently hard-coded to off in hypers, revisit
                 reward -= step_acc.repeats / too_many_repeats
             step_acc.repeats += 1  # grow the penalty with time
 
@@ -305,7 +306,7 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 10000):
+        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
             reward -= .05  # BTC, ~$500
             terminal = True
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
@@ -369,13 +370,13 @@ class BitcoinEnv(Environment):
         advantage = ((step_acc.cash + step_acc.value) - (self.start_cash + self.start_value)) - \
                     ((step_acc.hold.value + step_acc.hold.cash) - (self.start_cash + self.start_value))
         self.acc.episode.advantages.append(advantage)
-        self.acc.episode.uniques.append(float(len(np.unique(signals))))
+        n_uniques = float(len(np.unique(signals)))
+        self.acc.episode.uniques.append(n_uniques)
 
         # Print (limit to note-worthy)
         common = dict((round(k,2), v) for k, v in Counter(signals).most_common(5))
-        high, low = max(signals), min(signals)
         completion = f"|{int(ep_acc.total_steps / TIMESTEPS * 100)}%"
-        print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}(high:{'%.2f'%high},low:{'%.2f'%low})")
+        print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}({n_uniques}uniq)")
         return True
 
     def run_deterministic(self, runner, print_results=True):

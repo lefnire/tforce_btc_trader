@@ -322,10 +322,7 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': True
     },
-    'punish_repeats': {
-        'type': 'bool',
-        'guess': False
-    },
+    'punish_repeats': False,
     'arbitrage': {
         'type': 'bool',
         'guess': True

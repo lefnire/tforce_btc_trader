@@ -64,7 +64,7 @@ guess_overrides = [
     [
         {'baseline_mode': False},
         {'arbitrage': False},
-        {'punish_repeats': True},
+        # {'punish_repeats': True},
     ],
     [
         # Winner from last runs
@@ -90,7 +90,7 @@ guess_overrides = [
          'net.window': 3,
          'optimization_steps': 29,
          'pct_change': False,
-         'punish_repeats': False,
+         # 'punish_repeats': False,
          'scale': True,
          'step_optimizer.learning_rate': 7.918741845681779,
          'step_optimizer.type': 'adam',
