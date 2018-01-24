@@ -2,6 +2,8 @@
 
 A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin trading bot (algo-trader). Uses deep reinforcement learning to automatically buy/sell/hold BTC based on price history.
 
+Chat on [Gittr](https://gitter.im/lefnire/tforce_btc_trader)!
+
 ### 1. Setup
 - Python 3.6+ (I use template strings a lot)
 - Install & setup Postgres
@@ -41,7 +43,7 @@ By itself it's not very useful (since you already have that run in the database)
 - `--id <int>`: the id of some winning hyper-combo you want to run with. Without this, it'll run from the hard-coded hyper defaults.
 - `--gpu-split`: (see Hypersearch section)
 - `--runs <int>`: `hypersearch.py` & `run.py` both have a max number of test runs (40 currently), you can increase or decrease that (maybe you think your run in the database could do better if given more time; increase the number here).
-- `--live`: whooa boy, time to put your agent on GDAX and make real trades! I'm gonna let you figure out how to plug it in on your own, 'cause that's danger territory. I ain't responsible for shit.
+- `--live`: whooa boy, time to put your agent on GDAX and make real trades! I'm gonna let you figure out how to plug it in on your own, 'cause that's danger territory. I ain't responsible for shit. In fact, let's make that real - disclaimer at the end of README.
 - `--live-test`: same as `live`, but without making the real trades. This will start monitoring a live-updated database (from config.json), same as `live`, but instead of making the actual trade, it pretends it did and reports back how much you would have made/lost. Dry-run. You'll definitely want to run this once or twice before running `--live`.
 - `--early-stop <int>`: sometimes your models can overfit. In particular, PPO can give you great performance for a long time and then crash-and-burn. That kind of behavior will be obvious in your visualization (below), so you can tell your run to stop after x consecutive positive episodes (depends on the agent - some find an optimum and roll for 3 positive episodes, some 8, just eyeball your graph).
 
@@ -96,7 +98,10 @@ That's why we're using Bayesian Optimization (BO). Or sometimes you'll hear Gaus
 
 We're using `gp.py`, which comes from [thuijskens/bayesian-optimization](https://github.com/thuijskens/bayesian-optimization). It uses scikit-learn's in-built GP functions. I also considered dedicated BO modules, like GPyOpt. I found `gp.py` easier to work with, but haven't compared it's relative performance, nor its optimal hypers (yes, BO has its own hypers... it's turtles all the way down. But luckily I hear you can pretty safely use BO's defaults). If anyone wants to explore any of that territory, please indeed!
 
-### Why open-source this?
-6 months+ of working on this, haven't made a dime. It seems so close! They say "a rising tide lifts all boats" - with our powers combined, perhaps we can crack the code.
+### License: AGPLv3.0
 
-Chat with me at https://gitter.im/lefnire/tforce_btc_trader!
+GPL bit so we share our findings. Community effort, right? Boats and tides. Affero bit so we can all run our own trading instances w/ personal configs / mods. Heck, any of us could run this as a service / hedge fund. I'm pretty keen on this license, having used it in a prior [internet company](https://habitica.com) I'd founded; but if someone feels strongly about a different license, please open an issue & LMK - open to suggestions. See LICENSE.
+
+### Disclaimer
+
+By using this code you accept all responsibility for money lost because of this code.

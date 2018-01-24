@@ -1,3 +1,23 @@
+"""This searches combinations of hyperparameters for the best fit using Bayesian Optimization (or optionally
+Gradient Boosting). See README for more details.
+
+Each hyper is specified as `key: {type, vals, guess, pre/post/hydrate}`.
+- The key can be dot-separated, like `memory.type` (which will get expanded as dict-form)
+- type: (int|bounded|bool). bool is True|False param, bounded is a float between min & max, int is "choose one"
+    eg 'activation' one of (tanh|elu|selu|..)`)
+- vals: the vals this hyper can take on. If type(vals) is primitive, hard-coded at this value. If type is list, then
+    (a) min/max specified inside (for bounded); (b) all possible options (for 'int'). If type is dict, then the keys
+    are used in the searching (eg, look at the network hyper) and the values are used as the configuration.
+- guess: initial guess (supplied by human) to explore
+- pre/post/hydrate: hooks that transform this hyper before plugging it. Eg, we'd use type='bounded' for batch size since
+    we want to range from min to max (instead of listing all possible values); but we'd cast it to an int inside
+    hook before using it.
+    - pre: transform it immediately, it'll be saved in the runs table this way
+    - post: transform it after all the pre-hooks are run, in case this depends on other hypers
+    - hydrate: big-time transformation to the whole hypers dict, based on this hyper val. It won't be saved to the
+        database looking like this. Eg, baseline_mode, when set to True, does a number on many other hypers.
+"""
+
 import argparse, json, math, time, pdb
 from pprint import pprint
 from box import Box
@@ -15,27 +35,11 @@ from btc_env import BitcoinEnv
 import utils
 from data import data
 
-"""
-Each hyper is specified as `key: {type, vals, guess, pre/post/hydrate}`. 
-- The key can be dot-separated, like `memory.type` (which will get expanded as dict-form) 
-- type: (int|bounded|bool). bool is True|False param, bounded is a float between min & max, int is "choose one" 
-    eg 'activation' one of (tanh|elu|selu|..)`)
-- vals: the vals this hyper can take on. If type(vals) is primitive, hard-coded at this value. If type is list, then
-    (a) min/max specified inside (for bounded); (b) all possible options (for 'int'). If type is dict, then the keys
-    are used in the searching (eg, look at the network hyper) and the values are used as the configuration.
-- guess: initial guess (supplied by human) to explore      
-- pre/post/hydrate: hooks that transform this hyper before plugging it. Eg, we'd use type='bounded' for batch size since
-    we want to range from min to max (instead of listing all possible values); but we'd cast it to an int inside
-    hook before using it.
-    - pre: transform it immediately, it'll be saved in the runs table this way
-    - post: transform it after all the pre-hooks are run, in case this depends on other hypers
-    - hydrate: big-time transformation to the whole hypers dict, based on this hyper val. It won't be saved to the 
-        database looking like this. Eg, baseline_mode, when set to True, does a number on many other hypers. 
-"""
-
 
 def build_net_spec(hypers, baseline=False):
-    """Builds a net_spec from some specifications like width, depth, etc"""
+    """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
+    different network hypers
+    """
     net, indicators, arbitrage = Box(hypers['net']), hypers['indicators'], hypers['arbitrage']
 
     dense = {
@@ -55,7 +59,7 @@ def build_net_spec(hypers, baseline=False):
 
     arr = []
 
-    # Pre-layer
+    # Pre-layer (TMK only makes sense for LSTM)
     if 'depth_pre' in net:
         for i in range(net.depth_pre):
             size = int(net.width/(net.depth_pre-i+1)) if net.funnel else net.width
@@ -63,10 +67,10 @@ def build_net_spec(hypers, baseline=False):
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
-    # TODO figure out how to use internals w/ baseline, currently not series-aware
+    # TODO figure out how to use LSTM's internals w/ baseline, currently not series-aware. Update: looks like TForce's
+    # `memory` branch fixes this, when merged to master we can get rid of this `if not`
     if not (net.type == 'lstm' and baseline):
         if net.type == 'conv2d':
-            n_cols = data.n_cols(indicators=indicators, arbitrage=arbitrage)
             steps_out = hypers['step_window']
 
         for i in range(net.depth_mid):
@@ -75,18 +79,24 @@ def build_net_spec(hypers, baseline=False):
                 arr.append({'size': net.width, **lstm})
                 continue
 
+            # For each Conv2d layer, the window/stride is a function of the step-window size. So `net.window=1` means
+            # divide the step-window 10 ways; `net.window=2` means divide it 20 ways. This gives us flexibility to
+            # define window/stride relative to step_window without having to know either. Note, each layer is reduced
+            # from the prior, so window/stride gets recalculated
             step_window = math.ceil(steps_out / (net.window * 10))
             step_stride = math.ceil(step_window / net.stride)
 
             # next = (length - window)/stride + 1
             steps_out = (steps_out - step_window)/step_stride + 1
 
-            # TODO this is ugly
-            # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1 to next layer)
+            # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1
+            # to next layer). TODO this is ugly, better way?
             min_window, min_stride = 3, 2
             step_window = max([step_window, min_window])
             step_stride = max([step_stride, min_stride])
 
+            # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
+            # (like 32-64-64 -> 512-256). If anyone has better intuition...
             size = max([32, int(net.width / 4)])
             # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
             arr.append({
@@ -98,7 +108,7 @@ def build_net_spec(hypers, baseline=False):
         if net.type == 'conv2d':
             arr.append({'type': 'flatten'})
 
-    # Dense
+    # Post Dense layers
     for i in range(net.depth_post):
         size = int(net.width / (i + 1)) if net.funnel else net.width
         arr.append({'size': size, **dense})
@@ -108,6 +118,16 @@ def build_net_spec(hypers, baseline=False):
 
 
 def custom_net(hypers, print_net=False, baseline=False):
+    """First builds up an array of dicts compatible with TForce's network spec. Then passes off to a custom neural
+    network architecture, rather than using TForce's default LayeredNetwork. The only reason for this is so we can pipe
+    in the "stationary" inputs after the LSTM/Conv2d layers. Think about it. LTSM/Conv2d are tracking time-series data
+    (price actions, volume, etc). We don't necessarily want to track our own USD & BTC balances for every time-step.
+    We _could_, and it _might_ help the agent (I'm not convinced it would); but it actually causes lots of problems
+    when we go live (eg, right away we take the last 6k time-steps to have a full window, but we don't have any
+    BTC/USD history for that window. There are other issues). So instead we pipe the stationary inputs into the neural
+    network downstream, after the time-series layers. Makes more sense to me that way: imagine the conv layers saying
+    "the price is right, buy!" and then getting handed a note with "you have $0 USD". "Oh.. nevermind..."
+    """
     layers_spec = build_net_spec(hypers, baseline)
     if print_net: pprint(layers_spec)
 
@@ -155,9 +175,15 @@ def two_to_the(x, _): return 2**x
 def ten_to_the_neg(x, _): return 10**-x
 
 def min_threshold(thresh, fallback):
+    """Returns x or `fallback` if it doesn't meet the threshold. Note, if you want to turn a hyper "off" below,
+    set it to "outside the threshold", rather than 0.
+    """
     return lambda x, _: x if (x and x > thresh) else fallback
 
 def min_ten_neg(thresh, fallback):
+    """Returns 10**-x, or `fallback` if it doesn't meet the threshold. Note, if you want to turn a hyper "off" below,
+    set it to "outside the threshold", rather than 0.
+    """
     return lambda x, _: min_threshold(thresh, fallback)(ten_to_the_neg(x, _), _)
 
 def hydrate_baseline(x, flat):
@@ -177,6 +203,8 @@ def hydrate_baseline(x, flat):
         }
     }[x]
 
+
+# Many of these hypers come directly from tensorforce/tensorforce/agents/ppo_agent.py, see that for documentation
 hypers = {}
 hypers['agent'] = {}
 hypers['batch_agent'] = {
@@ -193,6 +221,7 @@ hypers['batch_agent'] = {
     }
 }
 hypers['model'] = {
+    # Doesn't seem to matter; consider removing
     'optimizer.type': {
         'type': 'int',
         'vals': ['nadam', 'adam'],
@@ -235,6 +264,8 @@ hypers['pg_model'] = {
         'type': 'bounded',
         'vals': [.8, 1.],
         'guess': .96,
+        # Pretty ugly: says "use gae_lambda if baseline_mode=True, and if gae_lambda > .9" (which is why `vals`
+        # allows a number below .9, so we can experiment with it off when baseline_mode=True)
         'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
     },
 }
@@ -256,26 +287,36 @@ hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **hypers['pg_prob_ration_model']
 
 }
+
+
+# Renaming this way since I was experimenting with other RL models, like DQN & NAF; revisit)
 hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('optimizer.learning_rate')
 hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
+    # Use a handful of TA-Lib technical indicators (SMA, EMA, RSI, etc). Which indicators used and for what time-frame
+    # not optimally chosen at all; just figured "if some randos are better than nothing, there's something there and
+    # I'll revisit". Help wanted.
     'indicators': {
         'type': 'bool',
         'guess': True
     },
+    # Conv / LSTM layers
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 3],
         'guess': 3,
         'pre': round
     },
+    # Dense layers
     'net.depth_post': {
         'type': 'bounded',
         'vals': [1, 3],
         'guess': 1,
         'pre': round
     },
+    # Network depth, in broad-strokes of 2**x (2, 4, 8, 16, 32, 64, 128, 256, 512, ..) just so you get a feel for
+    # small-vs-large. Later you'll want to fine-tune.
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
@@ -283,15 +324,23 @@ hypers['custom'] = {
         'pre': round,
         'hydrate': two_to_the
     },
+    # Whether to expand-in and shrink-out the nueral network. You know the look, narrower near the inputs, gets wider
+    # in the hidden layers, narrower again on hte outputs.
     'net.funnel': {
         'type': 'bool',
         'guess': True
     },
+    # tanh vs "the relu family" (relu, selu, crelu, elu, *lu). Broad-strokes here by just pitting tanh v relu; then,
+    # if relu wins you can fine-tune "which type of relu" later.
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'relu'],
         'guess': 'tanh'
     },
+
+    # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
+    # papers just role L2 (.001) and ignore the other two; but that hasn't jived for me. Below is the best combo I've
+    # gotten so far, and I'll update as I go.
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .2],
@@ -310,24 +359,32 @@ hypers['custom'] = {
         'guess': 5.6,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
+
+
+    # Instead of using absolute price diffs, use percent-change.
     'pct_change': {
         'type': 'bool',
         'guess': False
     },
-    'unimodal': {
+    # True = one action (-$x to +$x). False = two actions: (buy|sell|hold) and (how much?)
+    'single_action': {
         'type': 'bool',
         'guess': False
     },
+    # Scale the inputs and rewards
     'scale': {
         'type': 'bool',
         'guess': True
     },
+    # After this many time-steps of doing the same thing we will terminate the episode and give the agent a huge
+    # spanking. I didn't raise no investor, I raised a TRADER
     'punish_repeats': {
         'type': 'bounded',
         'vals': [5000, 20000],
         'guess': 20000,
         'pre': int
     },
+    # See data.py for details on arbitrage
     'arbitrage': {
         'type': 'bool',
         'guess': True
@@ -335,6 +392,7 @@ hypers['custom'] = {
 }
 
 hypers['lstm'] = {
+    # Number of dense layers before the LSTM layers
     'net.depth_pre': {
         'type': 'bounded',
         'vals': [0, 3],
@@ -343,17 +401,19 @@ hypers['lstm'] = {
     },
 }
 hypers['conv2d'] = {
-    # 'net.bias': True,
+    # 'net.bias': True,  # TODO valuable?
+
+    # T-shirt size window-sizes, smaller # = more destructive. See comments in build_net_spec()
     'net.window': {
         'type': 'bounded',
-        # window t-shirt sizes, smaller # = more destructive
         'vals': [1, 3],
         'guess': 3,
         'pre': round,
     },
+    # How many ways to divide a window? 1=no-overlap, 2=half-overlap (smaller # = more destructive). See comments
+    # in build_net_spec()
     'net.stride': {
         'type': 'bounded',
-        # how many ways to divide a window? 1 = no-overlap, 2 = half-overlap (smaller # = more destructive)
         'vals': [1, 3],
         'guess': 3,
         'pre': round
@@ -407,18 +467,13 @@ class DotDict(object):
 
 
 class HSearchEnv(object):
-    """
-    This is the "wrapper" environment (the "inner" environment is the one you're testing against, like Cartpole-v0).
-    This env's actions are all the hyperparameters (above). The state is nothing (`[1.]`), and a single episode is
-    running the inner-env however many episodes (300). The inner's last-few reward avg is outer's one-episode reward.
-    That's one run: make inner-env, run 300, avg reward, return that. The next episode will be a new set of
-    hyperparameters (actions); run inner-env from scratch using new hypers.
+    """This was once a TensorForce environment of its own, when I was using RL to find the best hyper-combo for RL.
+    I turned from that to Bayesian Optimization, but that's why this is an awkward class of its own - it should be
+    merged with the `main()` code below.
+
+    TODO only tested with ppo_agent. Test with other agents
     """
     def __init__(self, agent='ppo_agent', gpu_split=1, net_type='conv2d'):
-        """
-        TODO only tested with ppo_agent. There's some code for dqn_agent, but I haven't tested. Nothing else
-        is even attempted implemtned
-        """
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
         hypers_['net.type'] = net_type  # set as hard-coded val
@@ -589,7 +644,7 @@ def boost_optimization(model, loss_fn, bounds, x_list=[], y_list=[], n_pre_sampl
     loss_fn(best_params)
 
 
-def main_gp():
+def main():
     import gp
     from sklearn.feature_extraction import DictVectorizer
 
@@ -675,10 +730,8 @@ def main_gp():
 
     guess_i = 0
     while True:
-        """
-        Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk, 
-        but this allows to distribute across servers easily
-        """
+        # Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk,
+        # but this allows to distribute across servers easily
         conn_runs = data.engine_runs.connect()
         sql = "select hypers, advantages, advantage_avg from runs where flag=:f"
         runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
@@ -712,7 +765,7 @@ def main_gp():
         else:
             # Evidently duplicate values break GP. Many of these are ints, so they're definite duplicates. Either way,
             # tack on some small epsilon to make them different (1e-6 < gp.py's min threshold, make sure that #'s not a
-            # problem). Subtracting since many vals are int()'d, which is floor()
+            # problem). I'm concerned about this since many hypers can go below that epislon (eg learning-rate).
             for x in X:
                 for i, v in enumerate(x):
                     x[i] += np.random.random() * 1e-6
@@ -724,4 +777,4 @@ def main_gp():
             )
 
 if __name__ == '__main__':
-    main_gp()
+    main()

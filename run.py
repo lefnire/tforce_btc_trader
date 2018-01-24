@@ -1,3 +1,10 @@
+"""
+This file is for when you've found a solid hyper combo from hypersearch.py and you want to run it in the wild. Either
+live, or "dry-run live" (--test-live), etc. Note, you need to run this file once first without live/test-live to
+train and save the model (hypersearch doesn't save models). Then run this file with the same args as you trained it,
+plus --live/--test-live.
+"""
+
 import argparse
 from tensorforce.agents import agents as agents_dict
 import shutil
@@ -29,6 +36,9 @@ def main():
     agent = agents_dict['ppo_agent'](
         saver_spec=dict(
             directory=directory,
+            # saves this model every 6000 time-steps. I'd rather manually save it at the end, that way we could save
+            # a winning combo in hypersearch.py and remove this redundant training step - but TForce doesn't have
+            # working manual-save code yet, only automatic.
             steps=6000
         ),
         states_spec=env.states,

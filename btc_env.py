@@ -1,10 +1,21 @@
-import random, time, re, math, requests, pdb, gdax
+"""BTC trading environment. Trains on BTC price history to learn to buy/sell/hold.
+
+This is an environment tailored towards TensorForce, not OpenAI Gym. Gym environments are
+a standard used by many projects (Baselines, Coach, etc) and so would make sense to use; and TForce is compatible with
+Gym envs. It's just that there's hoops to go through converting a Gym env to TForce, and it was ugly code. I actually
+had it that way, you can search through Git if you want the Gym env; but one day I decided "I'm not having success with
+any of these other projects, TForce is the best - I'm just gonna stick to that" and this approach was cleaner.
+
+I actually do want to try NervanaSystems/Coach, that one's new since I started developing. Will require converting this
+env back to Gym format. Anyone wanna give it a go?
+"""
+
+import random, time, requests, pdb, gdax
 from enum import Enum
 import numpy as np
 import pandas as pd
 from talib.abstract import SMA, RSI, ATR, EMA
 from collections import Counter
-from sqlalchemy.sql import text
 import tensorflow as tf
 from box import Box
 from tensorforce.environments import Environment
@@ -22,7 +33,21 @@ class Mode(Enum):
 
 
 class Scaler(object):
-    STOP_AT = 3e5  # 400k is size of table. Might be able to do with much less, being on safe side
+    """If we have `hypers.scale=True`, we use this class to scale everything (price-actions, rewards, etc). Using this
+    instead of TForce's built-in preprocessing (http://tensorforce.readthedocs.io/en/latest/preprocessing.html) since
+    this gives more flexibility, but it's basically the same thing. Someone may want to check me on that statement by
+    reading those docs and trying TForce's preprocessing instead of this.
+
+    One important bit here is the use of RobustScaler with a quantile_range. This allows us to handle outliers, which
+    abound in the data. Sometimes we have a timeseries hole, and suddenly we're up a billion percent. Sometimes whales
+    pump-and-dump to screw with the market. RobustScaler lets us "ignore" those moments.
+
+    TODO someone will want to double-check my work on this scaling approach in general. Best of my knowledges, but I'm
+    a newb.
+    """
+
+    # 400k should be enough data to safely say "I've seen it all, just scale (don't fit) going forward")
+    STOP_AT = 3e5
     SKIP = 15
     def __init__(self):
         self.reward_scaler = RobustScaler(quantile_range=(5., 95.))
@@ -65,6 +90,8 @@ class Scaler(object):
 # keep this globally around for all runs forever
 scalers = {}
 
+# We don't want random-seeding for reproducability! We _want_ two runs to give different results, because we only
+# trust the hyper combo which consistently gives positive results!
 ALLOW_SEED = False
 TIMESTEPS = int(2e6)
 
@@ -75,7 +102,14 @@ class BitcoinEnv(Environment):
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.agent_name = name
+
+        # cash/val start @ about $3.5k each. You should increase/decrease depending on how much you'll put into your
+        # exchange accounts to trade with. Presumably the agent will learn to work with what you've got (cash/value
+        # are state inputs); but starting capital does effect the learning process.
         self.start_cash, self.start_value = .3, .3
+
+        # We have these "accumulator" objects, which collect values over steps, over episodes, etc. Easier to keep
+        # same-named variables separate this way.
         self.acc = Box(
             episode=dict(
                 i=0,
@@ -97,9 +131,9 @@ class BitcoinEnv(Environment):
             self.btc_price = 12000
 
         # Action space
-        trade_cap = self.min_trade * 2
-        if self.hypers.unimodal:
-            # In unimodal we discard any vals b/w [-min_trade, +min_trade] and call it "hold" (in execute())
+        trade_cap = self.min_trade * 2  # not necessary to limit it like this, doing for my own sanity in live-mode
+        if self.hypers.single_action:
+            # In single_action we discard any vals b/w [-min_trade, +min_trade] and call it "hold" (in execute())
             self.actions_ = dict(type='float', shape=(), min_value=-trade_cap, max_value=trade_cap)
         else:
             # In multi-modal, hold is an actual action (in which case we discard "amount")
@@ -115,9 +149,9 @@ class BitcoinEnv(Environment):
         )
 
         if self.conv2d:
-            # width = window width (150 time-steps)
-            # height = num_features, but one layer for each table
-            # channels = 1 (for now); revisit with arbitrage when exchanges have same ncols
+            # width = step-window (150 time-steps)
+            # height = nothing (1)
+            # channels = features/inputs (price actions, OHCLV, etc).
             self.states_['series']['shape'] = (self.hypers.step_window, 1, self.cols_)
 
         scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
@@ -126,11 +160,15 @@ class BitcoinEnv(Environment):
         self.scaler = scalers[scaler_k]
 
     def __str__(self): return 'BitcoinEnv'
+
     def close(self): self.conn.close()
+
     @property
     def states(self): return self.states_
+
     @property
     def actions(self): return self.actions_
+
     def seed(self, seed=None):
         if not ALLOW_SEED: return
         # self.np_random, seed = seeding.np_random(seed)
@@ -148,6 +186,7 @@ class BitcoinEnv(Environment):
         q = diff.quantile(0.99)
         diff = diff.mask(diff > q, np.nan)
 
+        # then forward-fill the NaNs.
         return diff.replace([np.inf, -np.inf], np.nan).ffill().bfill().values
 
     def _xform_data(self, df):
@@ -165,13 +204,13 @@ class BitcoinEnv(Environment):
                 for k, v in ohlcv.items():
                     ind[k] = df[f"{name}_{v}"]
                 columns += [
-                    ## Original indicators from boilerplate
+                    ## Original indicators from some boilerplate repo I started with
                     self._diff(SMA(ind, timeperiod=15), percent),
                     self._diff(SMA(ind, timeperiod=60), percent),
                     self._diff(RSI(ind, timeperiod=14), percent),
                     self._diff(ATR(ind, timeperiod=14), percent),
 
-                    ## Indicators from "How to Day Trade For a Living" (try these)
+                    ## Indicators from the book "How to Day Trade For a Living". Not sure which are more solid...
                     ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
                     # self._diff(EMA(ind, timeperiod=9)),
                     # self._diff(EMA(ind, timeperiod=20)),
@@ -186,10 +225,11 @@ class BitcoinEnv(Environment):
 
     def _reshape_window_for_conv2d(self, window):
         return np.expand_dims(window, axis=1)
-        # see https://goo.gl/ghTGiU for 3d arbitrage
 
     def use_dataset(self, mode, no_kill=False):
-        """Make sure to call this before reset()!"""
+        """Fetches, transforms, and stores the portion of data you'll be working with (ie, 80% train data, 20% test
+        data, or the live database). Make sure to call this before reset()!
+        """
         before_time = time.time()
         self.mode = mode
         self.no_kill = no_kill
@@ -204,7 +244,7 @@ class BitcoinEnv(Environment):
             self.df = df
         else:
             self.row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
-            split = .9
+            split = .9  # Using 90% training data.
             n_train, n_test = int(self.row_ct * split), int(self.row_ct * (1 - split))
             limit, offset = (n_test, n_train) if mode == mode.TEST else (n_train, 0)
             df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
@@ -237,16 +277,17 @@ class BitcoinEnv(Environment):
         return dict(series=first_state, stationary=[1., 1., 0.])
 
     def execute(self, actions):
-        if self.hypers.unimodal:
+        if self.hypers.single_action:
             signal = 0 if -self.min_trade < actions < self.min_trade else actions
         else:
+            # Two actions: `action` (buy/sell/hold) and `amount` (how much)
             signal = {
                 0: -1,  # make amount negative
                 1: 0,  # hold
                 2: 1  # make amount positive
             }[actions['action']] * actions['amount']
             if not signal: signal = 0  # sometimes gives -0.0, dunno if that matters anywhere downstream
-            # multi-modal min_trade accounted for in constructor
+            # multi-action min_trade accounted for in constructor
 
         step_acc, ep_acc = self.acc.step, self.acc.episode
 
@@ -259,7 +300,7 @@ class BitcoinEnv(Environment):
         reward = 0
         abs_sig = abs(signal)
         before = Box(cash=step_acc.cash, value=step_acc.value, total=step_acc.cash+step_acc.value)
-        # Perform the trade. In training mode, we'll let them dip into negative here, but then kill and punish below.
+        # Perform the trade. In training mode, we'll let it dip into negative here, but then kill and punish below.
         # In testing/live, we'll just block the trade if they can't afford it
         if signal > 0 and not (self.no_kill and abs_sig > step_acc.cash):
             step_acc.value += abs_sig - abs_sig*fee
@@ -268,8 +309,11 @@ class BitcoinEnv(Environment):
             step_acc.cash += abs_sig - abs_sig*fee
             step_acc.value -= abs_sig
 
-        # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
-        diff_loc = step_acc.i if self.conv2d else step_acc.i + 1
+        # TODO! Conv & LSTM indexing is inconsistent. LSTMs take one list el [i]; Conv2D takes a window [-something:i],
+        # and due to python list beginnings/ends, Conv's i is LSTM's -1. I think I've handled appropriately, but a real
+        # danger here is grabbing the wrong next-timestep by one, which ruins everything. We should get a unit test
+        # and ensure the indexing is handled correctly / consistently
+        diff_loc = step_acc.i if self.conv2d else step_acc.i + 1 # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         pct_change = self.prices_diff[diff_loc]
         step_acc.value += pct_change * step_acc.value
         total = step_acc.value + step_acc.cash
@@ -279,7 +323,7 @@ class BitcoinEnv(Environment):
         before = step_acc.hold
         before.value += pct_change * before.value
 
-        # Encourage diverse behavior
+        # Collect repeated same-action count (homogeneous actions punished below)
         recent_actions = np.array(step_acc.signals[-step_acc.repeats:])
         if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
             step_acc.repeats = 1  # reset repeat counter
@@ -288,6 +332,7 @@ class BitcoinEnv(Environment):
 
         step_acc.i += 1
         ep_acc.total_steps += 1
+        # Is scaling here necessary, esp if using `hypers.scale`?
         cash_scaled, val_scaled = step_acc.cash / self.start_cash,  step_acc.value / self.start_value
         repeats_scaled = step_acc.repeats / self.hypers.punish_repeats
 
@@ -303,7 +348,7 @@ class BitcoinEnv(Environment):
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
         if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= self.hypers.punish_repeats):
-            reward -= 1.  # BTC
+            reward -= 1.  # BTC. Big punishment, like $12k
             terminal = True
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.

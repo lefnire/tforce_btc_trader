@@ -5,21 +5,24 @@ from sqlalchemy import create_engine
 from sqlalchemy import text
 import os
 
+# From connecting source file, `import engine` and run `engine.connect()`. Need each connection to be separate
+# (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
 config_json = json.load(open(os.path.dirname(__file__) + '/../config.json'))
 DB = config_json['DB_HISTORY'].split('/')[-1]
 engine = create_engine(config_json['DB_HISTORY'])
 engine_live = create_engine(config_json['DB_HISTORY_LIVE'])
 engine_runs = create_engine(config_json['DB_RUNS'])
 
-# From connecting source file, import engine and run the following code. Need each connection to be separate
-# (see https://stackoverflow.com/questions/3724900/python-ssl-problem-with-multiprocessing)
-# conn = engine.connect()
 
 
+# Decide which exchange you want to trade on (significant even in training). Pros & cons; Kraken's API provides more
+# details than GDAX (bid/ask spread, VWAP, etc) which means predicting its next price-action is easier for RL. It
+# also has a lower minimum trade (.002 BTC vs GDAX's .01 BTC), which gives it more wiggle room. However, its API is
+# very unstable and slow, so when you actually go live you'r bot will be suffering. GDAX's API is rock-solid. Look
+# into the API stability, it may change by the time you're using this. If Kraken is solid, use it instead.
 class Exchange(Enum):
     GDAX = 'gdax'
     KRAKEN = 'kraken'
-
 
 EXCHANGE = Exchange.GDAX
 
@@ -29,6 +32,10 @@ F = 0
 B = 1
 Z = 2
 
+
+# Y'all won't have access to this database, this is a friend's personal DB. Don't worry, the Kaggle dataset is
+# fuller & cleaner, this is just one that's live/real-time which is why I use it. If anyone knows another (even
+# if paid) LMK.
 if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
     tables = [
     {
@@ -53,7 +60,7 @@ if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
         tables[0], tables[1] = tables[1], tables[0]
         target = 'exch_ticker_kraken_usd_last_trade_price'
 
-elif 'kaggle' in DB:
+else:
     tables = [
     {
         'name': 'coinbase',
@@ -70,8 +77,10 @@ elif 'kaggle' in DB:
     ]
     target = 'coinbase_close'
 
+
 def get_tables(arbitrage=True):
     return tables if arbitrage else [tables[0]]
+
 
 def n_cols(indicators=False, arbitrage=True):
     cols = 0
@@ -88,6 +97,8 @@ row_count = 0
 already_asked = False
 def count_rows(conn, arbitrage=True):
     global row_count, already_asked
+
+    # This fn might be called suddenly a bunch in parallel - try to let one instance fetch the count first & cache
     if row_count:
         return row_count  # cached
     elif already_asked:
@@ -100,6 +111,10 @@ def count_rows(conn, arbitrage=True):
 
 
 def _db_to_dataframe_ohlc(conn, limit='ALL', offset=0, just_count=False, arbitrage=True):
+    """This fn is currently not used anywhere. You'd use this if using the CryptoWat.ch OHLCV data (see
+    data/populate/cryptowatch_ohlcv.py). Fantastic dataset, with hierarchical candlesticks! But not enough history to
+    train on. I hope they sell full history some day.
+    """
     # 600, 300, 1800
     if just_count:
         select = 'select count(*) over () '
@@ -122,8 +137,29 @@ def _db_to_dataframe_ohlc(conn, limit='ALL', offset=0, just_count=False, arbitra
 
     return pd.read_sql_query(query, conn).iloc[::-1].ffill()
 
+
 def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitrage=True, last_timestamp=False):
-    """Fetches all relevant data in database and returns as a Pandas dataframe"""
+    """
+    Fetches data from your `history` database. During training, this'll fetch 80% of the data (TODO: buffer that
+    instead so it's not so RAM-heavy). During testing, 20% unseen data.
+    :param conn: a database connection
+    :param limit: num rows to fetch
+    :param offset: n-rows to start from. Note! This function fetches from newest-to-oldest, so offset=0 means
+        most-recent. The function reverses that in the end so we're properly sequential. I don't remember why I did
+        this.. maybe makes limit/offset easier since I don't need to track database end? Perhaps this can change.
+    :param just_count: True if you just want to count the rows (used up-front in btc_env to set some internals).
+        You may be thinking "just do a `select count(*)`, why fn(just_count=True)? Because the `arbitrage` arg may
+        change the resultant row-count, see below.
+    :param arbitrage: This is special. "Risk arbitrage" is the idea of watching two stock exchanges for the same
+        instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
+        exchange, so it tends to play this "follow the leader" game. Ie, Kraken will very likely "try" to get to $10k
+        to match GDAX (oversimplifying, but it basically works that way). This is called "risk arbitrage" ("arbitrage"
+        by itself is slightly different, not useful for us). Presumably that's golden information for the neural net:
+        "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
+    :param last_timestamp: When we're in live-mode, we run till the last row in our database, use this arg to track
+        where we left off, wait, poll if new rows, repeat.
+    :return: pd.DataFrame, with NaNs imputed according to the F/B/Z rules
+    """
     tables_ = get_tables(arbitrage)
 
     if just_count:
@@ -135,7 +171,12 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
         )
 
     # Currently matching main-table to nearest secondary-tables' time (https://stackoverflow.com/questions/28839524/join-two-tables-based-on-nearby-timestamps)
-    # Could also group by intervals (10s, 60s, etc) https://gis.stackexchange.com/a/127874/105932
+    # The current method is an OUTER JOIN, which means all primary-table's rows are kept, and any most-recent
+    # secondary-tables' rows are matched - no matter how "recent" they are. Could cause problems, what if the
+    # most-recent match is 1 day ago? The alternative is an INNER JOIN via a hard-coded time interval (GROUP BY 10s,
+    # 60s, etc - https://gis.stackexchange.com/a/127874/105932). With that approach you lose rows that don't have a
+    # match, and therefore get "holes" in your time-series, which is also bad. Pros/cons. Another reason `arbitrage`
+    # is a hyper, maybe it's not worth the dirty matching.
     first = tables_[0]
     for i, table in enumerate(tables_):
         name, ts = table['name'], table['ts']
@@ -181,7 +222,10 @@ db_to_dataframe = _db_to_dataframe_ohlc if 'coins' in DB else _db_to_dataframe_m
 
 
 def fetch_more(conn, last_timestamp, arbitrage):
-    # FIXME this count approach won't work in inner-join-arbitrage mode
+    """Function used to fetch more data in `live` mode in a polling loop.
+    TODO this approach won't work if we switch the `arbitrage` method from OUTER JOIN to INNER (see comments in
+    _db_to_dataframe_main()
+    """
     t = tables[0]
     query = f"select count(*) as ct from {t['name']} where {t['ts']} > :last_timestamp"
     n_new = conn.execute(text(query), last_timestamp=last_timestamp).fetchone()['ct']
@@ -192,6 +236,8 @@ def fetch_more(conn, last_timestamp, arbitrage):
 
 
 def setup_runs_table():
+    """Run this function once during project setup (see README). Or just copy/paste the SQL into your runs database
+    """
     conn_runs = engine_runs.connect()
     conn_runs.execute("""
         create table if not exists runs
