@@ -322,7 +322,12 @@ hypers['custom'] = {
         'type': 'bool',
         'guess': True
     },
-    'punish_repeats': False,
+    'punish_repeats': {
+        'type': 'bounded',
+        'vals': [5000, 20000],
+        'guess': 20000,
+        'pre': int
+    },
     'arbitrage': {
         'type': 'bool',
         'guess': True

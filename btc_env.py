@@ -279,21 +279,17 @@ class BitcoinEnv(Environment):
         before = step_acc.hold
         before.value += pct_change * before.value
 
-        # Encourage diverse behavior. hypers.punish_repeats method means punishing homogenous behavior
+        # Encourage diverse behavior
         recent_actions = np.array(step_acc.signals[-step_acc.repeats:])
-        too_many_repeats = 60 * 2  # Desire a trade every ~x minutes. Increase punishment over time
         if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
-            step_acc.repeats = 1  # reset penalty-growth
+            step_acc.repeats = 1  # reset repeat counter
         else:
-            if self.hypers.punish_repeats:
-                # FIXME this is too steep since we're trading in BTC. Currently hard-coded to off in hypers, revisit
-                reward -= step_acc.repeats / too_many_repeats
-            step_acc.repeats += 1  # grow the penalty with time
+            step_acc.repeats += 1
 
         step_acc.i += 1
         ep_acc.total_steps += 1
         cash_scaled, val_scaled = step_acc.cash / self.start_cash,  step_acc.value / self.start_value
-        repeats_scaled = step_acc.repeats / too_many_repeats
+        repeats_scaled = step_acc.repeats / self.hypers.punish_repeats
 
         next_state = self.observations[step_acc.i]
         if self.hypers.scale:
@@ -306,8 +302,8 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
-        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= 20000):
-            reward -= .05  # BTC, ~$500
+        if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= self.hypers.punish_repeats):
+            reward -= 1.  # BTC
             terminal = True
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
