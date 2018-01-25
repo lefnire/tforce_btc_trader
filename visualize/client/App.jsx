@@ -142,7 +142,7 @@ class App extends Component {
     let rewards = data.map(d => d.advantages.map((v,i) => {
       let y = v; // just human
       // let y = (d.rewards_agent[i] + v)/2; // human-agent average
-      y = _.clamp(y, -100, 100); // clamp so we don't break the graph
+      // y = _.clamp(y, -100, 100); // clamp so we don't break the graph
       return {
         y,
         x:i, parent:d

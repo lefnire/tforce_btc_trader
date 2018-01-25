@@ -223,9 +223,6 @@ class BitcoinEnv(Environment):
         # Note: don't scale/normalize here, since we'll normalize w/ self.price/step_acc.cash after each action
         return states, prices
 
-    def _reshape_window_for_conv2d(self, window):
-        return np.expand_dims(window, axis=1)
-
     def use_dataset(self, mode, no_kill=False):
         """Fetches, transforms, and stores the portion of data you'll be working with (ie, 80% train data, 20% test
         data, or the live database). Make sure to call this before reset()!
@@ -262,7 +259,8 @@ class BitcoinEnv(Environment):
         # But for our purposes, we care more about "how much better is what we made than if we held". We're training
         # a trading bot, not an investing bot. So we compare these at the end, calling it "advantage"
         step_acc.hold = Box(value=self.start_cash, cash=self.start_value)
-        start_timestep = self.hypers.step_window if self.conv2d else 1  # advance some steps just for cushion, various operations compare back a couple steps
+        # advance some steps just for cushion, various operations compare back a couple steps
+        start_timestep = self.hypers.step_window if self.conv2d else 1
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
         step_acc.repeats = 1
@@ -272,8 +270,11 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             first_state = self.scaler.transform_state(first_state)
         if self.conv2d:
-            window = self.observations[start_timestep - self.hypers.step_window:start_timestep]
-            first_state = self._reshape_window_for_conv2d(window)
+            # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
+            # [-something:i], which _excludes_ the list's end (due to Python indexing). Without this +1, conv would
+            # have a 1-step-behind delayed response.
+            window = self.observations[start_timestep - self.hypers.step_window + 1:start_timestep + 1]
+            first_state = np.expand_dims(window, axis=1)
         return dict(series=first_state, stationary=[1., 1., 0.])
 
     def execute(self, actions):
@@ -309,11 +310,8 @@ class BitcoinEnv(Environment):
             step_acc.cash += abs_sig - abs_sig*fee
             step_acc.value -= abs_sig
 
-        # TODO! Conv & LSTM indexing is inconsistent. LSTMs take one list el [i]; Conv2D takes a window [-something:i],
-        # and due to python list beginnings/ends, Conv's i is LSTM's -1. I think I've handled appropriately, but a real
-        # danger here is grabbing the wrong next-timestep by one, which ruins everything. We should get a unit test
-        # and ensure the indexing is handled correctly / consistently
-        diff_loc = step_acc.i if self.conv2d else step_acc.i + 1 # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
+        diff_loc = step_acc.i + 1
         pct_change = self.prices_diff[diff_loc]
         step_acc.value += pct_change * step_acc.value
         total = step_acc.value + step_acc.cash
@@ -341,8 +339,8 @@ class BitcoinEnv(Environment):
             next_state = self.scaler.transform_state(next_state)
             reward = self.scaler.transform_reward(reward)
         if self.conv2d:
-            window = self.observations[step_acc.i - self.hypers.step_window:step_acc.i]
-            next_state = self._reshape_window_for_conv2d(window)
+            window = self.observations[step_acc.i - self.hypers.step_window + 1:step_acc.i + 1]
+            next_state = np.expand_dims(window, axis=1)
         next_state = dict(series=next_state, stationary=[cash_scaled, val_scaled, repeats_scaled])
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
