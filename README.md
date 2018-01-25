@@ -1,5 +1,7 @@
 # TensorForce Bitcoin Trading Bot
 
+[![Join the chat at https://gitter.im/tforce_btc_trader/Lobby](https://badges.gitter.im/tforce_btc_trader/Lobby.svg)](https://gitter.im/tforce_btc_trader/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin trading bot (algo-trader). Uses deep reinforcement learning to automatically buy/sell/hold BTC based on price history.
 
 Chat on [Gittr](https://gitter.im/lefnire/tforce_btc_trader)!
