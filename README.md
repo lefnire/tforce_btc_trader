@@ -28,7 +28,7 @@ The crux of practical reinforcement learning is finding the right hyper-paramete
 `python hypersearch.py`
 
 Optional flags:
-- `--guess <int>`: sometimes you don't want BO, which is pretty willy-nilly at first, to do the searching. Instead you want to try a hunch or two of your own first. Open `hypersearch.py` and add some hyper-override dicts in the `guess_overrides` array in `utils.py`, use `--guess <idx in that array>`. Using `--guess 0`, which is `{}` (aka no overrides) runs hypersearch against the hard-coded default hypers, but you might as well run `run.py` (below).
+- `--guess <int>`: sometimes you don't want BO, which is pretty willy-nilly at first, to do the searching. Instead you want to try a hunch or two of your own first. See instructions in `utils.py#guess_overrides`.
 - `--gpu-split <int>`: number of ways to split a single GPU. Sometimes you'll be using a 1080ti or Tesla V100 - beastly GPUs - and `nvidia-smi -l` will show you're using some 10-20% of your GPU. What a waste. So you can use `--gpu-split 3` to split your V100 3 ways in 3 separate tabs, getting more bang-for-buck.
 - `--net-type <lstm|conv2d>`: see discussion below (LSTM v CNN)
 - `--boost`: you can optionally use gradient boosting when searching for the best hyper combo, instead of BO. BO is more exploratory and thorough, gradient boosting is more "find the best solution _now_". I tend to use `--boost` after say 100 runs are in the database, since BO may still be dilly-dallying till 200-300 and daylight's burning. Boost will suck in the early runs.
@@ -38,16 +38,15 @@ Once you've found a good hyper combo from above (this could take days or weeks!)
 
 `python run.py`
 
-By itself it's not very useful (since you already have that run in the database), so augment with these args:
-
+- `--name <str>` (required): name of the folder to save your run (during training) or load from (during `--live/--test-live`.
 - `--id <int>`: the id of some winning hyper-combo you want to run with. Without this, it'll run from the hard-coded hyper defaults.
 - `--gpu-split`: (see Hypersearch section)
 - `--runs <int>`: `hypersearch.py` & `run.py` both have a max number of test runs (40 currently), you can increase or decrease that (maybe you think your run in the database could do better if given more time; increase the number here).
 - `--live`: whooa boy, time to put your agent on GDAX and make real trades! I'm gonna let you figure out how to plug it in on your own, 'cause that's danger territory. I ain't responsible for shit. In fact, let's make that real - disclaimer at the end of README.
-- `--live-test`: same as `live`, but without making the real trades. This will start monitoring a live-updated database (from config.json), same as `live`, but instead of making the actual trade, it pretends it did and reports back how much you would have made/lost. Dry-run. You'll definitely want to run this once or twice before running `--live`.
+- `--test-live`: same as `live`, but without making the real trades. This will start monitoring a live-updated database (from config.json), same as `live`, but instead of making the actual trade, it pretends it did and reports back how much you would have made/lost. Dry-run. You'll definitely want to run this once or twice before running `--live`.
 - `--early-stop <int>`: sometimes your models can overfit. In particular, PPO can give you great performance for a long time and then crash-and-burn. That kind of behavior will be obvious in your visualization (below), so you can tell your run to stop after x consecutive positive episodes (depends on the agent - some find an optimum and roll for 3 positive episodes, some 8, just eyeball your graph).
 
-The result of `run.py` without `--live` or `--live-test` is to save the trained model to a directory (named `{id}{_early?}`, ie `10` or `10_early`). It'll then use that saved model when you run in `--live` or `--live-test` (use the same args, ie `--id 10 --early-stop 8` so it reconstructs the directory name).
+The result of `run.py` without `--live` or `--test-live` is to save the trained model to a directory (named `{id}{_early?}`, ie `10` or `10_early`). It'll then use that saved model when you run in `--live` or `--live-test` (use the same args, ie `--id 10 --early-stop 8` so it reconstructs the directory name).
 
 ## 5. Visualize
 TensorForce comes pre-built with reward visualization on a TensorBoard. Check out their Github, you'll see. I needed much more customization than that for viz, so we're not using TensorBoard. I created a mini Flask server (2 routes) and a D3 React dashboard where you can slice & dice hyper combos, visualize progression, etc. If you click on a single run, it'll display a graph of the buy/sell signals that agent took in a time-slice (test-set) so you can eyeball whether he's being smart.

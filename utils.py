@@ -40,33 +40,23 @@ guess_overrides = [
         {},  # guess 0.0 should always be an empty dict, which means "try the hard-coded defaults"
         {'net.l1': 2.5, 'net.l2': 5.},
         {'pct_change': True},
-    ],
-    [
         {'net.width': 4},
         {'step_optimizer.learning_rate': 5.5},
         {'step_optimizer.learning_rate': 7.5},
-    ],
-    [
         {'net.width': 8},
         {'net.activation': 'relu'},
         {'net.stride': 2},
-    ],
-    [
-        {'unimodal': True},
+        {'single_action': True},
         {'scale': False},
+
         {'step_window': 400},
-    ],
-    [
         {'net.depth_post': 2},
         {'net.window': 1},
         {'net.window': 3},
-    ],
-    [
         {'baseline_mode': False},
         {'arbitrage': False},
         {'punish_repeats': 10000},
-    ],
-    [
+
         # Winner from last runs
         {'arbitrage': False,
          'baseline_mode': True,
@@ -95,12 +85,11 @@ guess_overrides = [
          'step_optimizer.learning_rate': 7.918741845681779,
          'step_optimizer.type': 'adam',
          'step_window': 229,
-         'unimodal': True},
+         'single_action': True},
 
         {'batch_size': 5},
         {'batch_size': 10},
-    ],
-    [
+
         # Winner roughly according to PPO paper / TensorForce defaults (doesn't work for me)
         {'arbitrage': True,
          'baseline_mode': True,
@@ -129,6 +118,6 @@ guess_overrides = [
          'step_optimizer.learning_rate': 6.5,
          'step_optimizer.type': 'adam',
          'step_window': 250,
-         'unimodal': False},
+         'single_action': False},
     ]
 ]

@@ -431,18 +431,25 @@ class BitcoinEnv(Environment):
         i = 0
         runner = Runner(agent=agent, environment=self)
 
-        while i <= n_tests:
-            self.use_dataset(Mode.TRAIN)
-            runner.run(timesteps=n_train, max_episode_timesteps=n_train)
-            self.use_dataset(Mode.TEST)
-            self.run_deterministic(runner, print_results=True)
-            if early_stop > 0:
-                advantages = np.array(self.acc.episode.advantages[-early_stop:])
-                if i >= early_stop and np.all(advantages > 0):
-                    i = n_tests
-            i += 1
+        try:
+            while i <= n_tests:
+                self.use_dataset(Mode.TRAIN)
+                runner.run(timesteps=n_train, max_episode_timesteps=n_train)
+                self.use_dataset(Mode.TEST)
+                self.run_deterministic(runner, print_results=True)
+                if early_stop > 0:
+                    advantages = np.array(self.acc.episode.advantages[-early_stop:])
+                    if i >= early_stop and np.all(advantages > 0):
+                        i = n_tests
+                i += 1
+        except KeyboardInterrupt:
+            # Lets us kill training with Ctrl-C and skip straight to the final test. This is useful in case you're
+            # keeping an eye on terminal and see "there! right there, stop you found it!" (where early_stop & n_tests
+            # are the more methodical approaches)
+            pass
 
         # On last "how would it have done IRL?" run, without getting in the way (no killing on repeats, 0-balance)
+        print('Running no-kill test-set')
         self.use_dataset(Mode.TEST, no_kill=True)
         self.run_deterministic(runner, print_results=True)
 
