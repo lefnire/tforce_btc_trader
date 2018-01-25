@@ -211,7 +211,7 @@ hypers['batch_agent'] = {
     'batch_size': {
         'type': 'bounded',
         'vals': [3, 11],
-        'guess': 6,
+        'guess': 5,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -229,20 +229,20 @@ hypers['model'] = {
     },
     'optimizer.learning_rate': {
         'type': 'bounded',
-        'vals': [0., 8.],
-        'guess': 6,
+        'vals': [0., 9.],
+        'guess': 7.9,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': {
         'type': 'bounded',
         'vals': [1, 30],  # want to try higher, but too slow to test
-        'guess': 20,
+        'guess': 29,
         'pre': round
     },
     'discount': {
         'type': 'bounded',
         'vals': [.9, .99],
-        'guess': .96
+        'guess': .94
     },
     # TODO variable_noise
 }
@@ -250,7 +250,7 @@ hypers['distribution_model'] = {
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0, 5],
-        'guess': 2.45,
+        'guess': 2.46,
         'hydrate': min_ten_neg(1e-4, 0.)
     }
 }
@@ -263,7 +263,7 @@ hypers['pg_model'] = {
     'gae_lambda': {
         'type': 'bounded',
         'vals': [.8, 1.],
-        'guess': .96,
+        'guess': .97,
         # Pretty ugly: says "use gae_lambda if baseline_mode=True, and if gae_lambda > .9" (which is why `vals`
         # allows a number below .9, so we can experiment with it off when baseline_mode=True)
         'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
@@ -273,7 +273,7 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .2,
+        'guess': .1,
         'hydrate': min_threshold(.05, None)
     }
 }
@@ -320,7 +320,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 6,
+        'guess': 8,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -344,7 +344,7 @@ hypers['custom'] = {
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .2],
-        'guess': .26,
+        'guess': .28,
         'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
@@ -356,7 +356,7 @@ hypers['custom'] = {
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 5.6,
+        'guess': 5.8,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
 
@@ -369,7 +369,7 @@ hypers['custom'] = {
     # True = one action (-$x to +$x). False = two actions: (buy|sell|hold) and (how much?)
     'single_action': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
     # Scale the inputs and rewards
     'scale': {
@@ -384,10 +384,17 @@ hypers['custom'] = {
         'guess': 20000,
         'pre': int
     },
-    # See data.py for details on arbitrage
+    # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
+    # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
+    # exchange, so it tends to play "follow the leader". Ie, Kraken will likely try to get to $10k
+    # to match GDAX (oversimplifying obviously). This is called "risk arbitrage" ("arbitrage"
+    # by itself is slightly different, not useful for us). Presumably that's golden info for the neural net:
+    # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
+    # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
+    # data.py) which makes it hard for the net to follow.
     'arbitrage': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     }
 }
 
@@ -415,13 +422,13 @@ hypers['conv2d'] = {
     'net.stride': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 3,
+        'guess': 2,
         'pre': round
     },
     'step_window': {
         'type': 'bounded',
-        'vals': [100, 400],
-        'guess': 250,
+        'vals': [100, 600],
+        'guess': 229,
         'pre': round,
     }
 }

@@ -90,10 +90,10 @@ class Scaler(object):
 # keep this globally around for all runs forever
 scalers = {}
 
-# We don't want random-seeding for reproducability! We _want_ two runs to give different results, because we only
+# We don't want random-seeding for reproducibilityy! We _want_ two runs to give different results, because we only
 # trust the hyper combo which consistently gives positive results!
 ALLOW_SEED = False
-TIMESTEPS = int(2e6)
+TIMESTEPS = int(3e5)  # int(2e6)
 
 
 class BitcoinEnv(Environment):
@@ -234,7 +234,8 @@ class BitcoinEnv(Environment):
             self.conn = data.engine_live.connect()
             # Work with 6000 timesteps up until the present (play w/ diff numbers, depends on LSTM)
             # Offset=0 data.py currently pulls recent-to-oldest, then reverses
-            limit, offset = (6000, 0) # if not self.conv2d else (self.hypers.step_window + 1, 0)
+            rampup = int(3e4)  # 6000  # FIXME temporarily using big number to build up Scaler (since it's not saved)
+            limit, offset = (rampup, 0) # if not self.conv2d else (self.hypers.step_window + 1, 0)
             df, self.last_timestamp = data.db_to_dataframe(
                 self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage, last_timestamp=True)
             # save away for now so we can keep transforming it as we add new data (find a more efficient way)
@@ -357,20 +358,24 @@ class BitcoinEnv(Environment):
             # GDAX https://github.com/danpaquin/gdax-python
             live = self.mode == Mode.LIVE
             if signal < 0:
+                print(f"Selling {signal}")
                 if live:
-                    self.gdax_client.sell(
+                    res = self.gdax_client.sell(
                         # price=str(abs_sig),  # USD
-                        size=float(abs_sig),  # BTC
+                        type='market',
+                        size=round(abs_sig, 4),  # BTC .0
                         product_id='BTC-USD')
-                print(f"Sold {signal}!")
+                    print(res)
             elif signal > 0:
+                print(f"Buying {signal}")
                 if live:
-                    self.gdax_client.buy(
+                    res = self.gdax_client.buy(
                         # price=str(abs_sig),  # USD
-                        size=float(abs_sig),  # BTC
+                        type='market',
+                        size=round(abs_sig, 4),  # BTC
                         product_id='BTC-USD')
-                print(f"Bought {signal}!")
-            elif step_acc.i % 10 == 0:
+                    print(res)
+            elif ep_acc.total_steps % 10 == 0:
                 print(".")
 
             new_data = None
@@ -379,7 +384,7 @@ class BitcoinEnv(Environment):
                     conn=self.conn, last_timestamp=self.last_timestamp, arbitrage=self.hypers.arbitrage)
                 time.sleep(20)
             self.last_timestamp = new_timestamp
-            self.df = pd.concat([self.df, new_data], axis=0)
+            self.df = pd.concat([self.df.iloc[-1000:], new_data], axis=0)  # shed some used data, add new
             self.observations, self.prices = self._xform_data(self.df)
             self.prices_diff = self._diff(self.prices, percent=True)
             step_acc.i = self.df.shape[0] - n_new - 1
@@ -424,7 +429,7 @@ class BitcoinEnv(Environment):
             next_state, terminal, reward = self.execute(runner.agent.act(next_state, deterministic=True))
         if print_results: self.episode_finished(None)
 
-    def train_and_test(self, agent, early_stop=-1, n_tests=40):
+    def train_and_test(self, agent, early_stop=-1, n_tests=30):
         n_train = TIMESTEPS // n_tests
         i = 0
         runner = Runner(agent=agent, environment=self)

@@ -150,12 +150,8 @@ def _db_to_dataframe_main(conn, limit='ALL', offset=0, just_count=False, arbitra
     :param just_count: True if you just want to count the rows (used up-front in btc_env to set some internals).
         You may be thinking "just do a `select count(*)`, why fn(just_count=True)? Because the `arbitrage` arg may
         change the resultant row-count, see below.
-    :param arbitrage: This is special. "Risk arbitrage" is the idea of watching two stock exchanges for the same
-        instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
-        exchange, so it tends to play this "follow the leader" game. Ie, Kraken will very likely "try" to get to $10k
-        to match GDAX (oversimplifying, but it basically works that way). This is called "risk arbitrage" ("arbitrage"
-        by itself is slightly different, not useful for us). Presumably that's golden information for the neural net:
-        "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
+    :param arbitrage: Whether to use "risk arbitrage" (effects the row count due to time-phase alignment). See
+        hypersearch.py for info on this arg.
     :param last_timestamp: When we're in live-mode, we run till the last row in our database, use this arg to track
         where we left off, wait, poll if new rows, repeat.
     :return: pd.DataFrame, with NaNs imputed according to the F/B/Z rules
