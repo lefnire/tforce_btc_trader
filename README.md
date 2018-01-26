@@ -36,17 +36,17 @@ Optional flags:
 ### 4. Run
 Once you've found a good hyper combo from above (this could take days or weeks!), it's time to run your results.
 
-`python run.py`
+`python run.py --name <str>`
 
 - `--name <str>` (required): name of the folder to save your run (during training) or load from (during `--live/--test-live`.
 - `--id <int>`: the id of some winning hyper-combo you want to run with. Without this, it'll run from the hard-coded hyper defaults.
 - `--gpu-split`: (see Hypersearch section)
-- `--runs <int>`: `hypersearch.py` & `run.py` both have a max number of test runs (40 currently), you can increase or decrease that (maybe you think your run in the database could do better if given more time; increase the number here).
+- `--early-stop <int>`: sometimes your models can overfit. In particular, PPO can give you great performance for a long time and then crash-and-burn. That kind of behavior will be obvious in your visualization (below), so you can tell your run to stop after x consecutive positive episodes (depends on the agent - some find an optimum and roll for 3 positive episodes, some 8, just eyeball your graph).
 - `--live`: whooa boy, time to put your agent on GDAX and make real trades! I'm gonna let you figure out how to plug it in on your own, 'cause that's danger territory. I ain't responsible for shit. In fact, let's make that real - disclaimer at the end of README.
 - `--test-live`: same as `live`, but without making the real trades. This will start monitoring a live-updated database (from config.json), same as `live`, but instead of making the actual trade, it pretends it did and reports back how much you would have made/lost. Dry-run. You'll definitely want to run this once or twice before running `--live`.
-- `--early-stop <int>`: sometimes your models can overfit. In particular, PPO can give you great performance for a long time and then crash-and-burn. That kind of behavior will be obvious in your visualization (below), so you can tell your run to stop after x consecutive positive episodes (depends on the agent - some find an optimum and roll for 3 positive episodes, some 8, just eyeball your graph).
 
-The result of `run.py` without `--live` or `--test-live` is to save the trained model to a directory (named `{id}{_early?}`, ie `10` or `10_early`). It'll then use that saved model when you run in `--live` or `--live-test` (use the same args, ie `--id 10 --early-stop 8` so it reconstructs the directory name).
+First, run `python run.py [--id 10] --name test`. This will train your model using run 10 (from `hypersearch.py`) and save to `saves/test`. Without `--id` it will use the hard-coded deafults. You can hit `Ctrl-C` _once_ during training to kill training (in case you see a sweet-spot and don't want to overfit).
+Second, run `python run.py [--id 10] --name test --[test-]live` to run in live/test-live mode. If you used `--id` before, use it again here so that loading the model matches it to its net architecture.
 
 ## 5. Visualize
 TensorForce comes pre-built with reward visualization on a TensorBoard. Check out their Github, you'll see. I needed much more customization than that for viz, so we're not using TensorBoard. I created a mini Flask server (2 routes) and a D3 React dashboard where you can slice & dice hyper combos, visualize progression, etc. If you click on a single run, it'll display a graph of the buy/sell signals that agent took in a time-slice (test-set) so you can eyeball whether he's being smart.

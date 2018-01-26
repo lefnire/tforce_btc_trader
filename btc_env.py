@@ -154,6 +154,7 @@ class BitcoinEnv(Environment):
             # channels = features/inputs (price actions, OHCLV, etc).
             self.states_['series']['shape'] = (self.hypers.step_window, 1, self.cols_)
 
+        # Should be one scaler for any permutation of data (since the columns need to align exactly)
         scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
         if scaler_k not in scalers:
             scalers[scaler_k] = Scaler()
@@ -363,7 +364,7 @@ class BitcoinEnv(Environment):
                     res = self.gdax_client.sell(
                         # price=str(abs_sig),  # USD
                         type='market',
-                        size=round(abs_sig, 4),  # BTC .0
+                        size=str(round(abs_sig, 4)),  # BTC .0
                         product_id='BTC-USD')
                     print(res)
             elif signal > 0:
@@ -372,7 +373,7 @@ class BitcoinEnv(Environment):
                     res = self.gdax_client.buy(
                         # price=str(abs_sig),  # USD
                         type='market',
-                        size=round(abs_sig, 4),  # BTC
+                        size=str(round(abs_sig, 4)),  # BTC
                         product_id='BTC-USD')
                     print(res)
             elif ep_acc.total_steps % 10 == 0:
@@ -429,7 +430,7 @@ class BitcoinEnv(Environment):
             next_state, terminal, reward = self.execute(runner.agent.act(next_state, deterministic=True))
         if print_results: self.episode_finished(None)
 
-    def train_and_test(self, agent, early_stop=-1, n_tests=30):
+    def train_and_test(self, agent, early_stop=-1, n_tests=15):
         n_train = TIMESTEPS // n_tests
         i = 0
         runner = Runner(agent=agent, environment=self)

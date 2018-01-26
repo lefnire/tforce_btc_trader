@@ -18,7 +18,7 @@ Each hyper is specified as `key: {type, vals, guess, pre/post/hydrate}`.
         database looking like this. Eg, baseline_mode, when set to True, does a number on many other hypers.
 """
 
-import argparse, json, math, time, pdb
+import argparse, json, math, time, pdb, os
 from pprint import pprint
 from box import Box
 import numpy as np
@@ -579,8 +579,9 @@ class HSearchEnv(object):
         sql = """
           insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag) 
           values (:hypers, :advantage_avg, :advantages, :uniques, :prices, :actions, :agent, :flag)
+          returning id;
         """
-        self.conn_runs.execute(
+        row = self.conn_runs.execute(
             text(sql),
             hypers=json.dumps(flat),
             advantage_avg=adv_avg,
@@ -590,7 +591,14 @@ class HSearchEnv(object):
             actions=list(step_acc.signals),
             agent=self.agent,
             flag=self.net_type
-        )
+        ).fetchone()
+
+        if  ep_acc.advantages[-1] > 0:
+            _id = str(row[0])
+            directory = os.path.join(os.getcwd(), "saves", _id)
+            filestar = os.path.join(directory, _id)
+            os.mkdir(directory)
+            agent.save_model(filestar)
 
         agent.close()
         env.close()
