@@ -235,7 +235,7 @@ hypers['model'] = {
     },
     'optimization_steps': {
         'type': 'bounded',
-        'vals': [1, 30],  # want to try higher, but too slow to test
+        'vals': [1, 50],  # want to try higher, but too slow to test
         'guess': 29,
         'pre': round
     },
@@ -364,7 +364,7 @@ hypers['custom'] = {
     # Instead of using absolute price diffs, use percent-change.
     'pct_change': {
         'type': 'bool',
-        'guess': False
+        'guess': True
     },
     # True = one action (-$x to +$x). False = two actions: (buy|sell|hold) and (how much?)
     'single_action': {
@@ -650,8 +650,13 @@ def boost_optimization(model, loss_fn, bounds, x_list=[], y_list=[], n_pre_sampl
             x_list.append(params)
             y_list.append(loss_fn(params))
 
+    # generate a big number of random hyper combos, pick the best one. The number of combos
+    # we generate is smaller early on, larger later on. That way the early runs are more random,
+    # allowing for better exploration, and the later runs give boost a bigger selection to choose
+    # from, allowing it to be more spot-on
+    n_experiments = int(1e4 * len(y_list))
     best_params, best_score = None, -1000
-    for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (int(1e6), bounds.shape[0])):
+    for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (n_experiments, bounds.shape[0])):
         prediction = model.predict([params])[0]
         if prediction > best_score:
             best_params = params

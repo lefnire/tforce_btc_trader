@@ -49,11 +49,23 @@ class Scaler(object):
     # 400k should be enough data to safely say "I've seen it all, just scale (don't fit) going forward")
     STOP_AT = 3e5
     SKIP = 15
+
+    # state types
+    REWARD = 1
+    SERIES = 2
+    STATIONARY = 3
+
     def __init__(self):
-        self.reward_scaler = RobustScaler(quantile_range=(5., 95.))
-        self.state_scaler = RobustScaler(quantile_range=(5., 95.))
-        self.rewards = []
-        self.states = []
+        self.scalers = {
+            self.REWARD: RobustScaler(quantile_range=(5., 95.)),
+            self.SERIES: RobustScaler(quantile_range=(5., 95.)),
+            self.STATIONARY: RobustScaler(quantile_range=(5., 95.))
+        }
+        self.data = {
+            self.REWARD: [],
+            self.SERIES: [],
+            self.STATIONARY: []
+        }
         self.done = False
         self.i = 0
 
@@ -62,25 +74,24 @@ class Scaler(object):
         # Skip every few fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
         return self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP)
 
-    def transform_state(self, state):
-        self.i += 1
-        if self._should_skip():
-            return self.state_scaler.transform([state])[-1]
-        # Fit, transform, return
-        self.states.append(state)
-        ret = self.state_scaler.fit_transform(self.states)[-1]
-        if self.i >= self.STOP_AT:
-            # Clear up memory, fitted scalers have all the info we need. stop=True only needed in one of these functions
-            del self.rewards
-            del self.states
-            self.done = True
-        return ret
+    def transform(self, row, kind):
+        # this is awkward; we only want to increment once per step, but we're calling this fn 3x per step (once
+        # for series, once for stationary, once for reward). Explicitly saying "only increment for one of those" here.
+        # Using STATIONARY since SERIES might be called once per timestep in a conv window. TODO Seriously awkward
+        if kind == self.STATIONARY: self.i += 1
 
-    def transform_reward(self, reward):
+        scaler, data = self.scalers[kind], self.data[kind]
         if self._should_skip():
-            return self.reward_scaler.transform([[reward]])[-1][0]
-        self.rewards.append([reward])
-        return self.reward_scaler.fit_transform(self.rewards)[-1][0]
+            return scaler.transform([row])[-1]
+        # Fit, transform, return
+        data.append(row)
+        ret = scaler.fit_transform(data)[-1]
+        if kind == self.REWARD: ret = ret[0]
+        if self.i >= self.STOP_AT and not self.done:
+            self.done = True
+            # Clear up memory, fitted scalers have all the info we need. stop=True only needed in one of these functions
+            del self.data
+        return ret
 
     def avg_reward(self):
         if self.i < self.SKIP: return 20
@@ -122,13 +133,9 @@ class BitcoinEnv(Environment):
         self.mode = Mode.TRAIN
         self.conn = data.engine.connect()
 
-        # TODO this might need to be placed somewhere that updates relatively often
         # gdax min order size = .01btc; krakken = .002btc
         self.min_trade = {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
-        try:
-            self.btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
-        except:
-            self.btc_price = 12000
+        self.update_btc_price()
 
         # Action space
         trade_cap = self.min_trade * 2  # not necessary to limit it like this, doing for my own sanity in live-mode
@@ -177,6 +184,13 @@ class BitcoinEnv(Environment):
         random.seed(seed)
         np.random.seed(seed)
         tf.set_random_seed(seed)
+
+    def update_btc_price(self):
+        try:
+            self.btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
+        except:
+            self.btc_price = self.btc_price or 12000
+
 
     def _diff(self, arr, percent=False):
         series = pd.Series(arr)
@@ -253,6 +267,26 @@ class BitcoinEnv(Environment):
         after_time = round(time.time() - before_time)
         # print(f"Loading {mode.name} took {after_time}s")
 
+    def _get_next_state(self, i, cash, value, repeats):
+        next_series = self.observations[i]
+        next_stationary = [cash, value, repeats]
+        if self.hypers.scale:
+            next_series = self.scaler.transform(next_series, Scaler.SERIES)
+            next_stationary = self.scaler.transform(next_stationary, Scaler.STATIONARY)
+
+        if self.conv2d:
+            # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
+            # [-something:i], which _excludes_ the list's end (due to Python indexing). Without this +1, conv would
+            # have a 1-step-behind delayed response.
+            window = []
+            for j in range(i - self.hypers.step_window + 1, i):
+                step = self.observations[i]
+                window.append(self.scaler.transform(step, Scaler.SERIES) if self.hypers.scale else step)
+            window.append(next_series)
+            # window = self.observations[i - self.hypers.step_window + 1:i + 1]
+            next_series = np.expand_dims(window, axis=1)
+        return dict(series=next_series, stationary=next_stationary)
+
     def reset(self):
         self.time = time.time()
         step_acc, ep_acc = self.acc.step, self.acc.episode
@@ -268,16 +302,7 @@ class BitcoinEnv(Environment):
         step_acc.repeats = 1
         ep_acc.i += 1
 
-        first_state = self.observations[start_timestep]
-        if self.hypers.scale:
-            first_state = self.scaler.transform_state(first_state)
-        if self.conv2d:
-            # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
-            # [-something:i], which _excludes_ the list's end (due to Python indexing). Without this +1, conv would
-            # have a 1-step-behind delayed response.
-            window = self.observations[start_timestep - self.hypers.step_window + 1:start_timestep + 1]
-            first_state = np.expand_dims(window, axis=1)
-        return dict(series=first_state, stationary=[1., 1., 0.])
+        return self._get_next_state(start_timestep, self.start_cash, self.start_value, 0.)
 
     def execute(self, actions):
         if self.hypers.single_action:
@@ -332,18 +357,10 @@ class BitcoinEnv(Environment):
 
         step_acc.i += 1
         ep_acc.total_steps += 1
-        # Is scaling here necessary, esp if using `hypers.scale`?
-        cash_scaled, val_scaled = step_acc.cash / self.start_cash,  step_acc.value / self.start_value
-        repeats_scaled = step_acc.repeats / self.hypers.punish_repeats
 
-        next_state = self.observations[step_acc.i]
+        next_state = self._get_next_state(step_acc.i, step_acc.cash, step_acc.value, step_acc.repeats)
         if self.hypers.scale:
-            next_state = self.scaler.transform_state(next_state)
-            reward = self.scaler.transform_reward(reward)
-        if self.conv2d:
-            window = self.observations[step_acc.i - self.hypers.step_window + 1:step_acc.i + 1]
-            next_state = np.expand_dims(window, axis=1)
-        next_state = dict(series=next_state, stationary=[cash_scaled, val_scaled, repeats_scaled])
+            reward = self.scaler.transform([reward], Scaler.REWARD)
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
@@ -378,6 +395,9 @@ class BitcoinEnv(Environment):
                     print(res)
             elif ep_acc.total_steps % 10 == 0:
                 print(".")
+
+            if signal != 0 and live:
+                self.update_btc_price()
 
             new_data = None
             while new_data is None:

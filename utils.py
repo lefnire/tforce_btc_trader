@@ -37,16 +37,15 @@ def calculate_score(run):
 # second array
 guess_overrides = [
     [
-        {},  # usually want 1 empty dict, which means "try the hard-coded defaults"
-        {'pct_change': True},
-        {'pct_change': True, 'scale': False},
-        {'single_action': False},
-        {'net.width': 4},
-        {'step_optimizer.learning_rate': 6.3, 'optimization_steps': 19},
-        {'net.depth_post': 2},
+        # {},  # usually want 1 empty dict, which means "try the hard-coded defaults"
+        {'step_window': 400},
         {'punish_repeats': 5000},
         {'batch_size': 10},
-        {'step_window': 400}
+        {'net.width': 4},
+        {'net.depth_post': 2},
+        {'single_action': False},
+        {'step_optimizer.learning_rate': 7, 'optimization_steps': 20},
+        {'scale': False}
     ],
     [
         # Winner roughly according to PPO paper / TensorForce defaults (doesn't work for me)
