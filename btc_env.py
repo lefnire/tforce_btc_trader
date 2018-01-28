@@ -160,9 +160,11 @@ class BitcoinEnv(Environment):
             # height = nothing (1)
             # channels = features/inputs (price actions, OHCLV, etc).
             self.states_['series']['shape'] = (self.hypers.step_window, 1, self.cols_)
+            if self.hypers.repeat_last_state:
+                self.states_['stationary']['shape'] += self.cols_
 
         # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = f'ind={self.hypers.indicators}arb={self.hypers.arbitrage}'
+        scaler_k = f'{self.hypers.arbitrage}|{self.hypers.indicators}|{self.hypers.repeat_last_state}'
         if scaler_k not in scalers:
             scalers[scaler_k] = Scaler()
         self.scaler = scalers[scaler_k]
@@ -270,6 +272,8 @@ class BitcoinEnv(Environment):
     def _get_next_state(self, i, cash, value, repeats):
         next_series = self.observations[i]
         next_stationary = [cash, value, repeats]
+        if self.hypers.repeat_last_state:
+            next_stationary += next_series.tolist()
         if self.hypers.scale:
             next_series = self.scaler.transform(next_series, Scaler.SERIES)
             next_stationary = self.scaler.transform(next_stationary, Scaler.STATIONARY)

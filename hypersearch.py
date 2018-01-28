@@ -430,6 +430,13 @@ hypers['conv2d'] = {
         'vals': [100, 600],
         'guess': 229,
         'pre': round,
+    },
+
+    # Because ConvNets boil pictures down (basically downsampling), the precise current timestep numbers can get
+    # averaged away. This will repeat them in state['stationary'] downstream ("sir, you dropped this")
+    'repeat_last_state': {
+        'type': 'bool',
+        'guess': False
     }
 }
 
