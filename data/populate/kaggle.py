@@ -26,7 +26,7 @@ filenames = {
 }
 
 for k in ['coinbase', 'coincheck', 'bitstamp']:
-    filename = filenames[filename]
+    filename = filenames[k]
     df = pd.read_csv(f'./bitcoin-historical-data/{filename}.csv')
     df = df.rename(columns=column_renames)
 
