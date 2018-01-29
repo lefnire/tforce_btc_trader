@@ -4,6 +4,8 @@
 
 A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin trading bot (algo-trader). Uses deep reinforcement learning to automatically buy/sell/hold BTC based on price history.
 
+This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.com/podcasts/machine-learning). Those episodes are tutorial for this project; including an intro to Deep RL, hyperparameter decisions, etc.
+
 ### 1. Setup
 - Python 3.6+ (I use template strings a lot)
 - Install & setup Postgres
@@ -13,7 +15,7 @@ A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin tradin
 - `pip install -r requirements.txt`
   - If issues, try installing these deps manually.
 
-Note: you'll wanna run this on a beefy rig. Use a solid GPU, these are CNNs - minimum I've had success with is K80; 2-3x perf using 1080ti. Have lots of RAM available, my runs take 8GB+ (this could be greatly optimized the way step windows are buffered). Want my advice, build a PC or use Google Cloud Platform w/ Preemptible P100s.
+Note: you'll wanna run this on a GPU rig with some RAM. I'm using a 1080ti and 16GB RAM; 8GB+ is often in used. You _can_ use a standard PC, no GPU (CPU-only); in that case `pip install -I tensorflow==1.5.0rc1` (instead of `tensorflow-gpu`). The only downside is performance; CPU is _way_ slower than GPU for ConvNet computations. Worth evaluating this repo on a CPU before you decide "yeah, it's worth the upgrade."
 
 ### 2. Populate Data
 - Download [mczielinski/bitcoin-historical-data](https://www.kaggle.com/mczielinski/bitcoin-historical-data)

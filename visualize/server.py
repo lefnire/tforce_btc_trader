@@ -15,9 +15,9 @@ def get_runs():
     rows = []
     conn = engine_runs.connect()
     # TODO prices/actions in separate route
-    for row in conn.execute('select id, hypers, advantage_avg, advantages, uniques from runs').fetchall():
+    for row in conn.execute('select id, hypers, advantage_avg, advantages, uniques from runs where advantage_avg > 0').fetchall():
         row = dict(row.items())
-        row['advantage_avg'] = utils.calculate_score(row)
+        row['advantage_avg'] = utils.calculate_score(row['advantages'])
         rows.append(row)
     conn.close()
 

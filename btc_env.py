@@ -109,7 +109,6 @@ scalers = {}
 # We don't want random-seeding for reproducibilityy! We _want_ two runs to give different results, because we only
 # trust the hyper combo which consistently gives positive results!
 ALLOW_SEED = False
-TIMESTEPS = int(3e5)  # int(2e6)
 
 
 class BitcoinEnv(Environment):
@@ -425,7 +424,7 @@ class BitcoinEnv(Environment):
             if signal != 0:
                 print(f"New Total: {step_acc.cash + step_acc.value}")
                 self.episode_finished(None)  # Fixme refactor, awkward function to call here
-            next_state['stationary'] = [step_acc.cash, step_acc.value, self.repeats]
+            next_state['stationary'] = [step_acc.cash, step_acc.value, step_acc.repeats]
             terminal = False
 
         # if step_acc.value <= 0 or step_acc.cash <= 0: terminal = 1
@@ -444,7 +443,7 @@ class BitcoinEnv(Environment):
 
         # Print (limit to note-worthy)
         common = dict((round(k,2), v) for k, v in Counter(signals).most_common(5))
-        completion = f"|{int(ep_acc.total_steps / TIMESTEPS * 100)}%"
+        completion = f"|{int(ep_acc.total_steps / self.n_steps * 100)}%"
         print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}({n_uniques}uniq)")
         return True
 
@@ -454,8 +453,9 @@ class BitcoinEnv(Environment):
             next_state, terminal, reward = self.execute(runner.agent.act(next_state, deterministic=True))
         if print_results: self.episode_finished(None)
 
-    def train_and_test(self, agent, early_stop=-1, n_tests=15):
-        n_train = TIMESTEPS // n_tests
+    def train_and_test(self, agent, n_steps, n_tests, early_stop):
+        self.n_steps = n_steps
+        n_train = self.n_steps // n_tests
         i = 0
         runner = Runner(agent=agent, environment=self)
 
@@ -472,7 +472,7 @@ class BitcoinEnv(Environment):
                 i += 1
         except KeyboardInterrupt:
             # Lets us kill training with Ctrl-C and skip straight to the final test. This is useful in case you're
-            # keeping an eye on terminal and see "there! right there, stop you found it!" (where early_stop & n_tests
+            # keeping an eye on terminal and see "there! right there, stop you found it!" (where early_stop & n_steps
             # are the more methodical approaches)
             pass
 
@@ -482,6 +482,7 @@ class BitcoinEnv(Environment):
         self.run_deterministic(runner, print_results=True)
 
     def run_live(self, agent, test=True):
+        self.n_steps = 30000  # FIXME not used (but referenced for %completion)
         gdax_conf = data.config_json['GDAX']
         self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'])
         # self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'],

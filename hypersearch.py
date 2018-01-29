@@ -447,38 +447,6 @@ for _, section in hypers.items():
         if type(v) != dict: continue  # hard-coded vals
         if v['type'] == 'bool': v['vals'] = [0, 1]
 
-class DotDict(object):
-    """
-    Utility class that lets you get/set attributes with a dot-seperated string key, like `d = a['b.c.d']` or `a['b.c.d'] = 1`
-    """
-    def __init__(self, obj):
-        self._data = obj
-        self.update = self._data.update
-
-    def __getitem__(self, path):
-        v = self._data
-        for k in path.split('.'):
-            if k not in v:
-                return None
-            v = v[k]
-        return v
-
-    def __setitem__(self, path, val):
-        v = self._data
-        path = path.split('.')
-        for i, k in enumerate(path):
-            if i == len(path) - 1:
-                v[k] = val
-                return
-            elif k in v:
-                v = v[k]
-            else:
-                v[k] = {}
-                v = v[k]
-
-    def to_dict(self):
-        return self._data
-
 
 class HSearchEnv(object):
     """This was once a TensorForce environment of its own, when I was using RL to find the best hyper-combo for RL.
@@ -487,7 +455,8 @@ class HSearchEnv(object):
 
     TODO only tested with ppo_agent. Test with other agents
     """
-    def __init__(self, agent='ppo_agent', gpu_split=1, net_type='conv2d'):
+    def __init__(self, cli_args, agent='ppo_agent'):
+        net_type = cli_args.net_type
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
         hypers_['net.type'] = net_type  # set as hard-coded val
@@ -500,8 +469,7 @@ class HSearchEnv(object):
         self.hypers = hypers_
         self.agent = agent
         self.hardcoded = hardcoded
-        self.gpu_split = gpu_split
-        self.net_type = net_type
+        self.cli_args = cli_args
         self.conn = data.engine.connect()
         self.conn_runs = data.engine_runs.connect()
 
@@ -535,7 +503,7 @@ class HSearchEnv(object):
                 flat[k] = hyper['post'](v, flat)
 
         # change all a.b=c to {a:{b:c}} (note DotDict class above, I hate and would rather use an off-the-shelf)
-        main, custom = DotDict({}), DotDict({})
+        main, custom = utils.DotDict({}), utils.DotDict({})
         for k, v in flat.items():
             obj = main if k in hypers[self.agent] else custom
             try:
@@ -554,8 +522,9 @@ class HSearchEnv(object):
 
         # GPU split
         session_config = None
-        if self.gpu_split != 1:
-            fraction = .9 / self.gpu_split if self.gpu_split > 1 else self.gpu_split
+        gpu_split = self.cli_args.gpu_split
+        if gpu_split != 1:
+            fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
             session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
         main['session_config'] = session_config
 
@@ -577,10 +546,10 @@ class HSearchEnv(object):
             **hydrated
         )
 
-        env.train_and_test(agent)
+        env.train_and_test(agent, self.cli_args.n_steps, self.cli_args.n_tests, -1)
 
         step_acc, ep_acc = env.acc.step, env.acc.episode
-        adv_avg = ep_acc.advantages[-1]
+        adv_avg = utils.calculate_score(ep_acc.advantages)
         print(flat, f"\nAdvantage={adv_avg}\n\n")
 
         sql = """
@@ -597,10 +566,10 @@ class HSearchEnv(object):
             prices=list(env.prices),
             actions=list(step_acc.signals),
             agent=self.agent,
-            flag=self.net_type
+            flag=self.cli_args.net_type
         ).fetchone()
 
-        if  ep_acc.advantages[-1] > 0:
+        if ep_acc.advantages[-1] > 0:
             _id = str(row[0])
             directory = os.path.join(os.getcwd(), "saves", _id)
             filestar = os.path.join(directory, _id)
@@ -676,14 +645,13 @@ def main():
     from sklearn.feature_extraction import DictVectorizer
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-g', '--gpu-split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    parser.add_argument('-n', '--net-type', type=str, default='conv2d', help="(lstm|conv2d) Which network arch to use")
     parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
+    utils.add_common_args(parser)
     args = parser.parse_args()
 
     # Encode features
-    hsearch = HSearchEnv(gpu_split=args.gpu_split, net_type=args.net_type)
+    hsearch = HSearchEnv(cli_args=args)
     hypers_, hardcoded = hsearch.hypers, hsearch.hardcoded
     hypers_ = {k: v for k, v in hypers_.items() if k not in hardcoded}
     hsearch.close()
@@ -750,7 +718,7 @@ def main():
 
     # Specify the "loss" function (which we'll maximize) as a single rl_hsearch instantiate-and-run
     def loss_fn(params):
-        hsearch = HSearchEnv(gpu_split=args.gpu_split, net_type=args.net_type)
+        hsearch = HSearchEnv(cli_args=args)
         reward = hsearch.execute(vec2hypers(params))
         hsearch.close()
         return [reward]
@@ -766,7 +734,7 @@ def main():
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([utils.calculate_score(run)])
+            Y.append([utils.calculate_score(run.advantages)])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:
