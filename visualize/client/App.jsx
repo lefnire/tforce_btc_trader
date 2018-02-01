@@ -130,6 +130,12 @@ class App extends Component {
     );
   }
 
+  clickRun = d => {
+    // [0].parent for line, d.parent for dot
+    this.clickedDatum = _.get(d, '[0].parent', d.parent);
+    this.setState({showSignals: true}, this.mountSignals);
+  };
+
   mountChart = (data) => {
     let svg = d3.select("svg#rewards"),
       margin = {top: 20, right: 20, bottom: 30, left: 50},
@@ -195,10 +201,7 @@ class App extends Component {
         .attr("stroke-linejoin", "round")
         .attr("stroke-linecap", "round")
         .attr("d", line)
-        .on("click", d => {
-          this.clickedDatum = d[0].parent;
-          this.setState({showSignals: true}, this.mountSignals);
-        })
+        .on("click", this.clickRun)
     });
 
     // Add a 0-line
@@ -244,6 +247,7 @@ class App extends Component {
         .attr("cy", d => y(d.y))
         .on("mouseover", tip.show)
         .on("mouseout", tip.hide)
+        .on("click", this.clickRun)
 
     let zoom = d3.zoom()
       .scaleExtent([0,500])

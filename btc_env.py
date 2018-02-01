@@ -454,7 +454,7 @@ class BitcoinEnv(Environment):
         if print_results: self.episode_finished(None)
 
     def train_and_test(self, agent, n_steps, n_tests, early_stop):
-        self.n_steps = n_steps
+        self.n_steps = n_steps * 1000
         n_train = self.n_steps // n_tests
         i = 0
         runner = Runner(agent=agent, environment=self)
