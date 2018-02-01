@@ -3,6 +3,7 @@ from data import data
 from data.data import F, Z
 from btc_env import BitcoinEnv, Mode
 from hypersearch import HSearchEnv
+from box import Box
 import pandas as pd
 
 COUNT = 101
@@ -33,7 +34,7 @@ def reset(env):
     env.reset()
 
 def main():
-    hs = HSearchEnv(net_type='conv2d')
+    hs = HSearchEnv(Box(net_type='conv2d', gpu_split=1))
     flat, hydrated, network = hs.get_winner()
     flat['unimodal'] = True
     flat['arbitrage'] = False
@@ -52,6 +53,7 @@ def main():
     data.db_to_dataframe = db_to_dataframe_wrapper(1)
 
     env = BitcoinEnv(flat, name='ppo_agent')
+    env.n_steps = 300  # fixme
 
     # Hold
     reset(env)

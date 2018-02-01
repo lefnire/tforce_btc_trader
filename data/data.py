@@ -246,6 +246,7 @@ def setup_runs_table():
             prices double precision[],
             uniques double precision[],
             flag varchar(16),
-            agent varchar(64) default 'ppo_agent'::character varying not null
+            agent varchar(64) default 'ppo_agent'::character varying not null,
+            custom_score integer default 0
         );
     """)

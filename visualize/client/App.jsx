@@ -1,10 +1,10 @@
 import React, { Component } from 'react';
 import _ from 'lodash';
 import ReactTable from 'react-table';
+import {ButtonToolbar, ButtonGroup, Button, Glyphicon} from 'react-bootstrap';
 import update from 'immutability-helper';
 require('react-table/react-table.css');
 const d3 = require('d3');
-const uuidv4 = require('uuid/v4');
 const d3Tip = require('d3-tip');
 
 class App extends Component {
@@ -126,6 +126,18 @@ class App extends Component {
         {this.renderTable()}
         <svg id='rewards' width={width} height={height / 2} />
         <svg id='signals' width={width} height={showSignals? (height / 2) : 0} />
+        {showSignals && (
+          <ButtonToolbar>
+            <ButtonGroup>
+              <Button>
+                <Glyphicon glyph="thumbs-up" onClick={this.thumbUp}/>
+              </Button>
+              <Button>
+                <Glyphicon glyph="thumbs-down" onClick={this.thumbDown}/>
+              </Button>
+            </ButtonGroup>
+          </ButtonToolbar>
+        )}
       </div>
     );
   }
@@ -134,6 +146,13 @@ class App extends Component {
     // [0].parent for line, d.parent for dot
     this.clickedDatum = _.get(d, '[0].parent', d.parent);
     this.setState({showSignals: true}, this.mountSignals);
+  };
+
+  thumbUp = () => this.customScore(1);
+  thumbDown = () => this.customScore(-1);
+  customScore = (dir) => {
+    let id = this.clickedDatum.id;
+    fetch(`http://localhost:5000/score/${id}/${dir}`)//.then(res => res.json()).then(this._mountSignals);
   };
 
   mountChart = (data) => {

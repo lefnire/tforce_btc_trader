@@ -34,3 +34,11 @@ def get_actions(run_id):
 
     return jsonify(dict(row))
 
+
+@app.route("/score/<run_id>/<dir>", methods=['POST'])
+def custom_score(run_id, dir):
+    conn = engine_runs.connect()
+    query = 'update runs set custom_score=:dir returning *'
+    row = conn.execute(text(query), run_id=run_id, dir=int(dir)).fetchone()
+    conn.close()
+    return jsonify(dict(row))
