@@ -46,8 +46,8 @@ class Scaler(object):
     a newb.
     """
 
-    # 400k should be enough data to safely say "I've seen it all, just scale (don't fit) going forward")
-    STOP_AT = 3e5
+    # At some point we can safely say "I've seen enough, just scale (don't fit) going forward")
+    STOP_AT = int(1e6)
     SKIP = 15
 
     # state types
@@ -66,6 +66,7 @@ class Scaler(object):
             self.SERIES: [],
             self.STATIONARY: []
         }
+        self.avg_reward = .001
         self.done = False
         self.i = 0
 
@@ -93,15 +94,14 @@ class Scaler(object):
         else:
             data.append(input)
             ret = scaler.fit_transform(data)[-1]
+        if kind == self.REWARD:
+            # TODO reconsider logic
+            self.avg_reward = np.mean([r for r in self.data[self.REWARD] if r != 0])
         if self.i >= self.STOP_AT and not self.done:
             self.done = True
-            del self.data # Clear up memory, fitted scalers have all the info we need.
+            del self.data  # Clear up memory, fitted scalers have all the info we need.
         return ret
 
-    def avg_reward(self):
-        if self.i < self.SKIP: return 20
-        reward = self.reward_scaler.inverse_transform([[0]])[-1][0]
-        return abs(reward)
 
 # keep this globally around for all runs forever
 scalers = {}
@@ -132,7 +132,11 @@ class BitcoinEnv(Environment):
                 advantages=[],
                 uniques=[]
             ),
-            step=dict(i=0)  # setup in reset()
+            step=dict(i=0),  # setup in reset()
+            tests=dict(
+                i=0,
+                n_tests=0
+            )
         )
         self.mode = Mode.TRAIN
         self.conn = data.engine.connect()
@@ -172,6 +176,12 @@ class BitcoinEnv(Environment):
         if scaler_k not in scalers:
             scalers[scaler_k] = Scaler()
         self.scaler = scalers[scaler_k]
+
+        # Calculate a possible reward to be used as an average for repeat-punishing
+        prices = data.db_to_dataframe(self.conn, arbitrage=self.hypers.arbitrage)[data.target].values
+        prices_diff = self._diff(prices, percent=True)
+        self.possible_reward = self.start_value * np.median([p for p in prices_diff if p > 0])
+        print('possible_reward', self.possible_reward)
 
     def __str__(self): return 'BitcoinEnv'
 
@@ -252,30 +262,37 @@ class BitcoinEnv(Environment):
         """Fetches, transforms, and stores the portion of data you'll be working with (ie, 80% train data, 20% test
         data, or the live database). Make sure to call this before reset()!
         """
-        before_time = time.time()
         self.mode = mode
         self.no_kill = no_kill
         if mode in (Mode.LIVE, Mode.TEST_LIVE):
             self.conn = data.engine_live.connect()
             # Work with 6000 timesteps up until the present (play w/ diff numbers, depends on LSTM)
             # Offset=0 data.py currently pulls recent-to-oldest, then reverses
-            rampup = int(3e4)  # 6000  # FIXME temporarily using big number to build up Scaler (since it's not saved)
+            rampup = int(1e5)  # 6000  # FIXME temporarily using big number to build up Scaler (since it's not saved)
             limit, offset = (rampup, 0) # if not self.conv2d else (self.hypers.step_window + 1, 0)
             df, self.last_timestamp = data.db_to_dataframe(
                 self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage, last_timestamp=True)
             # save away for now so we can keep transforming it as we add new data (find a more efficient way)
             self.df = df
         else:
-            self.row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
+            row_ct = data.count_rows(self.conn, arbitrage=self.hypers.arbitrage)
             split = .9  # Using 90% training data.
-            n_train, n_test = int(self.row_ct * split), int(self.row_ct * (1 - split))
-            limit, offset = (n_test, n_train) if mode == mode.TEST else (n_train, 0)
+            n_train, n_test = int(row_ct * split), int(row_ct * (1 - split))
+            if mode == mode.TEST:
+                limit, offset = n_test, n_train
+                if no_kill is False:
+                    limit = 50000  # he's not likely to get past that, so save some RAM (=time)
+            else:
+                # Grab a random 30k window from the 90% training data. The random bit is important so the agent
+                # sees a variety of data. The 30k bit is a hack: as long as the agent doesn't die (doesn't cause
+                # `terminal=True`), PPO's MemoryModel can keep filling up until it crashes TensorFlow. This ensures
+                # there's a stopping point (30k). I'd rather see how far he can get w/o dying, figure out a solution.
+                limit = 30000
+                offset = random.randint(0, n_train - limit)
             df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
 
         self.observations, self.prices = self._xform_data(df)
         self.prices_diff = self._diff(self.prices, percent=True)
-        after_time = round(time.time() - before_time)
-        # print(f"Loading {mode.name} took {after_time}s")
 
     def _get_next_state(self, i, cash, value, repeats):
         series = self.observations[i]
@@ -361,6 +378,12 @@ class BitcoinEnv(Environment):
             step_acc.repeats = 1  # reset repeat counter
         else:
             step_acc.repeats += 1
+            # by the time we hit punish_repeats, we're doubling punishments / canceling rewards. Note: we don't want to
+            # multiply by `reward` here because repeats are often 0, which means 0 penalty. Hence `possible_reward`
+            # repeat_penalty = abs(self.scaler.avg_reward) * (step_acc.repeats / self.hypers.punish_repeats)
+            repeat_penalty = self.possible_reward * (step_acc.repeats / self.hypers.punish_repeats)
+            reward -= repeat_penalty
+            # step_acc.value -= repeat_penalty  # TMP: experimenting w/ showing the human & BO
 
         step_acc.i += 1
         ep_acc.total_steps += 1
@@ -371,8 +394,9 @@ class BitcoinEnv(Environment):
 
         terminal = int(step_acc.i + 1 >= len(self.observations))
         # Kill and punish if (a) agent ran out of money; (b) is doing nothing for way too long
+        # The repeats bit isn't just for punishment, but because training can get stuck too long on losers
         if not self.no_kill and (step_acc.cash < 0 or step_acc.value < 0 or step_acc.repeats >= self.hypers.punish_repeats):
-            reward -= 1.  # BTC. Big punishment, like $12k
+            reward -= 1.  # Big penalty. BTC, like $12k
             terminal = True
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
@@ -382,6 +406,16 @@ class BitcoinEnv(Environment):
             # present). Then we unset terminal, after we fetch some new data (keep going)
             # GDAX https://github.com/danpaquin/gdax-python
             live = self.mode == Mode.LIVE
+
+            # Since we have a "ramp-up" window of data (to build the scaler & such), it'll make some fake trades
+            # that don't go through. The first time we hit HEAD (an actual live timestep), we'll reset our numbers
+            if not self.live_at_head:
+                self.live_at_head = True
+                print("Non-live advantage before reaching HEAD")
+                self.episode_finished(None)
+                step_acc.hold.cash = step_acc.cash = self.start_cash
+                step_acc.hold.value = step_acc.value = self.start_value
+
             if signal < 0:
                 print(f"Selling {signal}")
                 if live:
@@ -431,20 +465,24 @@ class BitcoinEnv(Environment):
         return next_state, terminal, reward
 
     def episode_finished(self, runner):
-        step_acc, ep_acc = self.acc.step, self.acc.episode
-        time_ = round(time.time() - self.time)
+        step_acc, ep_acc, test_acc = self.acc.step, self.acc.episode, self.acc.tests
         signals = step_acc.signals
 
         advantage = ((step_acc.cash + step_acc.value) - (self.start_cash + self.start_value)) - \
                     ((step_acc.hold.value + step_acc.hold.cash) - (self.start_cash + self.start_value))
+        # per step average advantage, then bring it to a reasonable number (up from ~.0001)
+        advantage = advantage / step_acc.i * 10000
+        if advantage == 0.: advantage = -.01  # no HODLing!
         self.acc.episode.advantages.append(advantage)
         n_uniques = float(len(np.unique(signals)))
         self.acc.episode.uniques.append(n_uniques)
 
         # Print (limit to note-worthy)
-        common = dict((round(k,2), v) for k, v in Counter(signals).most_common(5))
-        completion = f"|{int(ep_acc.total_steps / self.n_steps * 100)}%"
-        print(f"{ep_acc.i}|⌛:{step_acc.i}{completion}\tA:{'%.3f'%advantage}\t{common}({n_uniques}uniq)")
+        lt_0 = len([s for s in signals if s < 0])
+        eq_0 = len([s for s in signals if s == 0])
+        gt_0 = len([s for s in signals if s > 0])
+        completion = int(test_acc.i / test_acc.n_tests * 100)
+        print(f"{completion}%\tSteps: {step_acc.i}\tAdvantage: {'%.3f'%advantage}\tTrades:\t{lt_0}[<0]\t{eq_0}[=0]\t{gt_0}[>0]")
         return True
 
     def run_deterministic(self, runner, print_results=True):
@@ -454,22 +492,25 @@ class BitcoinEnv(Environment):
         if print_results: self.episode_finished(None)
 
     def train_and_test(self, agent, n_steps, n_tests, early_stop):
-        self.n_steps = n_steps * 1000
-        n_train = self.n_steps // n_tests
-        i = 0
+        test_acc = self.acc.tests
+        n_steps = n_steps * 10000
+        test_acc.n_tests = n_tests
+        test_acc.i = 0
+        timesteps_each = n_steps // n_tests
         runner = Runner(agent=agent, environment=self)
 
         try:
-            while i <= n_tests:
+            while test_acc.i <= n_tests:
                 self.use_dataset(Mode.TRAIN)
-                runner.run(timesteps=n_train, max_episode_timesteps=n_train)
+                # max_episode_timesteps not required, since we kill on (cash|value)<0 or max_repeats
+                runner.run(timesteps=timesteps_each)
                 self.use_dataset(Mode.TEST)
                 self.run_deterministic(runner, print_results=True)
                 if early_stop > 0:
                     advantages = np.array(self.acc.episode.advantages[-early_stop:])
-                    if i >= early_stop and np.all(advantages > 0):
-                        i = n_tests
-                i += 1
+                    if test_acc.i >= early_stop and np.all(advantages > 0):
+                        test_acc.i = n_tests
+                test_acc.i += 1
         except KeyboardInterrupt:
             # Lets us kill training with Ctrl-C and skip straight to the final test. This is useful in case you're
             # keeping an eye on terminal and see "there! right there, stop you found it!" (where early_stop & n_steps
@@ -482,7 +523,8 @@ class BitcoinEnv(Environment):
         self.run_deterministic(runner, print_results=True)
 
     def run_live(self, agent, test=True):
-        self.n_steps = 30000  # FIXME not used (but referenced for %completion)
+        self.live_at_head = False
+        self.acc.tests.n_tests = 1  # not used (but referenced for %completion)
         gdax_conf = data.config_json['GDAX']
         self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'])
         # self.gdax_client = gdax.AuthenticatedClient(gdax_conf['key'], gdax_conf['b64secret'], gdax_conf['passphrase'],

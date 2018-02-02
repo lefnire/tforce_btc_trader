@@ -29,7 +29,7 @@ class App extends Component {
         });
         d.unique_sigs = _.uniq(d.actions).length;
       });
-      this.orig_data = data;
+      this.forceRerender = true;
       this.setState({data});
     });
   }
@@ -51,7 +51,8 @@ class App extends Component {
   componentDidUpdate(prevProps, prevState) {
     // Re-mount charts if we changed page, pageSize, or filter
     let { page, pageSize, filter } = this.state;
-    if (prevState.page !== page || prevState.pageSize !== pageSize || prevState.filter !== filter) {
+    if (this.forceRerender || prevState.page !== page || prevState.pageSize !== pageSize || prevState.filter !== filter) {
+      this.forceRerender = false;
       const { page, pageSize } = this.state;
       let data = this.refs.reactTable.state.sortedData;
       let paged = data.slice(page*pageSize, page*pageSize+pageSize);
@@ -325,7 +326,7 @@ class App extends Component {
         .append("circle")
         .classed('dot', true)
         .style('fill', (d,i) => actions[i] < 0 ? 'red' : actions[i] > 0 ? 'green' : 'rgba(0,0,0,0)')
-        .attr("r", 2)
+        .attr("r", 1)
         .attr("cx", (d,i) => x(i))
         .attr("cy", d => y(d));
     let zoom = d3.zoom()

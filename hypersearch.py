@@ -218,18 +218,31 @@ hypers['agent'] = {
     'discount': {
         'type': 'bounded',
         'vals': [.9, .99],
-        'guess': .99
+        'guess': .97
     },
 }
-# TODO add options to these hypers (all hard-coded)
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
-    'update_mode.batch_size': 20,
-    'update_mode.frequency': 20,
+    'update_mode.batch_size': {
+        'type': 'bounded',
+        'vals': [2, 20],
+        'guess': 10,
+        'pre': round,
+    },
+    'update_mode.frequency': {  # TODO don't how to handle this hyper
+        'type': 'bounded',
+        'vals': [2, 20],
+        'guess': 10,
+        'pre': round
+    },
 
     'memory.type': 'latest',
     'memory.include_next_states': False,
-    'memory.capacity': 5000
+    'memory.capacity': int(1e5),  # {  TODO does this matter?
+    #     'type': 'bounded',
+    #     'vals': [2000, 20000],
+    #     'guess': 5000
+    # }
 }
 hypers['distribution_model'] = {
     # 'distributions': None,
@@ -250,7 +263,7 @@ hypers['pg_model'] = {
     'gae_lambda': {
         'type': 'bounded',
         'vals': [.8, 1.],
-        'guess': .97,
+        'guess': .8,  # .97,
         # Pretty ugly: says "use gae_lambda if baseline_mode=True, and if gae_lambda > .9" (which is why `vals`
         # allows a number below .9, so we can experiment with it off when baseline_mode=True)
         'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
@@ -326,7 +339,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 6,
+        'guess': 8,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -347,16 +360,17 @@ hypers['custom'] = {
     # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
     # papers just role L2 (.001) and ignore the other two; but that hasn't jived for me. Below is the best combo I've
     # gotten so far, and I'll update as I go.
-    'net.dropout': {
-        'type': 'bounded',
-        'vals': [0., .2],
-        'guess': .001,
-        'hydrate': min_threshold(.1, None)
-    },
+    'net.dropout': None,  # FIXME not yet supported in tensorforce#memory (https://github.com/reinforceio/tensorforce/issues/317)
+    # {
+    #    'type': 'bounded',
+    #    'vals': [0., .2],
+    #    'guess': .001,
+    #    'hydrate': min_threshold(.1, None)
+    #},
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],  # to disable, set to 7 (not 0)
-        'guess': 7.,
+        'guess': 3.,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
@@ -388,7 +402,7 @@ hypers['custom'] = {
     # spanking. I didn't raise no investor, I raised a TRADER
     'punish_repeats': {
         'type': 'bounded',
-        'vals': [5000, 20000],
+        'vals': [1000, 20000],
         'guess': 20000,
         'pre': int
     },
@@ -439,7 +453,7 @@ hypers['conv2d'] = {
     },
     'step_window': {
         'type': 'bounded',
-        'vals': [100, 600],
+        'vals': [100, 500],
         'guess': 300,
         'pre': round,
     },
