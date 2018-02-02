@@ -5,6 +5,7 @@ Note there's a lot of nulls in there, see my empty-handling below & determine if
 import pandas as pd
 import numpy as np
 from data.data import engine
+from os import path
 
 conn = engine.connect()
 
@@ -27,7 +28,7 @@ filenames = {
 
 for k in ['coinbase', 'coincheck', 'bitstamp']:
     filename = filenames[k]
-    df = pd.read_csv(f'./bitcoin-historical-data/{filename}.csv')
+    df = pd.read_csv(path.join(path.dirname(__file__), 'bitcoin-historical-data', filename))
     df = df.rename(columns=column_renames)
 
     print(f'{filename}: saving to DB')
