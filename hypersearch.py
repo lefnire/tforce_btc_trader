@@ -37,7 +37,7 @@ import utils
 from data import data
 
 
-def build_net_spec(hypers, baseline=False):
+def build_net_spec(hypers):
     """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
     different network hypers
     """
@@ -68,46 +68,43 @@ def build_net_spec(hypers, baseline=False):
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
-    # TODO figure out how to use LSTM's internals w/ baseline, currently not series-aware. Update: looks like TForce's
-    # `memory` branch fixes this, when merged to master we can get rid of this `if not`
-    if not (net.type == 'lstm' and baseline):
-        if net.type == 'conv2d':
-            steps_out = hypers['step_window']
+    if net.type == 'conv2d':
+        steps_out = hypers['step_window']
 
-        for i in range(net.depth_mid):
-            if net.type == 'lstm':
-                # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
-                arr.append({'size': net.width, **lstm})
-                continue
+    for i in range(net.depth_mid):
+        if net.type == 'lstm':
+            # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
+            arr.append({'size': net.width, **lstm})
+            continue
 
-            # For each Conv2d layer, the window/stride is a function of the step-window size. So `net.window=1` means
-            # divide the step-window 10 ways; `net.window=2` means divide it 20 ways. This gives us flexibility to
-            # define window/stride relative to step_window without having to know either. Note, each layer is reduced
-            # from the prior, so window/stride gets recalculated
-            step_window = math.ceil(steps_out / (net.window * 10))
-            step_stride = math.ceil(step_window / net.stride)
+        # For each Conv2d layer, the window/stride is a function of the step-window size. So `net.window=1` means
+        # divide the step-window 10 ways; `net.window=2` means divide it 20 ways. This gives us flexibility to
+        # define window/stride relative to step_window without having to know either. Note, each layer is reduced
+        # from the prior, so window/stride gets recalculated
+        step_window = math.ceil(steps_out / (net.window * 10))
+        step_stride = math.ceil(step_window / net.stride)
 
-            # next = (length - window)/stride + 1
-            steps_out = (steps_out - step_window)/step_stride + 1
+        # next = (length - window)/stride + 1
+        steps_out = (steps_out - step_window)/step_stride + 1
 
-            # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1
-            # to next layer). TODO this is ugly, better way?
-            min_window, min_stride = 3, 2
-            step_window = max([step_window, min_window])
-            step_stride = max([step_stride, min_stride])
+        # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1
+        # to next layer). TODO this is ugly, better way?
+        min_window, min_stride = 3, 2
+        step_window = max([step_window, min_window])
+        step_stride = max([step_stride, min_stride])
 
-            # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
-            # (like 32-64-64 -> 512-256). If anyone has better intuition...
-            size = max([32, int(net.width / 4)])
-            # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
-            arr.append({
-                'size': size,
-                'window': (step_window, 1),
-                'stride': (step_stride, 1),
-                **conv2d
-            })
-        if net.type == 'conv2d':
-            arr.append({'type': 'flatten'})
+        # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
+        # (like 32-64-64 -> 512-256). If anyone has better intuition...
+        size = max([32, int(net.width / 4)])
+        # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
+        arr.append({
+            'size': size,
+            'window': (step_window, 1),
+            'stride': (step_stride, 1),
+            **conv2d
+        })
+    if net.type == 'conv2d':
+        arr.append({'type': 'flatten'})
 
     # Post Dense layers
     for i in range(net.depth_post):
@@ -118,7 +115,7 @@ def build_net_spec(hypers, baseline=False):
     return arr
 
 
-def custom_net(hypers, print_net=False, baseline=False):
+def custom_net(hypers, print_net=False):
     """First builds up an array of dicts compatible with TForce's network spec. Then passes off to a custom neural
     network architecture, rather than using TForce's default LayeredNetwork. The only reason for this is so we can pipe
     in the "stationary" inputs after the LSTM/Conv2d layers. Think about it. LTSM/Conv2d are tracking time-series data
@@ -129,7 +126,7 @@ def custom_net(hypers, print_net=False, baseline=False):
     network downstream, after the time-series layers. Makes more sense to me that way: imagine the conv layers saying
     "the price is right, buy!" and then getting handed a note with "you have $0 USD". "Oh.. nevermind..."
     """
-    layers_spec = build_net_spec(hypers, baseline)
+    layers_spec = build_net_spec(hypers)
     if print_net: pprint(layers_spec)
 
     class CustomNet(LayeredNetwork):
@@ -533,7 +530,7 @@ class HSearchEnv(object):
             if type(self.hypers['baseline_mode']) == bool:
                 main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
 
-            main['baseline']['network_spec'] = custom_net(custom, baseline=True)
+            main['baseline']['network_spec'] = network
 
         ## GPU split
         ## FIXME add back to tensorforce#memory
