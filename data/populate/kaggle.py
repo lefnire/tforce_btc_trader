@@ -5,6 +5,7 @@ Note there's a lot of nulls in there, see my empty-handling below & determine if
 import pandas as pd
 import numpy as np
 from data.data import engine
+from os import path
 
 conn = engine.connect()
 
@@ -20,22 +21,22 @@ column_renames = {
 }
 
 filenames = {
-    'bitstamp': 'bitstampUSD_1-min_data_2012-01-01_to_2018-01-08.csv',
-    'coinbase': 'coinbaseUSD_1-min_data_2014-12-01_to_2018-01-08.csv',
-    'coincheck': 'coincheckJPY_1-min_data_2014-10-31_to_2018-01-08.csv'
+    'bitstamp': 'bitstampUSD_1-min_data_2012-01-01_to_2018-01-08',
+    'coinbase': 'coinbaseUSD_1-min_data_2014-12-01_to_2018-01-08',
+    'coincheck': 'coincheckJPY_1-min_data_2014-10-31_to_2018-01-08'
 }
 
 for k in ['coinbase', 'coincheck', 'bitstamp']:
     filename = filenames[k]
-    df = pd.read_csv(f'./bitcoin-historical-data/{filename}.csv')
+    df = pd.read_csv(path.join(path.dirname(__file__), 'bitcoin-historical-data', f'{filename}.csv'))
     df = df.rename(columns=column_renames)
 
     print(f'{filename}: saving to DB')
-    df.to_sql(filename, conn, if_exists='replace', chunksize=200)
+    df.to_sql(k, conn, if_exists='replace', chunksize=200)
 
     print(f'{filename}: modifying columns')
     conn.execute(f"""
-    ALTER TABLE {filename} ALTER timestamp TYPE TIMESTAMP WITH TIME ZONE USING to_timestamp(timestamp) AT TIME ZONE 'UTC';
-    CREATE INDEX {filename}_timestamp ON {filename} (timestamp);
+    ALTER TABLE "{k}" ALTER timestamp TYPE TIMESTAMP WITH TIME ZONE USING to_timestamp(timestamp) AT TIME ZONE 'UTC';
+    CREATE INDEX "{k}_timestamp" ON "{k}" (timestamp);
     """)
     print(f'{filename}: done')
