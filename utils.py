@@ -48,49 +48,19 @@ def add_common_args(parser):
 guess_overrides = [
     [
         {},  # usually want 1 empty dict, which means "try the hard-coded defaults"
-        {'scale': False},
-        {'step_window': 400},
-        {'batch_size': 10},
         {'net.depth_post': 2},
-        {'pct_change': False}
+        {'pct_change': False},
+        {'net.l1': 3},
+        {'net.l2': 3},
+        {'net.dropout': .5},
     ],
     [
+        {'single_action': False},
         {'repeat_last_state': True},
         {'punish_repeats': 5000},
         {'net.width': 4},
-        {'single_action': False},
-        {'step_optimizer.learning_rate': 7, 'optimization_steps': 20},
-    ],
-    [
-        # Winner roughly according to PPO paper / TensorForce defaults (doesn't work for me)
-        {'arbitrage': False,
-         'baseline_mode': True,
-         'batch_size': 10,
-         'discount': 0.99,
-         'entropy_regularization': 2.,
-         'gae_lambda': 0.95,
-         'indicators': True,
-         'keep_last_timestep': True,
-         'likelihood_ratio_clipping': .2,
-         'net.activation': 'tanh',
-         'net.depth_mid': 3,
-         'net.depth_post': 1,
-         'net.dropout': .001,
-         'net.funnel': True,
-         'net.l1': 7.,  # this exeeds threshold, so it's "off"
-         'net.l2': 2.,
-         'net.stride': 3,
-         'net.type': 'conv2d',
-         'net.width': 8,
-         'net.window': 1,
-         'optimization_steps': 20,
-         'pct_change': False,
-         'punish_repeats': 20000,
-         'scale': True,
-         'step_optimizer.learning_rate': 3.,
-         'step_optimizer.type': 'adam',
-         'step_window': 250,
-         'single_action': True},
+        {'net.width': 8},
+        {'step_optimizer.learning_rate': 7},
     ]
 ]
 

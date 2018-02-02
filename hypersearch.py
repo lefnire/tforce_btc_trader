@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sqlalchemy.sql import text
+from tensorforce import TensorForceError
 from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks import layer as TForceLayers
 from tensorforce.core.networks.network import LayeredNetwork
@@ -136,6 +137,9 @@ def custom_net(hypers, print_net=False, baseline=False):
             super(CustomNet, self).__init__(layers_spec, **kwargs)
 
         def tf_apply(self, x, internals, update, return_internals=False):
+            """This method is copied from LayeredNetwork and modified slightly to insert stationary after the series
+            layers. If anything's confusing, or if anything changes, consult original function.
+            """
             series = x['series']
             stationary = x['stationary']
             x = series
@@ -148,21 +152,22 @@ def custom_net(hypers, print_net=False, baseline=False):
                 if isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
                     apply_stationary_here = i + 1
 
-            internal_outputs = list()
-            index = 0
+            next_internals = dict()
             for i, layer in enumerate(self.layers):
-                layer_internals = [internals[index + n] for n in range(layer.num_internals)]
-                index += layer.num_internals
                 if i == apply_stationary_here:
                     x = tf.concat([x, stationary], axis=1)
-                x = layer.apply(x, update, *layer_internals)
 
-                if not isinstance(x, tf.Tensor):
-                    internal_outputs.extend(x[1])
-                    x = x[0]
+                layer_internals = {name: internals['{}_{}'.format(layer.scope, name)] for name in
+                                   layer.internals_spec()}
+                if len(layer_internals) > 0:
+                    x, layer_internals = layer.apply(x=x, update=update, **layer_internals)
+                    for name, internal in layer_internals.items():
+                        next_internals['{}_{}'.format(layer.scope, name)] = internal
+                else:
+                    x = layer.apply(x=x, update=update)
 
             if return_internals:
-                return x, internal_outputs
+                return x, next_internals
             else:
                 return x
     return CustomNet
@@ -194,6 +199,9 @@ def hydrate_baseline(x, flat):
             'baseline_mode': 'states',
             'baseline_optimizer': {
                 'type': 'multi_step',
+                # Consider having baseline_optimizer learning hypers independent of the main learning hypers.
+                # At least with PPO, it seems the step_optimizer learning hypers function quite differently than
+                # expected; where baseline_optimizer's function more as-expected. TODO Investigate.
                 'num_steps': flat['optimization_steps'],
                 'optimizer': {
                     'type': flat['step_optimizer.type'],
@@ -204,55 +212,37 @@ def hydrate_baseline(x, flat):
     }[x]
 
 
-# Many of these hypers come directly from tensorforce/tensorforce/agents/ppo_agent.py, see that for documentation
+# Most hypers come directly from tensorforce/tensorforce/agents/ppo_agent.py, see that for documentation
 hypers = {}
-hypers['agent'] = {}
-hypers['batch_agent'] = {
-    'batch_size': {
-        'type': 'bounded',
-        'vals': [3, 11],
-        'guess': 5,
-        'pre': round,
-        'hydrate': two_to_the
-    },
-    'keep_last_timestep': {
-        'type': 'bool',
-        'guess': False
-    }
-}
-hypers['model'] = {
-    # Doesn't seem to matter; consider removing
-    'optimizer.type': {
-        'type': 'int',
-        'vals': ['nadam', 'adam'],
-        'guess': 'adam'
-    },
-    'optimizer.learning_rate': {
-        'type': 'bounded',
-        'vals': [0., 9.],
-        'guess': 7.9,
-        'hydrate': ten_to_the_neg
-    },
-    'optimization_steps': {
-        'type': 'bounded',
-        'vals': [1, 50],  # want to try higher, but too slow to test
-        'guess': 29,
-        'pre': round
-    },
+hypers['agent'] = {
+    # 'states_preprocessing': None,
+    # 'actions_exploration': None,
+    # 'reward_preprocessing': None,
     'discount': {
         'type': 'bounded',
         'vals': [.9, .99],
-        'guess': .94
+        'guess': .99
     },
-    # TODO variable_noise
+}
+# TODO add options to these hypers (all hard-coded)
+hypers['memory_model'] = {
+    'update_mode.unit': 'episodes',
+    'update_mode.batch_size': 20,
+    'update_mode.frequency': 20,
+
+    'memory.type': 'latest',
+    'memory.include_next_states': False,
+    'memory.capacity': 5000
 }
 hypers['distribution_model'] = {
+    # 'distributions': None,
     'entropy_regularization': {
         'type': 'bounded',
         'vals': [0, 5],
-        'guess': 2.46,
+        'guess': 2.,
         'hydrate': min_ten_neg(1e-4, 0.)
-    }
+    },
+    # 'variable_noise': TODO
 }
 hypers['pg_model'] = {
     'baseline_mode': {
@@ -273,25 +263,44 @@ hypers['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': {
         'type': 'bounded',
         'vals': [0., 1.],
-        'guess': .1,
+        'guess': .2,
         'hydrate': min_threshold(.05, None)
     }
+}
+hypers['ppo_model'] = {
+    # Doesn't seem to matter; consider removing
+    'step_optimizer.type': {
+        'type': 'int',
+        'vals': ['nadam', 'adam'],
+        'guess': 'adam'
+    },
+    'step_optimizer.learning_rate': {
+        'type': 'bounded',
+        'vals': [0., 9.],
+        'guess': 3.,
+        'hydrate': ten_to_the_neg
+    },
+    'optimization_steps': {
+        'type': 'bounded',
+        'vals': [1, 50],  # want to try higher, but too slow to test
+        'guess': 25,
+        'pre': round
+    },
+    'subsampling_fraction': {
+        'type': 'bounded',
+        'vals': [0., 1.],
+        'guess': .2
+    },
 }
 
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **hypers['agent'],
-    **hypers['batch_agent'],
-    **hypers['model'],
+    **hypers['memory_model'],
     **hypers['distribution_model'],
     **hypers['pg_model'],
-    **hypers['pg_prob_ration_model']
-
+    **hypers['pg_prob_ration_model'],
+    **hypers['ppo_model']
 }
-
-
-# Renaming this way since I was experimenting with other RL models, like DQN & NAF; revisit)
-hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('optimizer.learning_rate')
-hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
     # Use a handful of TA-Lib technical indicators (SMA, EMA, RSI, etc). Which indicators used and for what time-frame
@@ -320,7 +329,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 8,
+        'guess': 6,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -344,19 +353,19 @@ hypers['custom'] = {
     'net.dropout': {
         'type': 'bounded',
         'vals': [0., .2],
-        'guess': .28,
+        'guess': .001,
         'hydrate': min_threshold(.1, None)
     },
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],  # to disable, set to 7 (not 0)
-        'guess': 1.7,
+        'guess': 7.,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 5.8,
+        'guess': 7.,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
 
@@ -372,10 +381,12 @@ hypers['custom'] = {
         'guess': True
     },
     # Scale the inputs and rewards
-    'scale': {
-        'type': 'bool',
-        'guess': True
-    },
+    'scale': True,
+    # {
+    #     'type': 'bool',
+    #     'guess': True
+    # },
+
     # After this many time-steps of doing the same thing we will terminate the episode and give the agent a huge
     # spanking. I didn't raise no investor, I raised a TRADER
     'punish_repeats': {
@@ -384,6 +395,7 @@ hypers['custom'] = {
         'guess': 20000,
         'pre': int
     },
+
     # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
     # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
     # exchange, so it tends to play "follow the leader". Ie, Kraken will likely try to get to $10k
@@ -392,10 +404,13 @@ hypers['custom'] = {
     # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
     # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
     # data.py) which makes it hard for the net to follow.
-    'arbitrage': {
-        'type': 'bool',
-        'guess': False
-    }
+    # Turning off for now; not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
+    # if the smaller exchange (eg Kraken) is main)
+    'arbitrage': False
+    # {
+    #     'type': 'bool',
+    #     'guess': False
+    # }
 }
 
 hypers['lstm'] = {
@@ -428,7 +443,7 @@ hypers['conv2d'] = {
     'step_window': {
         'type': 'bounded',
         'vals': [100, 600],
-        'guess': 229,
+        'guess': 300,
         'pre': round,
     },
 
@@ -520,13 +535,14 @@ class HSearchEnv(object):
 
             main['baseline']['network_spec'] = custom_net(custom, baseline=True)
 
-        # GPU split
-        session_config = None
-        gpu_split = self.cli_args.gpu_split
-        if gpu_split != 1:
-            fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
-            session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
-        main['session_config'] = session_config
+        ## GPU split
+        ## FIXME add back to tensorforce#memory
+        # session_config = None
+        # gpu_split = self.cli_args.gpu_split
+        # if gpu_split != 1:
+        #     fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
+        #     session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
+        # main['session_config'] = session_config
 
         print('--- Flat ---')
         pprint(flat)
@@ -540,9 +556,9 @@ class HSearchEnv(object):
 
         env = BitcoinEnv(flat, name=self.agent)
         agent = agents_dict[self.agent](
-            states_spec=env.states,
-            actions_spec=env.actions,
-            network_spec=network,
+            states=env.states,
+            actions=env.actions,
+            network=network,
             **hydrated
         )
 
