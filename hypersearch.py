@@ -573,7 +573,7 @@ class HSearchEnv(object):
             _id = str(row[0])
             directory = os.path.join(os.getcwd(), "saves", _id)
             filestar = os.path.join(directory, _id)
-            os.mkdir(directory)
+            os.makedirs(directory, exist_ok=True)
             agent.save_model(filestar)
 
         agent.close()
