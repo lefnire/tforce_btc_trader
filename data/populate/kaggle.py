@@ -34,11 +34,11 @@ for k in ['coinbase', 'coincheck', 'bitstamp']:
     df = df.rename(columns=column_renames)
 
     print(f'{filename}: saving to DB')
-    df.to_sql(filename, conn, if_exists='replace', chunksize=200)
+    df.to_sql(k, conn, if_exists='replace', chunksize=200)
 
     print(f'{filename}: modifying columns')
     conn.execute(f"""
-    ALTER TABLE "{filename}" ALTER timestamp TYPE TIMESTAMP WITH TIME ZONE USING to_timestamp(timestamp) AT TIME ZONE 'UTC';
-    CREATE INDEX "{filename}_timestamp" ON "{filename}" (timestamp);
+    ALTER TABLE "{k}" ALTER timestamp TYPE TIMESTAMP WITH TIME ZONE USING to_timestamp(timestamp) AT TIME ZONE 'UTC';
+    CREATE INDEX "{k}_timestamp" ON "{k}" (timestamp);
     """)
     print(f'{filename}: done')
