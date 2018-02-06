@@ -199,7 +199,7 @@ def hydrate_baseline(x, flat):
                 # Consider having baseline_optimizer learning hypers independent of the main learning hypers.
                 # At least with PPO, it seems the step_optimizer learning hypers function quite differently than
                 # expected; where baseline_optimizer's function more as-expected. TODO Investigate.
-                'num_steps': flat['optimization_steps'],
+                'num_steps': 5,  # flat['baseline_optimizer.num_steps'],
                 'optimizer': {
                     'type': flat['step_optimizer.type'],
                     'learning_rate': 10 ** -flat['step_optimizer.learning_rate']
@@ -223,22 +223,22 @@ hypers['agent'] = {
 }
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
-    'update_mode.batch_size': {
+    'update_mode.batch_size': 10,  # {
+        # 'type': 'bounded',
+        # 'vals': [1, 10],
+        # 'guess': 10,
+        # 'pre': round,
+    # },
+    'update_mode.frequency': {
         'type': 'bounded',
-        'vals': [2, 20],
-        'guess': 10,
-        'pre': round,
-    },
-    'update_mode.frequency': {  # TODO don't how to handle this hyper
-        'type': 'bounded',
-        'vals': [2, 20],
+        'vals': [1, 10],
         'guess': 10,
         'pre': round
     },
 
     'memory.type': 'latest',
     'memory.include_next_states': False,
-    'memory.capacity': int(1e5),  # {  TODO does this matter?
+    'memory.capacity': 100000,  # {  TODO does this matter?
     #     'type': 'bounded',
     #     'vals': [2000, 20000],
     #     'guess': 5000
@@ -246,12 +246,12 @@ hypers['memory_model'] = {
 }
 hypers['distribution_model'] = {
     # 'distributions': None,
-    'entropy_regularization': {
-        'type': 'bounded',
-        'vals': [0, 5],
-        'guess': 2.,
-        'hydrate': min_ten_neg(1e-4, 0.)
-    },
+    'entropy_regularization': .01, #{
+        # 'type': 'bounded',
+        # 'vals': [0, 5],
+        # 'guess': 2.,
+        # 'hydrate': min_ten_neg(1e-4, 0.)
+    # },
     # 'variable_noise': TODO
 }
 hypers['pg_model'] = {
@@ -268,14 +268,15 @@ hypers['pg_model'] = {
         # allows a number below .9, so we can experiment with it off when baseline_mode=True)
         'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
     },
+    # 'baseline_optimizer.num_steps': 5
 }
 hypers['pg_prob_ration_model'] = {
-    'likelihood_ratio_clipping': {
-        'type': 'bounded',
-        'vals': [0., 1.],
-        'guess': .2,
-        'hydrate': min_threshold(.05, None)
-    }
+    'likelihood_ratio_clipping': .2, #{
+    #     'type': 'bounded',
+    #     'vals': [0., 1.],
+    #     'guess': .2,
+    #     'hydrate': min_threshold(.05, None)
+    # }
 }
 hypers['ppo_model'] = {
     # Doesn't seem to matter; consider removing
@@ -287,20 +288,20 @@ hypers['ppo_model'] = {
     'step_optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0., 9.],
-        'guess': 3.,
+        'guess': 5.5,
         'hydrate': ten_to_the_neg
     },
-    'optimization_steps': {
-        'type': 'bounded',
-        'vals': [1, 50],  # want to try higher, but too slow to test
-        'guess': 25,
-        'pre': round
-    },
-    'subsampling_fraction': {
-        'type': 'bounded',
-        'vals': [0., 1.],
-        'guess': .2
-    },
+    'optimization_steps': 25, #{
+    #     'type': 'bounded',
+    #     'vals': [1, 50],  # want to try higher, but too slow to test
+    #     'guess': 25,
+    #     'pre': round
+    # },
+    'subsampling_fraction': .2, #{
+    #     'type': 'bounded',
+    #     'vals': [0., 1.],
+    #     'guess': .2
+    # },
 }
 
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
@@ -402,8 +403,8 @@ hypers['custom'] = {
     # spanking. I didn't raise no investor, I raised a TRADER
     'punish_repeats': {
         'type': 'bounded',
-        'vals': [1000, 20000],
-        'guess': 20000,
+        'vals': [1000, 15000],
+        'guess': 10000,
         'pre': int
     },
 
@@ -705,6 +706,7 @@ def main():
     bounds = []
     for k in feat_names:
         hyper = hypers_.get(k, False)
+        bounded = False
         if hyper:
             bounded, min_, max_ = hyper['type'] == 'bounded', min(hyper['vals']), max(hyper['vals'])
         b = [min_, max_] if bounded else [0, 1]

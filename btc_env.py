@@ -283,11 +283,11 @@ class BitcoinEnv(Environment):
                 if no_kill is False:
                     limit = 50000  # he's not likely to get past that, so save some RAM (=time)
             else:
-                # Grab a random 30k window from the 90% training data. The random bit is important so the agent
-                # sees a variety of data. The 30k bit is a hack: as long as the agent doesn't die (doesn't cause
+                # Grab a random window from the 90% training data. The random bit is important so the agent
+                # sees a variety of data. The window-size bit is a hack: as long as the agent doesn't die (doesn't cause
                 # `terminal=True`), PPO's MemoryModel can keep filling up until it crashes TensorFlow. This ensures
-                # there's a stopping point (30k). I'd rather see how far he can get w/o dying, figure out a solution.
-                limit = 30000
+                # there's a stopping point (limit). I'd rather see how far he can get w/o dying, figure out a solution.
+                limit = 20000
                 offset = random.randint(0, n_train - limit)
             df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
 
