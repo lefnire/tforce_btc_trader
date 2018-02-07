@@ -63,18 +63,24 @@ if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
             bid_price=F,
             bid_lot_volume=Z,
             volume=Z,
-            volume_last24=Z,
+            #volume_last24=Z,
             vwap=Z,
-            vwap_last24=Z,
+            #vwap_last24=Z,
             number_trades=Z,
-            number_trades_last24=Z,
+            #number_trades_last24=Z,
             low=F,
-            low_last24=F,
+            #low_last24=F,
             high=F,
-            high_last24=F,
+            #high_last24=F,
             open_price=F
         ),
-        'ohlcv': dict(open='open_price', high='high', low='low', close='last_trade_price', volume='volume'),
+        'ohlcv': dict(
+            open='open_price',
+            high='high',
+            low='low',
+            close='last_trade_price',
+            volume='volume'
+        ),
     },
     ]
     target = 'exch_ticker_coinbase_usd_last_trade_price'

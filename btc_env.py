@@ -23,6 +23,7 @@ from tensorforce.execution import Runner
 from sklearn.preprocessing import RobustScaler, robust_scale
 from data.data import Exchange, EXCHANGE
 from data import data
+from autoencoder import AutoEncoder
 
 
 class Mode(Enum):
@@ -74,7 +75,7 @@ class Scaler(object):
         # Skip every few fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
         return self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP)
 
-    def transform(self, input, kind):
+    def transform(self, input, kind, force=False):
         # this is awkward; we only want to increment once per step, but we're calling this fn 3x per step (once
         # for series, once for stationary, once for reward). Explicitly saying "only increment for one of those" here.
         # Using STATIONARY since SERIES might be called once per timestep in a conv window. TODO Seriously awkward
@@ -82,7 +83,7 @@ class Scaler(object):
 
         scaler = self.scalers[kind]
         matrix = np.array(input).ndim == 2
-        if self._should_skip():
+        if self._should_skip() and not force:
             if matrix: return scaler.transform(input)
             return scaler.transform([input])[-1]
         # Fit, transform, return
@@ -141,6 +142,21 @@ class BitcoinEnv(Environment):
         self.min_trade = {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
         self.update_btc_price()
 
+        # Should be one scaler for any permutation of data (since the columns need to align exactly)
+        scaler_k = f'{self.hypers.arbitrage}|{self.hypers.indicators}|{self.hypers.repeat_last_state}'
+        if scaler_k not in scalers:
+            scalers[scaler_k] = Scaler()
+        self.scaler = scalers[scaler_k]
+
+        # Our data is too high-dimensional for the way MemoryModel handles batched episodes. Reduce it (don't like this)
+        all_data = data.db_to_dataframe(self.conn, arbitrage=self.hypers.arbitrage)
+        self.all_observations, self.all_prices = self._xform_data(all_data)
+        self.all_prices_diff = self._diff(self.all_prices, percent=True)
+
+        # Calculate a possible reward to be used as an average for repeat-punishing
+        self.possible_reward = self.start_value * np.median([p for p in self.all_prices_diff if p > 0])
+        print('possible_reward', self.possible_reward)
+
         # Action space
         trade_cap = self.min_trade * 2  # not necessary to limit it like this, doing for my own sanity in live-mode
         if self.hypers.single_action:
@@ -153,7 +169,7 @@ class BitcoinEnv(Environment):
                 amount=dict(type='float', shape=(), min_value=self.min_trade, max_value=trade_cap))
 
         # Observation space
-        self.cols_ = data.n_cols(indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
+        self.cols_ = self.all_observations.shape[1]  # data.n_cols(indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
         self.states_ = dict(
             series=dict(type='float', shape=self.cols_),  # all state values that are time-ish
             stationary=dict(type='float', shape=3)  # everything that doesn't care about time (cash, value, n_repeats)
@@ -166,18 +182,6 @@ class BitcoinEnv(Environment):
             self.states_['series']['shape'] = (self.hypers.step_window, 1, self.cols_)
             if self.hypers.repeat_last_state:
                 self.states_['stationary']['shape'] += self.cols_
-
-        # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = f'{self.hypers.arbitrage}|{self.hypers.indicators}|{self.hypers.repeat_last_state}'
-        if scaler_k not in scalers:
-            scalers[scaler_k] = Scaler()
-        self.scaler = scalers[scaler_k]
-
-        # Calculate a possible reward to be used as an average for repeat-punishing
-        prices = data.db_to_dataframe(self.conn, arbitrage=self.hypers.arbitrage)[data.target].values
-        prices_diff = self._diff(prices, percent=True)
-        self.possible_reward = self.start_value * np.median([p for p in prices_diff if p > 0])
-        print('possible_reward', self.possible_reward)
 
     def __str__(self): return 'BitcoinEnv'
 
@@ -217,6 +221,7 @@ class BitcoinEnv(Environment):
 
     def _xform_data(self, df):
         columns = []
+        use_indicators = self.hypers.indicators and self.hypers.indicators > 100
         tables_ = data.get_tables(self.hypers.arbitrage)
         percent = self.hypers.pct_change
         for table in tables_:
@@ -224,7 +229,7 @@ class BitcoinEnv(Environment):
             columns += [self._diff(df[f'{name}_{k}'], percent) for k in cols]
 
             # Add extra indicator columns
-            if ohlcv and self.hypers.indicators:
+            if ohlcv and use_indicators:
                 ind = pd.DataFrame()
                 # TA-Lib requires specifically-named columns (OHLCV)
                 for k, v in ohlcv.items():
@@ -237,12 +242,25 @@ class BitcoinEnv(Environment):
                     self._diff(ATR(ind, timeperiod=self.hypers.indicators), percent),
                 ]
 
-        states = np.nan_to_num(np.column_stack(columns))
+        states = np.column_stack(columns)
         prices = df[data.target].values
+
+        # Remove padding at the start of all data. Indicators are aggregate fns, so don't count until we have
+        # that much historical data
+        if use_indicators:
+            states = states[self.hypers.indicators:]
+            prices = prices[self.hypers.indicators:]
 
         # Pre-scale all price actions up-front, since they don't change. We'll scale changing values real-time elsewhere
         if self.hypers.scale:
-            states = self.scaler.transform(states, Scaler.SERIES)
+            states = robust_scale(states, quantile_range=(5., 95.))
+
+        # Currently we're reducing the dimensionality of our states (OHLCV + indicators + arbitrage => 5 or 6 weights)
+        # because TensorForce's memory branch changed Policy Gradient models' batching from timesteps to episodes.
+        # This takes of way too much GPU RAM for us, so we had to cut back in quite a few areas (num steps to train
+        # per episode, episode batch_size, and especially this:)
+        ae = AutoEncoder()
+        states = ae.fit_transform_tied(states)
 
         return states, prices
 
@@ -275,12 +293,14 @@ class BitcoinEnv(Environment):
                 # sees a variety of data. The window-size bit is a hack: as long as the agent doesn't die (doesn't cause
                 # `terminal=True`), PPO's MemoryModel can keep filling up until it crashes TensorFlow. This ensures
                 # there's a stopping point (limit). I'd rather see how far he can get w/o dying, figure out a solution.
-                limit = 25000
+                limit = 6000
                 offset = random.randint(0, n_train - limit)
-            df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
 
-        self.observations, self.prices = self._xform_data(df)
-        self.prices_diff = self._diff(self.prices, percent=True)
+        # self.observations, self.prices = self._xform_data(df)
+        # self.prices_diff = self._diff(self.prices, percent=True)
+        self.observations = self.all_observations[offset:offset+limit]
+        self.prices = self.all_prices[offset:offset+limit]
+        self.prices_diff = self.all_prices_diff[offset:offset+limit]
 
     def _get_next_state(self, i, cash, value, repeats):
         series = self.observations[i]
@@ -310,9 +330,6 @@ class BitcoinEnv(Environment):
         if self.conv2d:
             # for conv2d, start at the end of the first window (grab a full window)
             start_timestep = self.hypers.step_window
-        if self.hypers.indicators:
-            # if using indicators, add said window as padding so our first timestep has indicator data
-            start_timestep += int(self.hypers.indicators)
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
         step_acc.repeats = 0

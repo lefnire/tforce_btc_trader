@@ -95,7 +95,7 @@ def build_net_spec(hypers):
 
         # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
         # (like 32-64-64 -> 512-256). If anyone has better intuition...
-        size = max([32, int(net.width / 4)])
+        size = max([8, int(net.width // 5)])
         # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
         arr.append({
             'size': size,
@@ -223,7 +223,7 @@ hypers['agent'] = {
 }
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
-    'update_mode.batch_size': 10,  # {
+    'update_mode.batch_size': 8,  # {
         # 'type': 'bounded',
         # 'vals': [1, 10],
         # 'guess': 10,
@@ -231,8 +231,8 @@ hypers['memory_model'] = {
     # },
     'update_mode.frequency': {
         'type': 'bounded',
-        'vals': [1, 10],
-        'guess': 10,
+        'vals': [1, 8],
+        'guess': 8,
         'pre': round
     },
 
@@ -328,7 +328,7 @@ hypers['custom'] = {
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 3,
+        'guess': 2,
         'pre': round
     },
     # Dense layers
@@ -343,7 +343,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 8,
+        'guess': 7,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -406,8 +406,8 @@ hypers['custom'] = {
     # spanking. I didn't raise no investor, I raised a TRADER
     'punish_repeats': {
         'type': 'bounded',
-        'vals': [1000, 15000],
-        'guess': 10000,
+        'vals': [1000, 5000],
+        'guess': 5000,
         'pre': int
     },
 
@@ -419,13 +419,12 @@ hypers['custom'] = {
     # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
     # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
     # data.py) which makes it hard for the net to follow.
-    # Turning off for now; not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
+    # Note: not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
     # if the smaller exchange (eg Kraken) is main)
-    'arbitrage': False
-    # {
-    #     'type': 'bool',
-    #     'guess': False
-    # }
+    'arbitrage': {
+        'type': 'bool',
+        'guess': True
+    }
 }
 
 hypers['lstm'] = {
@@ -459,17 +458,18 @@ hypers['conv2d'] = {
     # but it causes memory issues the way PPO's MemoryModel batches things. This is made up for via indicators
     'step_window': {
         'type': 'bounded',
-        'vals': [100, 400],
+        'vals': [100, 300],
         'guess': 300,
         'pre': round,
     },
 
     # Because ConvNets boil pictures down (basically downsampling), the precise current timestep numbers can get
     # averaged away. This will repeat them in state['stationary'] downstream ("sir, you dropped this")
-    'repeat_last_state': {
-        'type': 'bool',
-        'guess': False
-    }
+    # TODO removing for now while figuring out dimensionality/autoencoder stuff
+    'repeat_last_state': False,  # {
+    #     'type': 'bool',
+    #     'guess': False
+    # }
 }
 
 
