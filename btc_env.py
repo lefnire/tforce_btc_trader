@@ -66,7 +66,6 @@ class Scaler(object):
             self.SERIES: [],
             self.STATIONARY: []
         }
-        self.avg_reward = .001
         self.done = False
         self.i = 0
 
@@ -94,9 +93,6 @@ class Scaler(object):
         else:
             data.append(input)
             ret = scaler.fit_transform(data)[-1]
-        if kind == self.REWARD:
-            # TODO reconsider logic
-            self.avg_reward = np.mean([r for r in self.data[self.REWARD] if r != 0])
         if self.i >= self.STOP_AT and not self.done:
             self.done = True
             del self.data  # Clear up memory, fitted scalers have all the info we need.
@@ -205,8 +201,7 @@ class BitcoinEnv(Environment):
         try:
             self.btc_price = int(requests.get(f"https://api.cryptowat.ch/markets/{EXCHANGE.value}/btcusd/price").json()['result']['price'])
         except:
-            self.btc_price = self.btc_price or 12000
-
+            self.btc_price = self.btc_price or 8000
 
     def _diff(self, arr, percent=False):
         series = pd.Series(arr)
@@ -235,18 +230,11 @@ class BitcoinEnv(Environment):
                 for k, v in ohlcv.items():
                     ind[k] = df[f"{name}_{v}"]
                 columns += [
-                    ## Original indicators from some boilerplate repo I started with
-                    self._diff(SMA(ind, timeperiod=15), percent),
-                    self._diff(SMA(ind, timeperiod=60), percent),
-                    self._diff(RSI(ind, timeperiod=14), percent),
-                    self._diff(ATR(ind, timeperiod=14), percent),
-
-                    ## Indicators from the book "How to Day Trade For a Living". Not sure which are more solid...
-                    ## Price, Volume, 9-EMA, 20-EMA, 50-SMA, 200-SMA, VWAP, prior-day-close
-                    # self._diff(EMA(ind, timeperiod=9)),
-                    # self._diff(EMA(ind, timeperiod=20)),
-                    # self._diff(SMA(ind, timeperiod=50)),
-                    # self._diff(SMA(ind, timeperiod=200)),
+                    # TODO this is my naive approach, I'm not a TA expert. Could use a second pair of eyes
+                    self._diff(SMA(ind, timeperiod=self.hypers.indicators), percent),
+                    self._diff(EMA(ind, timeperiod=self.hypers.indicators), percent),
+                    self._diff(RSI(ind, timeperiod=self.hypers.indicators), percent),
+                    self._diff(ATR(ind, timeperiod=self.hypers.indicators), percent),
                 ]
 
         states = np.nan_to_num(np.column_stack(columns))
@@ -287,7 +275,7 @@ class BitcoinEnv(Environment):
                 # sees a variety of data. The window-size bit is a hack: as long as the agent doesn't die (doesn't cause
                 # `terminal=True`), PPO's MemoryModel can keep filling up until it crashes TensorFlow. This ensures
                 # there's a stopping point (limit). I'd rather see how far he can get w/o dying, figure out a solution.
-                limit = 20000
+                limit = 25000
                 offset = random.randint(0, n_train - limit)
             df = data.db_to_dataframe(self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage)
 
@@ -312,18 +300,22 @@ class BitcoinEnv(Environment):
         return dict(series=series, stationary=stationary)
 
     def reset(self):
-        self.time = time.time()
         step_acc, ep_acc = self.acc.step, self.acc.episode
         # Cash & value are the real scores - how much we end up with at the end of an episode
         step_acc.cash, step_acc.value = self.start_cash, self.start_value
         # But for our purposes, we care more about "how much better is what we made than if we held". We're training
         # a trading bot, not an investing bot. So we compare these at the end, calling it "advantage"
         step_acc.hold = Box(value=self.start_cash, cash=self.start_value)
-        # advance some steps just for cushion, various operations compare back a couple steps
-        start_timestep = self.hypers.step_window if self.conv2d else 1
+        start_timestep = 1
+        if self.conv2d:
+            # for conv2d, start at the end of the first window (grab a full window)
+            start_timestep = self.hypers.step_window
+        if self.hypers.indicators:
+            # if using indicators, add said window as padding so our first timestep has indicator data
+            start_timestep += int(self.hypers.indicators)
         step_acc.i = start_timestep
         step_acc.signals = [0] * start_timestep
-        step_acc.repeats = 1
+        step_acc.repeats = 0
         ep_acc.i += 1
 
         return self._get_next_state(start_timestep, self.start_cash, self.start_value, 0.)
@@ -375,12 +367,11 @@ class BitcoinEnv(Environment):
         # Collect repeated same-action count (homogeneous actions punished below)
         recent_actions = np.array(step_acc.signals[-step_acc.repeats:])
         if np.any(recent_actions > 0) and np.any(recent_actions < 0) and np.any(recent_actions == 0):
-            step_acc.repeats = 1  # reset repeat counter
+            step_acc.repeats = 0  # reset repeat counter
         else:
             step_acc.repeats += 1
             # by the time we hit punish_repeats, we're doubling punishments / canceling rewards. Note: we don't want to
             # multiply by `reward` here because repeats are often 0, which means 0 penalty. Hence `possible_reward`
-            # repeat_penalty = abs(self.scaler.avg_reward) * (step_acc.repeats / self.hypers.punish_repeats)
             repeat_penalty = self.possible_reward * (step_acc.repeats / self.hypers.punish_repeats)
             reward -= repeat_penalty
             # step_acc.value -= repeat_penalty  # TMP: experimenting w/ showing the human & BO

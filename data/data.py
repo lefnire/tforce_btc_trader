@@ -24,7 +24,7 @@ class Exchange(Enum):
     GDAX = 'gdax'
     KRAKEN = 'kraken'
 
-EXCHANGE = Exchange.GDAX
+EXCHANGE = Exchange.KRAKEN
 
 # Methods for imputing NaN. F=ffill, B=bfill, Z=zero. Generally we want volume/size-based features to be 0-filled
 # (indicating no trading during this blank period) and prices to ffill (maintain where the price left off). Right?
@@ -41,15 +41,39 @@ if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
     {
         'name': 'exch_ticker_coinbase_usd',
         'ts': 'last_update',
-        'cols': dict(last_trade_price=F, last_trade_size=Z, bid_price=F, bid_size=Z, bid_num_orders=Z, ask_price=F,
-                     ask_size=Z, ask_num_orders=Z)
+        'cols': dict(
+            last_trade_price=F,
+            last_trade_size=Z,
+            bid_price=F,
+            bid_size=Z,
+            bid_num_orders=Z,
+            ask_price=F,
+            ask_size=Z,
+            ask_num_orders=Z
+        )
     },
     {
         'name': 'exch_ticker_kraken_usd',
         'ts': 'last_update',
-        'cols': dict(last_trade_price=F, last_trade_lot_volume=Z, ask_price=F, ask_lot_volume=Z, bid_price=F,
-                     bid_lot_volume=Z, volume=Z, volume_last24=Z, vwap=Z, vwap_last24=Z, number_trades=Z,
-                     number_trades_last24=Z, low=F, low_last24=F, high=F, high_last24=F, open_price=F),
+        'cols': dict(
+            last_trade_price=F,
+            last_trade_lot_volume=Z,
+            ask_price=F,
+            ask_lot_volume=Z,
+            bid_price=F,
+            bid_lot_volume=Z,
+            volume=Z,
+            volume_last24=Z,
+            vwap=Z,
+            vwap_last24=Z,
+            number_trades=Z,
+            number_trades_last24=Z,
+            low=F,
+            low_last24=F,
+            high=F,
+            high_last24=F,
+            open_price=F
+        ),
         'ohlcv': dict(open='open_price', high='high', low='low', close='last_trade_price', volume='volume'),
     },
     ]
@@ -65,14 +89,42 @@ else:
     {
         'name': 'coinbase',
         'ts': 'timestamp',
-        'cols': dict(open=F, high=F, low=F, close=F, volume_btc=Z, volume_currency=Z, weighted_price=Z),
-        'ohlcv': dict(open='open', high='high', low='low', close='close', volume='volume_currency')
+        'cols': dict(
+            open=F,
+            high=F,
+            low=F,
+            close=F,
+            volume_btc=Z,
+            volume_currency=Z,
+            weighted_price=Z
+        ),
+        'ohlcv': dict(
+            open='open',
+            high='high',
+            low='low',
+            close='close',
+            volume='volume_currency'
+        )
     },
     {
         'name': 'coincheck',
         'ts': 'timestamp',
-        'cols': dict(open=F, high=F, low=F, close=F, volume_btc=Z, volume_currency=Z, weighted_price=Z),
-        'ohlcv': dict(open='open', high='high', low='low', close='close', volume='volume_currency')
+        'cols': dict(
+            open=F,
+            high=F,
+            low=F,
+            close=F,
+            volume_btc=Z,
+            volume_currency=Z,
+            weighted_price=Z
+        ),
+        'ohlcv': dict(
+            open='open',
+            high='high',
+            low='low',
+            close='close',
+            volume='volume_currency'
+        )
     }
     ]
     target = 'coinbase_close'

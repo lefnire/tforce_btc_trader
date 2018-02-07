@@ -288,7 +288,7 @@ hypers['ppo_model'] = {
     'step_optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0., 9.],
-        'guess': 5.5,
+        'guess': 4.,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': 25, #{
@@ -318,8 +318,11 @@ hypers['custom'] = {
     # not optimally chosen at all; just figured "if some randos are better than nothing, there's something there and
     # I'll revisit". Help wanted.
     'indicators': {
-        'type': 'bool',
-        'guess': True
+        'type': 'bounded',
+        'vals': [0, 600],
+        'guess': 600,
+        'pre': int,
+        'hydrate': min_threshold(100, False)
     },
     # Conv / LSTM layers
     'net.depth_mid': {
@@ -452,9 +455,11 @@ hypers['conv2d'] = {
         'guess': 2,
         'pre': round
     },
+    # Size of the window to look at w/ the CNN (ie, width of the image). Would like to have more than 400 "pixels" here,
+    # but it causes memory issues the way PPO's MemoryModel batches things. This is made up for via indicators
     'step_window': {
         'type': 'bounded',
-        'vals': [100, 500],
+        'vals': [100, 400],
         'guess': 300,
         'pre': round,
     },
