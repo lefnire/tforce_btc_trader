@@ -72,6 +72,7 @@ This project is a [TensorForce](https://github.com/reinforceio/tensorforce)-base
 
 - [Sutton & Barto](http://amzn.to/2EWvnVf): de-facto textbook on RL basics
 - [CS 294](http://rll.berkeley.edu/deeprlcourse/): the modern deep-learning spin on ^.
+- [Machine Learning for Trading](https://www.udacity.com/course/machine-learning-for-trading--ud501): teaches you algo-trading, stock stuff, and applied RL.
 
 This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.com/podcasts/machine-learning). Those episodes are tutorial for this project; including an intro to Deep RL, hyperparameter decisions, etc.
 

@@ -95,7 +95,7 @@ def build_net_spec(hypers):
 
         # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
         # (like 32-64-64 -> 512-256). If anyone has better intuition...
-        size = max([8, int(net.width // 5)])
+        size = max([32, int(net.width // 4)])
         # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
         arr.append({
             'size': size,
@@ -223,7 +223,7 @@ hypers['agent'] = {
 }
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
-    'update_mode.batch_size': 8,  # {
+    'update_mode.batch_size': 4,  # {
         # 'type': 'bounded',
         # 'vals': [1, 10],
         # 'guess': 10,
@@ -231,14 +231,14 @@ hypers['memory_model'] = {
     # },
     'update_mode.frequency': {
         'type': 'bounded',
-        'vals': [1, 8],
-        'guess': 8,
+        'vals': [1, 4],
+        'guess': 4,
         'pre': round
     },
 
     'memory.type': 'latest',
     'memory.include_next_states': False,
-    'memory.capacity': 100000,  # {  TODO does this matter?
+    'memory.capacity': BitcoinEnv.EPISODE_LEN * 4,  # {
     #     'type': 'bounded',
     #     'vals': [2000, 20000],
     #     'guess': 5000
@@ -320,7 +320,7 @@ hypers['custom'] = {
     'indicators': {
         'type': 'bounded',
         'vals': [0, 600],
-        'guess': 600,
+        'guess': 300,
         'pre': int,
         'hydrate': min_threshold(100, False)
     },
@@ -328,7 +328,7 @@ hypers['custom'] = {
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 2,
+        'guess': 3,
         'pre': round
     },
     # Dense layers
@@ -384,7 +384,6 @@ hypers['custom'] = {
         'hydrate': min_ten_neg(1e-6, 0.)
     },
 
-
     # Instead of using absolute price diffs, use percent-change.
     'pct_change': {
         'type': 'bool',
@@ -406,8 +405,8 @@ hypers['custom'] = {
     # spanking. I didn't raise no investor, I raised a TRADER
     'punish_repeats': {
         'type': 'bounded',
-        'vals': [1000, 5000],
-        'guess': 5000,
+        'vals': [1000, BitcoinEnv.EPISODE_LEN * 1.5],  # more than ep len means don't punish
+        'guess': 1000,
         'pre': int
     },
 
@@ -582,27 +581,27 @@ class HSearchEnv(object):
         env.train_and_test(agent, self.cli_args.n_steps, self.cli_args.n_tests, -1)
 
         step_acc, ep_acc = env.acc.step, env.acc.episode
-        adv_avg = utils.calculate_score(ep_acc.advantages)
+        adv_avg = utils.calculate_score(ep_acc.sharpes)
         print(flat, f"\nAdvantage={adv_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag) 
-          values (:hypers, :advantage_avg, :advantages, :uniques, :prices, :actions, :agent, :flag)
+          insert into runs (hypers, sharpes, returns, uniques, prices, signals, agent, flag) 
+          values (:hypers, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
           returning id;
         """
         row = self.conn_runs.execute(
             text(sql),
             hypers=json.dumps(flat),
-            advantage_avg=adv_avg,
-            advantages=list(ep_acc.advantages),
+            sharpes=list(ep_acc.sharpes),
+            returns=list(ep_acc.returns),
             uniques=list(ep_acc.uniques),
             prices=list(env.prices),
-            actions=list(step_acc.signals),
+            signals=list(step_acc.signals),
             agent=self.agent,
             flag=self.cli_args.net_type
         ).fetchone()
 
-        if ep_acc.advantages[-1] > 0:
+        if ep_acc.sharpes[-1] > 0:
             _id = str(row[0])
             directory = os.path.join(os.getcwd(), "saves", _id)
             filestar = os.path.join(directory, _id)
@@ -762,13 +761,13 @@ def main():
         # Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk,
         # but this allows to distribute across servers easily
         conn_runs = data.engine_runs.connect()
-        sql = "select hypers, advantages, advantage_avg from runs where flag=:f"
+        sql = "select hypers, sharpes from runs where flag=:f"
         runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
         conn_runs.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([utils.calculate_score(run.advantages)])
+            Y.append([utils.calculate_score(run.sharpes)])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:

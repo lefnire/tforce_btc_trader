@@ -298,9 +298,9 @@ def setup_runs_table():
         (
             id serial not null,
             hypers jsonb not null,
-            advantage_avg double precision not null,
-            advantages double precision[],
-            actions double precision[],
+            sharpes double precision[],
+            returns double precision[],
+            signals double precision[],
             prices double precision[],
             uniques double precision[],
             flag varchar(16),
