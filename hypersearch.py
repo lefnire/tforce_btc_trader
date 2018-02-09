@@ -303,6 +303,30 @@ hypers['ppo_model'] = {
     #     'guess': .2
     # },
 }
+hypers['ddpg_model'] = {
+    "update_mode.unit": "timesteps",
+    "update_mode.batch_size": 64,
+    "update_mode.frequency": 64,
+
+    "memory.type": "replay",
+    "memory.capacity": 100000,
+    "memory.include_next_states": True,
+
+    "optimizer.type": "adam",
+    "optimizer.learning_rate": 1e-4,
+
+    "discount": 0.99,
+    "entropy_regularization": None,
+
+    #"critic_network.size_t0": 400,
+    #"critic_network.size_t1": 300,
+
+    "critic_optimizer.type": "adam",
+    "critic_optimizer.learning_rate": 1e-3,
+
+    "target_sync_frequency": 64,
+    "target_update_weight": 0.999,
+}
 
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **hypers['agent'],
@@ -311,6 +335,11 @@ hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **hypers['pg_model'],
     **hypers['pg_prob_ration_model'],
     **hypers['ppo_model']
+}
+hypers['ddpg_agent'] = {
+    **hypers['agent'],
+    # **hypers['distribution_model'],
+    **hypers['ddpg_model']
 }
 
 hypers['custom'] = {
@@ -487,7 +516,8 @@ class HSearchEnv(object):
 
     TODO only tested with ppo_agent. Test with other agents
     """
-    def __init__(self, cli_args, agent='ppo_agent'):
+    def __init__(self, cli_args):
+        agent = cli_args.agent
         net_type = cli_args.net_type
         hypers_ = hypers[agent].copy()
         hypers_.update(hypers['custom'])
@@ -546,11 +576,12 @@ class HSearchEnv(object):
         main, custom = main.to_dict(), custom.to_dict()
 
         network = custom_net(custom, print_net=True)
-        if flat['baseline_mode']:
+        if flat.get('baseline_mode', None):
             if type(self.hypers['baseline_mode']) == bool:
                 main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
-
             main['baseline']['network_spec'] = network
+        if self.agent == 'ddpg_agent':
+            main['critic_network'] = network
 
         ## GPU split
         ## FIXME add back to tensorforce#memory
@@ -571,7 +602,7 @@ class HSearchEnv(object):
     def execute(self, actions):
         flat, hydrated, network = self.get_hypers(actions)
 
-        env = BitcoinEnv(flat, name=self.agent)
+        env = BitcoinEnv(flat, agent_type=self.agent)
         agent = agents_dict[self.agent](
             states=env.states,
             actions=env.actions,
@@ -586,7 +617,7 @@ class HSearchEnv(object):
         print(flat, f"\nAdvantage={adv_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag) 
+          insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag)
           values (:hypers, :advantage_avg, :advantages, :uniques, :prices, :actions, :agent, :flag)
           returning id;
         """
@@ -615,8 +646,8 @@ class HSearchEnv(object):
 
     def get_winner(self, id=None):
         if id:
-            sql = "select id, hypers from runs where id=:id"
-            winner = self.conn_runs.execute(text(sql), id=id).fetchone()
+            sql = "select id, hypers from runs where id=:id and agent=:agent"
+            winner = self.conn_runs.execute(text(sql), id=id, agent=self.agenet).fetchone()
             winner = winner.hypers
             print(winner)
         else:
@@ -680,6 +711,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
+    parser.add_argument('--agent', type=str, default='ppo_agent', help="Which TensorForce agent to use?")
     utils.add_common_args(parser)
     args = parser.parse_args()
 
@@ -762,8 +794,8 @@ def main():
         # Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk,
         # but this allows to distribute across servers easily
         conn_runs = data.engine_runs.connect()
-        sql = "select hypers, advantages, advantage_avg from runs where flag=:f"
-        runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
+        sql = "select hypers, advantages, advantage_avg from runs where flag=:f and agent=:agent"
+        runs = conn_runs.execute(text(sql), f=args.net_type, agent=args.agent).fetchall()
         conn_runs.close()
         X, Y = [], []
         for run in runs:

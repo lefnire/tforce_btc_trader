@@ -109,11 +109,11 @@ ALLOW_SEED = False
 
 
 class BitcoinEnv(Environment):
-    def __init__(self, hypers, name='ppo_agent'):
+    def __init__(self, hypers, agent_type='ppo_agent'):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
-        self.agent_name = name
+        self.agent_type = agent_type
 
         # cash/val start @ about $3.5k each. You should increase/decrease depending on how much you'll put into your
         # exchange accounts to trade with. Presumably the agent will learn to work with what you've got (cash/value
@@ -259,8 +259,9 @@ class BitcoinEnv(Environment):
         # because TensorForce's memory branch changed Policy Gradient models' batching from timesteps to episodes.
         # This takes of way too much GPU RAM for us, so we had to cut back in quite a few areas (num steps to train
         # per episode, episode batch_size, and especially this:)
-        ae = AutoEncoder()
-        states = ae.fit_transform_tied(states)
+        if self.agent_type == 'ppo_agent':  # todo account for other episode-based. All the PGs?
+            ae = AutoEncoder()
+            states = ae.fit_transform_tied(states)
 
         return states, prices
 
