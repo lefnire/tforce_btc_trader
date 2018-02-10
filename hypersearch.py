@@ -112,6 +112,10 @@ def build_net_spec(hypers):
         arr.append({'size': size, **dense})
         if net.dropout: arr.append({**dropout})
 
+    if net.extra_stationary:
+        arr.append({'size': 9, **dense})  # TODO fiddle with size? Found 9 from a book, seems legit.
+        if net.dropout: arr.append({**dropout})
+
     return arr
 
 
@@ -144,9 +148,12 @@ def custom_net(hypers, print_net=False):
             # Apply stationary to the first Dense after the last LSTM. in the case of Baseline, there's no LSTM,
             # so apply it to the start
             apply_stationary_here = 0
-            # Find the last LSTM layer, peg to the next layer (a Dense)
             for i, layer in enumerate(self.layers):
-                if isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
+                if hypers['net']['extra_stationary'] and isinstance(layer, TForceLayers.Dense):
+                    # Last Dense layer
+                    apply_stationary_here = i
+                elif isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
+                    # Last LSTM layer, peg to the next layer (a Dense)
                     apply_stationary_here = i + 1
 
             next_internals = dict()
@@ -329,6 +336,22 @@ hypers['custom'] = {
         'guess': 300,
         'pre': int,
     },
+
+    # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
+    # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
+    # exchange, so it tends to play "follow the leader". Ie, Kraken will likely try to get to $10k
+    # to match GDAX (oversimplifying obviously). This is called "risk arbitrage" ("arbitrage"
+    # by itself is slightly different, not useful for us). Presumably that's golden info for the neural net:
+    # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
+    # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
+    # data.py) which makes it hard for the net to follow.
+    # Note: not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
+    # if the smaller exchange (eg Kraken) is main)
+    'arbitrage': {
+        'type': 'bool',
+        'guess': True
+    },
+
     # Conv / LSTM layers
     'net.depth_mid': {
         'type': 'bounded',
@@ -366,6 +389,14 @@ hypers['custom'] = {
         'guess': 'tanh'
     },
 
+    # Whether to append one extra tiny layer at the network's end for merging in the stationary data. This would give
+    # stationary data extra oomph. Currently, stationary (which is 2-3 features) gets merged in after flatten (in conv)
+    # which takes 256+ neurons, so stationary can easily get ignored without this hyper.
+    'net.extra_stationary': {
+        'type': 'bool',
+        'guess': True
+    },
+
     # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
     # papers just role L2 (.001) and ignore the other two; but that hasn't jived for me. Below is the best combo I've
     # gotten so far, and I'll update as I go.
@@ -400,11 +431,10 @@ hypers['custom'] = {
         'guess': True
     },
     # Scale the inputs and rewards
-    'scale': True,
-    # {
-    #     'type': 'bool',
-    #     'guess': True
-    # },
+    'scale': {
+        'type': 'bool',
+        'guess': True
+    },
 
     # After this many time-steps of doing the same thing we will terminate the episode and give the agent a huge
     # spanking. I didn't raise no investor, I raised a TRADER
@@ -414,21 +444,6 @@ hypers['custom'] = {
         'guess': 1000,
         'pre': int
     },
-
-    # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
-    # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
-    # exchange, so it tends to play "follow the leader". Ie, Kraken will likely try to get to $10k
-    # to match GDAX (oversimplifying obviously). This is called "risk arbitrage" ("arbitrage"
-    # by itself is slightly different, not useful for us). Presumably that's golden info for the neural net:
-    # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
-    # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
-    # data.py) which makes it hard for the net to follow.
-    # Note: not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
-    # if the smaller exchange (eg Kraken) is main)
-    'arbitrage': {
-        'type': 'bool',
-        'guess': True
-    }
 }
 
 hypers['lstm'] = {

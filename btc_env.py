@@ -114,7 +114,7 @@ class BitcoinEnv(Environment):
         # cash/val start @ about $3.5k each. You should increase/decrease depending on how much you'll put into your
         # exchange accounts to trade with. Presumably the agent will learn to work with what you've got (cash/value
         # are state inputs); but starting capital does effect the learning process.
-        self.start_cash, self.start_value = .8, .8
+        self.start_cash, self.start_value = .4, .4
 
         # We have these "accumulator" objects, which collect values over steps, over episodes, etc. Easier to keep
         # same-named variables separate this way.
