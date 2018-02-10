@@ -41,7 +41,7 @@ def build_net_spec(hypers):
     """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
     different network hypers
     """
-    net, indicators, arbitrage = Box(hypers['net']), hypers['indicators'], hypers['arbitrage']
+    net = Box(hypers['net'])
 
     dense = {
         'type': 'dense',
@@ -317,12 +317,17 @@ hypers['custom'] = {
     # Use a handful of TA-Lib technical indicators (SMA, EMA, RSI, etc). Which indicators used and for what time-frame
     # not optimally chosen at all; just figured "if some randos are better than nothing, there's something there and
     # I'll revisit". Help wanted.
-    'indicators': {
+    'indicators_count': {
+        'type': 'bounded',
+        'vals': [0, 5],
+        'guess': 3,
+        'pre': round
+    },
+    'indicators_window': {
         'type': 'bounded',
         'vals': [0, 600],
         'guess': 300,
         'pre': int,
-        'hydrate': min_threshold(100, False)
     },
     # Conv / LSTM layers
     'net.depth_mid': {

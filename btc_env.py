@@ -14,7 +14,7 @@ import random, time, requests, pdb, gdax, math
 from enum import Enum
 import numpy as np
 import pandas as pd
-from talib.abstract import SMA, RSI, ATR, EMA
+import talib.abstract as tlib
 from collections import Counter
 import tensorflow as tf
 from box import Box
@@ -114,7 +114,7 @@ class BitcoinEnv(Environment):
         # cash/val start @ about $3.5k each. You should increase/decrease depending on how much you'll put into your
         # exchange accounts to trade with. Presumably the agent will learn to work with what you've got (cash/value
         # are state inputs); but starting capital does effect the learning process.
-        self.start_cash, self.start_value = 1., 1.
+        self.start_cash, self.start_value = .8, .8
 
         # We have these "accumulator" objects, which collect values over steps, over episodes, etc. Easier to keep
         # same-named variables separate this way.
@@ -140,7 +140,7 @@ class BitcoinEnv(Environment):
         self.update_btc_price()
 
         # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = f'{self.hypers.arbitrage}|{self.hypers.indicators}|{self.hypers.repeat_last_state}'
+        scaler_k = f'{self.hypers.arbitrage}|{self.hypers.indicators_count}|{self.hypers.repeat_last_state}'
         if scaler_k not in scalers:
             scalers[scaler_k] = Scaler()
         self.scaler = scalers[scaler_k]
@@ -166,7 +166,7 @@ class BitcoinEnv(Environment):
                 amount=dict(type='float', shape=(), min_value=self.min_trade, max_value=trade_cap))
 
         # Observation space
-        self.cols_ = self.all_observations.shape[1]  # data.n_cols(indicators=self.hypers.indicators, arbitrage=self.hypers.arbitrage)
+        self.cols_ = self.all_observations.shape[1]
         self.states_ = dict(
             series=dict(type='float', shape=self.cols_),  # all state values that are time-ish
             stationary=dict(type='float', shape=3)  # everything that doesn't care about time (cash, value, n_repeats)
@@ -214,7 +214,7 @@ class BitcoinEnv(Environment):
 
     def xform_data(self, df):
         columns = []
-        use_indicators = self.hypers.indicators and self.hypers.indicators > 100
+        ind_ct = self.hypers.indicators_count
         tables_ = data.get_tables(self.hypers.arbitrage)
         percent = self.hypers.pct_change
         for table in tables_:
@@ -222,27 +222,34 @@ class BitcoinEnv(Environment):
             columns += [self.diff(df[f'{name}_{k}'], percent) for k in cols]
 
             # Add extra indicator columns
-            if ohlcv and use_indicators:
+            if ohlcv and ind_ct:
                 ind = pd.DataFrame()
                 # TA-Lib requires specifically-named columns (OHLCV)
                 for k, v in ohlcv.items():
                     ind[k] = df[f"{name}_{v}"]
-                columns += [
-                    # TODO this is my naive approach, I'm not a TA expert. Could use a second pair of eyes
-                    self.diff(SMA(ind, timeperiod=self.hypers.indicators), percent),
-                    self.diff(EMA(ind, timeperiod=self.hypers.indicators), percent),
-                    self.diff(RSI(ind, timeperiod=self.hypers.indicators), percent),
-                    self.diff(ATR(ind, timeperiod=self.hypers.indicators), percent),
+
+                # Sort these by effectiveness. I'm no expert, so if this seems off please submit a PR! Later after
+                # you've optimized the other hypers, come back here and create a hyper for every indicator you want to
+                # try (zoom in on indicators)
+                best_indicators = [
+                    tlib.MOM,
+                    tlib.SMA,
+                    # tlib.BBANDS,  # TODO signature different; special handling
+                    tlib.RSI,
+                    tlib.EMA,
+                    tlib.ATR
                 ]
+                for i in range(ind_ct):
+                    columns += [self.diff(best_indicators[i](ind, timeperiod=self.hypers.indicators_window), percent)]
 
         states = np.column_stack(columns)
         prices = df[data.target].values
 
         # Remove padding at the start of all data. Indicators are aggregate fns, so don't count until we have
         # that much historical data
-        if use_indicators:
-            states = states[self.hypers.indicators:]
-            prices = prices[self.hypers.indicators:]
+        if ind_ct:
+            states = states[self.hypers.indicators_window:]
+            prices = prices[self.hypers.indicators_window:]
 
         # Pre-scale all price actions up-front, since they don't change. We'll scale changing values real-time elsewhere
         if self.hypers.scale:
@@ -278,7 +285,7 @@ class BitcoinEnv(Environment):
             n_train, n_test = int(row_ct * split), int(row_ct * (1 - split))
             if mode == mode.TEST:
                 offset = n_train
-                limit = 30000 if full_set else 8000  # should be `n_test` in full_set, getting idx errors
+                limit = 40000 if full_set else 8000  # should be `n_test` in full_set, getting idx errors
             else:
                 # Grab a random window from the 90% training data. The random bit is important so the agent
                 # sees a variety of data. The window-size bit is a hack: as long as the agent doesn't die (doesn't cause
