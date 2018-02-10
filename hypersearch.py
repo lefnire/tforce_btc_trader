@@ -444,6 +444,12 @@ hypers['custom'] = {
         'guess': 1000,
         'pre': int
     },
+
+    # Should rewards be as-is (PNL), or "how much better than holding" (advantage)?
+    'advantage_reward': {
+        'type': 'bool',
+        'guess': False
+    }
 }
 
 hypers['lstm'] = {

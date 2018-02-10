@@ -371,13 +371,18 @@ class BitcoinEnv(Environment):
         step_acc.value += pct_change * step_acc.value
         total_now = step_acc.value + step_acc.cash
         step_acc.totals.trade.append(total_now)
-        # Reward is in dollar-change. As we build a great portfolio, the reward should get bigger and bigger (and
-        # the agent should notice this)
-        reward += (total_now - total_before)
 
         # calculate what the reward would be "if I held", to calculate the actual reward's _advantage_ over holding
-        step_acc.hold_value += pct_change * step_acc.hold_value
+        hold_before = step_acc.hold_value
+        step_acc.hold_value += pct_change * hold_before
         step_acc.totals.hold.append(step_acc.hold_value + self.start_cash)
+
+        # Reward is in dollar-change. As we build a great portfolio, the reward should get bigger and bigger (and
+        # the agent should notice this)
+        if self.hypers.advantage_reward:
+            reward += (total_now - total_before) - (step_acc.hold_value - hold_before)
+        else:
+            reward += (total_now - total_before)
 
         # Collect repeated same-action count (homogeneous actions punished below)
         recent_actions = np.array(step_acc.signals[-step_acc.repeats:])
