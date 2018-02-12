@@ -230,7 +230,7 @@ hypers['agent'] = {
 }
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
-    'update_mode.batch_size': 4,  # {
+    'update_mode.batch_size': 3,  # {
         # 'type': 'bounded',
         # 'vals': [1, 10],
         # 'guess': 10,
@@ -238,7 +238,7 @@ hypers['memory_model'] = {
     # },
     'update_mode.frequency': {
         'type': 'bounded',
-        'vals': [1, 4],
+        'vals': [1, 3],
         'guess': 2,
         'pre': round
     },
@@ -476,8 +476,8 @@ hypers['conv2d'] = {
     # but it causes memory issues the way PPO's MemoryModel batches things. This is made up for via indicators
     'step_window': {
         'type': 'bounded',
-        'vals': [100, 300],
-        'guess': 300,
+        'vals': [100, 400],
+        'guess': 400,
         'pre': round,
     },
 
@@ -589,7 +589,7 @@ class HSearchEnv(object):
     def execute(self, actions):
         flat, hydrated, network = self.get_hypers(actions)
 
-        env = BitcoinEnv(flat, name=self.agent)
+        env = BitcoinEnv(flat, self.cli_args)
         agent = agents_dict[self.agent](
             states=env.states,
             actions=env.actions,
@@ -698,6 +698,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
+    parser.add_argument('--autoencode', action="store_true", default=False, help="If you're running out of GPU memory, try --autoencode which scales things down")
     utils.add_common_args(parser)
     args = parser.parse_args()
 

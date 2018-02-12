@@ -103,14 +103,14 @@ scalers = {}
 
 
 class BitcoinEnv(Environment):
-    EPISODE_LEN = 5000
+    EPISODE_LEN = 10000
 
-    def __init__(self, hypers, name='ppo_agent'):
+    def __init__(self, hypers, cli_args={}):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
         self.hypers = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.all_or_none = self.hypers.action_type == 'all_or_none'
-        self.agent_name = name
+        self.cli_args = cli_args
 
         # cash/val start @ about $3.5k each. You should increase/decrease depending on how much you'll put into your
         # exchange accounts to trade with. Presumably the agent will learn to work with what you've got (cash/value
@@ -260,12 +260,13 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             states = robust_scale(states, quantile_range=(5., 95.))
 
-        # Currently we're reducing the dimensionality of our states (OHLCV + indicators + arbitrage => 5 or 6 weights)
+        # Reducing the dimensionality of our states (OHLCV + indicators + arbitrage => 5 or 6 weights)
         # because TensorForce's memory branch changed Policy Gradient models' batching from timesteps to episodes.
         # This takes of way too much GPU RAM for us, so we had to cut back in quite a few areas (num steps to train
-        # per episode, episode batch_size, and especially this:
-        # ae = AutoEncoder()
-        # states = ae.fit_transform_tied(states)
+        # per episode, episode batch_size, and especially states:
+        if self.cli_args.autoencode:
+            ae = AutoEncoder()
+            states = ae.fit_transform_tied(states)
 
         return states, prices
 
@@ -290,7 +291,7 @@ class BitcoinEnv(Environment):
             n_train, n_test = int(row_ct * split), int(row_ct * (1 - split))
             if mode == mode.TEST:
                 offset = n_train
-                limit = 40000 if full_set else 8000  # should be `n_test` in full_set, getting idx errors
+                limit = 40000 if full_set else self.EPISODE_LEN  # should be `n_test` in full_set, getting idx errors
             else:
                 # Grab a random window from the 90% training data. The random bit is important so the agent
                 # sees a variety of data. The window-size bit is a hack: as long as the agent doesn't die (doesn't cause
