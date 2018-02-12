@@ -239,7 +239,7 @@ hypers['memory_model'] = {
     'update_mode.frequency': {
         'type': 'bounded',
         'vals': [1, 4],
-        'guess': 4,
+        'guess': 2,
         'pre': round
     },
 
@@ -295,7 +295,7 @@ hypers['ppo_model'] = {
     'step_optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0., 9.],
-        'guess': 4.,
+        'guess': 6.,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': 25, #{
@@ -349,21 +349,21 @@ hypers['custom'] = {
     # if the smaller exchange (eg Kraken) is main)
     'arbitrage': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
 
     # Conv / LSTM layers
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 3,
+        'guess': 2,
         'pre': round
     },
     # Dense layers
     'net.depth_post': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 1,
+        'guess': 2,
         'pre': round
     },
     # Network depth, in broad-strokes of 2**x (2, 4, 8, 16, 32, 64, 128, 256, 512, ..) just so you get a feel for
@@ -371,7 +371,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 7,
+        'guess': 6,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -386,7 +386,7 @@ hypers['custom'] = {
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'relu'],
-        'guess': 'tanh'
+        'guess': 'relu'
     },
 
     # Whether to append one extra tiny layer at the network's end for merging in the stationary data. This would give
@@ -423,26 +423,19 @@ hypers['custom'] = {
     # Instead of using absolute price diffs, use percent-change.
     'pct_change': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
-    # True = one action (-$x to +$x). False = two actions: (buy|sell|hold) and (how much?)
-    'single_action': {
-        'type': 'bool',
-        'guess': True
+    # single = one action (-$x to +$x). multi = two actions: (buy|sell|hold) and (how much?). all_or_none = buy/sell
+    # w/ all the cash or value owned
+    'action_type': {
+        'type': 'int',
+        'vals': ['single', 'multi', 'all_or_none'],
+        'guess': 'all_or_none'
     },
     # Scale the inputs and rewards
     'scale': {
         'type': 'bool',
         'guess': True
-    },
-
-    # After this many time-steps of doing the same thing we will terminate the episode and give the agent a huge
-    # spanking. I didn't raise no investor, I raised a TRADER
-    'punish_repeats': {
-        'type': 'bounded',
-        'vals': [1000, BitcoinEnv.EPISODE_LEN * 1.5],  # more than ep len means don't punish
-        'guess': 1000,
-        'pre': int
     },
 
     # Should rewards be as-is (PNL), or "how much better than holding" (advantage)?
@@ -468,7 +461,7 @@ hypers['conv2d'] = {
     'net.window': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 3,
+        'guess': 2,
         'pre': round,
     },
     # How many ways to divide a window? 1=no-overlap, 2=half-overlap (smaller # = more destructive). See comments

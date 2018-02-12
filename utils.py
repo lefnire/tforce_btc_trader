@@ -10,9 +10,10 @@ class ScoreMode(Enum):
     POS = 3  # max # positive tests
     CONSECUTIVE_POS = 4  # max # *consecutive* positives
     TOTAL = 5
+    MIX = 6
 
 
-MODE = ScoreMode.LAST
+MODE = ScoreMode.MIX
 
 
 def calculate_score(advantages):
@@ -20,6 +21,8 @@ def calculate_score(advantages):
         return np.mean(advantages)
     elif MODE == ScoreMode.LAST:
         return advantages[-1]
+    elif MODE == ScoreMode.MIX:
+        return np.mean(advantages[:-1]) + advantages[-1]
     elif MODE == ScoreMode.POS:
         return sum(1 for x in advantages if x > 0)
     elif MODE == ScoreMode.TOTAL:
