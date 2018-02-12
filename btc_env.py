@@ -107,7 +107,7 @@ class BitcoinEnv(Environment):
 
     def __init__(self, hypers, cli_args={}):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
-        self.hypers = Box(hypers)
+        self.hypers = h = Box(hypers)
         self.conv2d = self.hypers['net.type'] == 'conv2d'
         self.all_or_none = self.hypers.action_type == 'all_or_none'
         self.cli_args = cli_args
@@ -141,13 +141,13 @@ class BitcoinEnv(Environment):
         self.update_btc_price()
 
         # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = f'{self.hypers.arbitrage}|{self.hypers.indicators_count}|{self.hypers.repeat_last_state}'
+        scaler_k = f'{h.arbitrage}|{h.indicators_count}|{h.repeat_last_state}|{h.action_type}'
         if scaler_k not in scalers:
             scalers[scaler_k] = Scaler()
         self.scaler = scalers[scaler_k]
 
         # Our data is too high-dimensional for the way MemoryModel handles batched episodes. Reduce it (don't like this)
-        all_data = data.db_to_dataframe(self.conn, arbitrage=self.hypers.arbitrage)
+        all_data = data.db_to_dataframe(self.conn, arbitrage=h.arbitrage)
         self.all_observations, self.all_prices = self.xform_data(all_data)
         self.all_prices_diff = self.diff(self.all_prices, percent=True)
 
@@ -157,16 +157,15 @@ class BitcoinEnv(Environment):
 
         # Action space
         trade_cap = self.min_trade * 2  # not necessary to limit it like this, doing for my own sanity in live-mode
-        action_type = self.hypers.action_type
-        if action_type == 'single':
+        if h.action_type == 'single':
             # In single_action we discard any vals b/w [-min_trade, +min_trade] and call it "hold" (in execute())
             self.actions_ = dict(type='float', shape=(), min_value=-trade_cap, max_value=trade_cap)
-        elif action_type == 'multi':
+        elif h.action_type == 'multi':
             # In multi-modal, hold is an actual action (in which case we discard "amount")
             self.actions_ = dict(
                 action=dict(type='int', shape=(), num_actions=3),
                 amount=dict(type='float', shape=(), min_value=self.min_trade, max_value=trade_cap))
-        elif action_type == 'all_or_none':
+        elif h.action_type == 'all_or_none':
             self.actions_ = dict(type='int', shape=(), num_actions=3)
 
         # Observation space
@@ -181,8 +180,8 @@ class BitcoinEnv(Environment):
             # width = step-window (150 time-steps)
             # height = nothing (1)
             # channels = features/inputs (price actions, OHCLV, etc).
-            self.states_['series']['shape'] = (self.hypers.step_window, 1, self.cols_)
-            if self.hypers.repeat_last_state:
+            self.states_['series']['shape'] = (h.step_window, 1, self.cols_)
+            if h.repeat_last_state:
                 self.states_['stationary']['shape'] += self.cols_
 
     def __str__(self): return 'BitcoinEnv'
@@ -404,7 +403,7 @@ class BitcoinEnv(Environment):
 
         # Reward is in dollar-change. As we build a great portfolio, the reward should get bigger and bigger (and
         # the agent should notice this)
-        if self.hypers.advantage_reward:
+        if self.hypers.reward_type == 'advantage':
             reward += (total_now - total_before) - (step_acc.hold_value - hold_before)
         else:
             reward += (total_now - total_before)
@@ -417,10 +416,20 @@ class BitcoinEnv(Environment):
         if self.hypers.scale:
             reward = self.scaler.transform([reward], Scaler.REWARD)[0]
 
+        if self.hypers.reward_type == 'sharpe':
+            reward = 0
+
         terminal = int(step_acc.i + 1 >= self.limit)
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
+            if self.hypers.reward_type == 'sharpe':
+                diff = (pd.Series(step_acc.totals.trade).pct_change() - pd.Series(step_acc.totals.hold).pct_change())[1:]
+                mean, std = diff.mean(), diff.std()
+                if (std, mean) != (0, 0):
+                    reward = mean / std
+
+
         if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
             # Only do real buy/sell on last step if LIVE (in case there are multiple steps b/w, we only care about
             # present). Then we unset terminal, after we fetch some new data (keep going)

@@ -432,17 +432,18 @@ hypers['custom'] = {
         'vals': ['single', 'multi', 'all_or_none'],
         'guess': 'all_or_none'
     },
+    # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
+    # and calculate sharpe score at episode-terminal
+    'reward_type': {
+        'type': 'int',
+        'vals': ['raw', 'advantage', 'sharpe'],
+        'guess': 'raw'
+    },
     # Scale the inputs and rewards
     'scale': {
         'type': 'bool',
         'guess': True
     },
-
-    # Should rewards be as-is (PNL), or "how much better than holding" (advantage)?
-    'advantage_reward': {
-        'type': 'bool',
-        'guess': False
-    }
 }
 
 hypers['lstm'] = {
@@ -536,6 +537,8 @@ class HSearchEnv(object):
         :param actions: the hyperparamters
         """
         self.flat = flat = {}
+
+
         # Preprocess hypers
         for k, v in actions.items():
             try: v = v.item()  # sometimes primitive, sometimes numpy
@@ -544,6 +547,10 @@ class HSearchEnv(object):
             if 'pre' in hyper:
                 v = hyper['pre'](v)
             flat[k] = v
+        # TODO remove this special-handling
+        if flat['reward_type'] == 'sharpe':
+            flat['gae_lambda'] = None
+            flat['discount'] = 1.
         flat.update(self.hardcoded)
 
         # Post-process hypers (allow for dependency handling, etc)
@@ -604,7 +611,7 @@ class HSearchEnv(object):
         print(flat, f"\nAdvantage={adv_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, sharpes, returns, uniques, prices, signals, agent, flag) 
+          insert into runs (hypers, sharpes, returns, uniques, prices, signals, agent, flag)
           values (:hypers, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
           returning id;
         """
