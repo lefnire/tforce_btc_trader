@@ -13,7 +13,7 @@ class ScoreMode(Enum):
     MIX = 6
 
 
-MODE = ScoreMode.MIX
+MODE = ScoreMode.LAST
 
 
 def calculate_score(advantages):
@@ -40,10 +40,11 @@ def calculate_score(advantages):
 
 
 def add_common_args(parser):
-    parser.add_argument('-g', '--gpu-split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
+    # parser.add_argument('-g', '--gpu-split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
     parser.add_argument('-n', '--net-type', type=str, default='conv2d')
-    parser.add_argument('-t', '--n-tests', type=int, default=100, help="Number of times to split to training and run a test. This slows things down, so balance graph resolution w/ performance.")
-    parser.add_argument('-s', '--n-steps', type=int, default=200, help="Number of 1k timesteps total to train. (using 50 means 500,000)")
+    parser.add_argument('-t', '--n-tests', type=int, default=40, help="Number of times to split to training and run a test. This slows things down, so balance graph resolution w/ performance.")
+    parser.add_argument('-s', '--n-steps', type=int, default=80, help="Number of 1k timesteps total to train. (using 50 means 500,000)")
+    parser.add_argument('--autoencode', action="store_true", default=False, help="If you're running out of GPU memory, try --autoencode which scales things down")
 
 
 # One array per running instance (ie, if you have 2 separate tabs running hypersearch.py, then you'll want an array of
@@ -52,21 +53,15 @@ def add_common_args(parser):
 guess_overrides = [
     [
         {},  # usually want 1 empty dict, which means "try the hard-coded defaults"
-        {'discount': .95},
-        # {'update_mode.batch_size': 10},
-        {'net.l2': 7., 'net.l1': 3.},  # only l1
-        {'net.l1': 7., 'net.l2': 7.},  # off
-        {'pct_change': False},
-        {'net.depth_post': 2},
-    ],
-    [
-        {'single_action': False},
-        {'punish_repeats': 5000},
-        {'net.width': 4},
-        {'net.width': 8},
-        {'net.l1': 4., 'net.l2': 4.},  # both
-        {'repeat_last_state': True},
-        {'step_optimizer.learning_rate': 5.5},
+        {'action_type': 'all_or_none'},
+        {'action_type': 'single'},
+        {'update_mode.frequency': 1, 'update_mode.batch_size': 10},
+        {'gae_lambda': True}
+    ], [
+        {'net.width': 6},
+        {'learning_rate': 5.},
+        {'reward_type': 'advantage'},
+        {'reward_type': 'raw'},
     ]
 ]
 

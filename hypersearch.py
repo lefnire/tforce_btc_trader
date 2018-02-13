@@ -95,7 +95,7 @@ def build_net_spec(hypers):
 
         # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
         # (like 32-64-64 -> 512-256). If anyone has better intuition...
-        size = max([32, int(net.width // 4)])
+        size = max([16, int(net.width // 4)])
         # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
         arr.append({
             'size': size,
@@ -222,30 +222,36 @@ hypers['agent'] = {
     # 'states_preprocessing': None,
     # 'actions_exploration': None,
     # 'reward_preprocessing': None,
-    'discount': {
-        'type': 'bounded',
-        'vals': [.9, .99],
-        'guess': .97
-    },
+
+    # I'm pretty sure we don't want to experiment any less than .99 for non-terminal reward-types (which are 1.0).
+    # .99^500 ~= .6%, so looses value sooner than makes sense for our trading horizon. A trade now could effect
+    # something 2-5k steps later. So .999 is more like it (5k steps ~= .6%)
+    # 'discount': .999,  # {
+    #     'type': 'bounded',
+    #     'vals': [.9, .99],
+    #     'guess': .97
+    # },
 }
+MAX_BATCH_SIZE = 10
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
-    'update_mode.batch_size': 3,  # {
-        # 'type': 'bounded',
-        # 'vals': [1, 10],
-        # 'guess': 10,
-        # 'pre': round,
-    # },
+    'update_mode.batch_size': {
+        'type': 'bounded',
+        'vals': [1, MAX_BATCH_SIZE],
+        'guess': 4,
+        'pre': round,
+    },
     'update_mode.frequency': {
         'type': 'bounded',
-        'vals': [1, 3],
+        'vals': [1, 3],  # t-shirt sizes, reverse order
         'guess': 2,
-        'pre': round
+        'pre': round,
+        'post': lambda x, others: others['update_mode.batch_size'] // x
     },
 
     'memory.type': 'latest',
     'memory.include_next_states': False,
-    'memory.capacity': BitcoinEnv.EPISODE_LEN * 4,  # {
+    'memory.capacity': BitcoinEnv.EPISODE_LEN * MAX_BATCH_SIZE,  # {
     #     'type': 'bounded',
     #     'vals': [2000, 20000],
     #     'guess': 5000
@@ -253,11 +259,11 @@ hypers['memory_model'] = {
 }
 hypers['distribution_model'] = {
     # 'distributions': None,
-    'entropy_regularization': .01, #{
-        # 'type': 'bounded',
-        # 'vals': [0, 5],
-        # 'guess': 2.,
-        # 'hydrate': min_ten_neg(1e-4, 0.)
+    'entropy_regularization': .01,  # {
+    #     'type': 'bounded',
+    #     'vals': [0, 5],
+    #     'guess': 2.,
+    #     'hydrate': min_ten_neg(1e-4, 0.)
     # },
     # 'variable_noise': TODO
 }
@@ -268,17 +274,26 @@ hypers['pg_model'] = {
         'hydrate': hydrate_baseline
     },
     'gae_lambda': {
-        'type': 'bounded',
-        'vals': [.8, 1.],
-        'guess': .8,  # .97,
-        # Pretty ugly: says "use gae_lambda if baseline_mode=True, and if gae_lambda > .9" (which is why `vals`
-        # allows a number below .9, so we can experiment with it off when baseline_mode=True)
-        'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
+        'type': 'bool',
+        'guess': False,
+        # hydrated in main code
+
+        # 'type': 'bounded',
+        # 'vals': [.8, 1.],
+        # 'guess': .8,  # meaning "off",
+        ## use gae_lambda if baseline_mode=True, and if gae_lambda > .9. Turn off if <.9, then .8-.9 has the same
+        ## range as .9-1 for decent experimenting.
+        ## TODO currently setting to 1 if discount=1, is that correct? (is gae_lambda similar to discount?)
+        ## If so, shouldn't gae_lambda always == discount?
+        # 'post': lambda x, others: \
+        #     None if not (x > .9 and others['baseline_mode']) \
+        #     else 1. if others['discount'] == 1. \
+        #     else x
     },
     # 'baseline_optimizer.num_steps': 5
 }
 hypers['pg_prob_ration_model'] = {
-    'likelihood_ratio_clipping': .2, #{
+    'likelihood_ratio_clipping': .2,  #{
     #     'type': 'bounded',
     #     'vals': [0., 1.],
     #     'guess': .2,
@@ -290,12 +305,12 @@ hypers['ppo_model'] = {
     'step_optimizer.type': {
         'type': 'int',
         'vals': ['nadam', 'adam'],
-        'guess': 'adam'
+        'guess': 'nadam'
     },
     'step_optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0., 9.],
-        'guess': 6.,
+        'guess': 4.5,
         'hydrate': ten_to_the_neg
     },
     'optimization_steps': 25, #{
@@ -327,13 +342,13 @@ hypers['custom'] = {
     'indicators_count': {
         'type': 'bounded',
         'vals': [0, 5],
-        'guess': 3,
+        'guess': 5,
         'pre': round
     },
     'indicators_window': {
         'type': 'bounded',
         'vals': [0, 600],
-        'guess': 300,
+        'guess': 200,
         'pre': int,
     },
 
@@ -363,7 +378,7 @@ hypers['custom'] = {
     'net.depth_post': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 2,
+        'guess': 1,
         'pre': round
     },
     # Network depth, in broad-strokes of 2**x (2, 4, 8, 16, 32, 64, 128, 256, 512, ..) just so you get a feel for
@@ -371,7 +386,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 6,
+        'guess': 4,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -410,7 +425,7 @@ hypers['custom'] = {
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],  # to disable, set to 7 (not 0)
-        'guess': 3.,
+        'guess': 2.3,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
@@ -430,14 +445,14 @@ hypers['custom'] = {
     'action_type': {
         'type': 'int',
         'vals': ['single', 'multi', 'all_or_none'],
-        'guess': 'all_or_none'
+        'guess': 'multi'
     },
     # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
     # and calculate sharpe score at episode-terminal
     'reward_type': {
         'type': 'int',
         'vals': ['raw', 'advantage', 'sharpe'],
-        'guess': 'raw'
+        'guess': 'sharpe'
     },
     # Scale the inputs and rewards
     'scale': {
@@ -462,7 +477,7 @@ hypers['conv2d'] = {
     'net.window': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 2,
+        'guess': 1,
         'pre': round,
     },
     # How many ways to divide a window? 1=no-overlap, 2=half-overlap (smaller # = more destructive). See comments
@@ -484,11 +499,10 @@ hypers['conv2d'] = {
 
     # Because ConvNets boil pictures down (basically downsampling), the precise current timestep numbers can get
     # averaged away. This will repeat them in state['stationary'] downstream ("sir, you dropped this")
-    # TODO removing for now while figuring out dimensionality/autoencoder stuff
-    'repeat_last_state': False,  # {
-    #     'type': 'bool',
-    #     'guess': False
-    # }
+    'repeat_last_state': {
+        'type': 'bool',
+        'guess': False
+    }
 }
 
 
@@ -547,10 +561,6 @@ class HSearchEnv(object):
             if 'pre' in hyper:
                 v = hyper['pre'](v)
             flat[k] = v
-        # TODO remove this special-handling
-        if flat['reward_type'] == 'sharpe':
-            flat['gae_lambda'] = None
-            flat['discount'] = 1.
         flat.update(self.hardcoded)
 
         # Post-process hypers (allow for dependency handling, etc)
@@ -574,8 +584,11 @@ class HSearchEnv(object):
         if flat['baseline_mode']:
             if type(self.hypers['baseline_mode']) == bool:
                 main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
-
             main['baseline']['network_spec'] = network
+
+        # TODO remove this special-handling
+        main['discount'] = 1. if flat['reward_type'] == 'sharpe' else .999
+        main['gae_lambda'] = main['discount'] if main['gae_lambda'] else None
 
         ## GPU split
         ## FIXME add back to tensorforce#memory
@@ -705,7 +718,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--guess', type=int, default=-1, help="Run the hard-coded 'guess' values first before exploring")
     parser.add_argument('--boost', action="store_true", default=False, help="Use custom gradient-boosting optimization, or bayesian optimization?")
-    parser.add_argument('--autoencode', action="store_true", default=False, help="If you're running out of GPU memory, try --autoencode which scales things down")
     utils.add_common_args(parser)
     args = parser.parse_args()
 

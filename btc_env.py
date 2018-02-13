@@ -103,7 +103,7 @@ scalers = {}
 
 
 class BitcoinEnv(Environment):
-    EPISODE_LEN = 10000
+    EPISODE_LEN = 5000
 
     def __init__(self, hypers, cli_args={}):
         """Initialize hyperparameters (done here instead of __init__ since OpenAI-Gym controls instantiation)"""
@@ -290,7 +290,7 @@ class BitcoinEnv(Environment):
             n_train, n_test = int(row_ct * split), int(row_ct * (1 - split))
             if mode == mode.TEST:
                 offset = n_train
-                limit = 40000 if full_set else self.EPISODE_LEN  # should be `n_test` in full_set, getting idx errors
+                limit = 40000 if full_set else 10000  # should be `n_test` in full_set, getting idx errors
             else:
                 # Grab a random window from the 90% training data. The random bit is important so the agent
                 # sees a variety of data. The window-size bit is a hack: as long as the agent doesn't die (doesn't cause
@@ -340,11 +340,11 @@ class BitcoinEnv(Environment):
 
     def execute(self, actions):
         step_acc, ep_acc = self.acc.step, self.acc.episode
-        action_type = self.hypers.action_type
+        h = self.hypers
 
-        if action_type == 'single':
+        if h.action_type == 'single':
             signal = 0 if -self.min_trade < actions < self.min_trade else actions
-        elif action_type == 'multi':
+        elif h.action_type == 'multi':
             # Two actions: `action` (buy/sell/hold) and `amount` (how much)
             signal = {
                 0: -1,  # make amount negative
@@ -353,7 +353,7 @@ class BitcoinEnv(Environment):
             }[actions['action']] * actions['amount']
             if not signal: signal = 0  # sometimes gives -0.0, dunno if that matters anywhere downstream
             # multi-action min_trade accounted for in constructor
-        elif action_type == 'all_or_none':
+        elif h.action_type == 'all_or_none':
             signal = {
                 0: -step_acc.value,  # sell-all
                 1: 0,  # hold
@@ -403,31 +403,34 @@ class BitcoinEnv(Environment):
 
         # Reward is in dollar-change. As we build a great portfolio, the reward should get bigger and bigger (and
         # the agent should notice this)
-        if self.hypers.reward_type == 'advantage':
-            reward += (total_now - total_before) - (step_acc.hold_value - hold_before)
-        else:
+        if h.reward_type == 'raw':
             reward += (total_now - total_before)
+        elif h.reward_type == 'advantage':
+            reward += (total_now - total_before) - (step_acc.hold_value - hold_before)
+        elif h.reward_type == 'sharpe':
+            # don't tally individual trade rewards for sharpe, it's calculated at the end and passed-back to all
+            # steps via discount=1. We do want the other penalties above though
+            pass
 
         step_acc.i += 1
         ep_acc.total_steps += 1
 
         stationary = [step_acc.last_action] if self.all_or_none else [step_acc.cash, step_acc.value]
         next_state = self.get_next_state(step_acc.i, stationary)
-        if self.hypers.scale:
+        if h.scale:
             reward = self.scaler.transform([reward], Scaler.REWARD)[0]
 
-        if self.hypers.reward_type == 'sharpe':
-            reward = 0
+        # if h.reward_type == 'sharpe': reward = 0
 
         terminal = int(step_acc.i + 1 >= self.limit)
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
-            if self.hypers.reward_type == 'sharpe':
+            if h.reward_type == 'sharpe':
                 diff = (pd.Series(step_acc.totals.trade).pct_change() - pd.Series(step_acc.totals.hold).pct_change())[1:]
                 mean, std = diff.mean(), diff.std()
                 if (std, mean) != (0, 0):
-                    reward = mean / std
+                    reward += mean / std
 
 
         if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
