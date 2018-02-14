@@ -276,7 +276,8 @@ hypers['pg_model'] = {
     'gae_lambda': {
         'type': 'bool',
         'guess': False,
-        # hydrated in main code
+        'post': lambda x, others: \
+            None if not (x and others['baseline_mode']) else True  # True hydrated in main code
 
         # 'type': 'bounded',
         # 'vals': [.8, 1.],
@@ -588,7 +589,7 @@ class HSearchEnv(object):
 
         # TODO remove this special-handling
         main['discount'] = 1. if flat['reward_type'] == 'sharpe' else .999
-        main['gae_lambda'] = main['discount'] if main['gae_lambda'] else None
+        if main['gae_lambda']: main['gae_lambda'] = main['discount']
 
         ## GPU split
         ## FIXME add back to tensorforce#memory
