@@ -20,7 +20,7 @@ import tensorflow as tf
 from box import Box
 from tensorforce.environments import Environment
 from tensorforce.execution import Runner
-from sklearn.preprocessing import RobustScaler, robust_scale
+from sklearn.preprocessing import StandardScaler, RobustScaler, robust_scale
 from data.data import Exchange, EXCHANGE
 from data import data
 from autoencoder import AutoEncoder
@@ -42,9 +42,6 @@ class Scaler(object):
     One important bit here is the use of RobustScaler with a quantile_range. This allows us to handle outliers, which
     abound in the data. Sometimes we have a timeseries hole, and suddenly we're up a billion percent. Sometimes whales
     pump-and-dump to screw with the market. RobustScaler lets us "ignore" those moments.
-
-    TODO someone will want to double-check my work on this scaling approach in general. Best of my knowledges, but I'm
-    a newb.
     """
 
     # At some point we can safely say "I've seen enough, just scale (don't fit) going forward")
@@ -53,48 +50,41 @@ class Scaler(object):
 
     # state types
     REWARD = 1
-    SERIES = 2
-    STATIONARY = 3
+    STATIONARY = 2
+    FINAL_REWARD = 3
 
     def __init__(self):
-        self.scalers = {
-            self.REWARD: RobustScaler(quantile_range=(5., 95.)),
-            self.STATIONARY: RobustScaler(quantile_range=(5., 95.))
-        }
-        self.data = {
-            self.REWARD: [],
-            self.STATIONARY: []
-        }
-        self.done = False
-        self.i = 0
+        self.scalers = {}
+        self.data = {}
+        args = dict(quantile_range=(3., 97.))
+        for k in [self.REWARD, self.STATIONARY, self.FINAL_REWARD]:
+            self.scalers[k] = StandardScaler()  # RobustScaler(**args)
+            self.data[k] = []
 
-    def _should_skip(self):
-        # After we've fitted enough (see STOP_AT), start returning direct-transforms for performance improvement
-        # Skip every few fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
-        return self.done or (self.i % self.SKIP != 0 and self.i > self.SKIP)
+    @staticmethod
+    def transform_series(states):
+        """Transform the price-series stuff separate from the other stuff (rewards, stationary, etc). (1) Series needs
+        to happen just once on init; (2) series needs special outlier-handling (price diffs go [-inf,inf] etc; just
+        remove them with RobustScaler. The other things are unlikely to have crazy outliers
+        """
+        return robust_scale(states, quantile_range=(3., 97.))
 
-    def transform(self, input, kind, force=False):
-        # this is awkward; we only want to increment once per step, but we're calling this fn 3x per step (once
-        # for series, once for stationary, once for reward). Explicitly saying "only increment for one of those" here.
-        # Using STATIONARY since SERIES might be called once per timestep in a conv window. TODO Seriously awkward
-        if kind == self.STATIONARY: self.i += 1
-
+    def transform(self, input, kind, skip=True):
         scaler = self.scalers[kind]
-        matrix = np.array(input).ndim == 2
-        if self._should_skip() and not force:
-            if matrix: return scaler.transform(input)
+
+        # After we've fitted enough (see STOP_AT), start returning direct-transforms for performance improvement
+        # Skip every x fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
+        data_size = -1 if kind not in self.data else len(self.data[kind])
+        if data_size == -1 or \
+            (skip and data_size > self.SKIP and data_size % self.SKIP != 0):
             return scaler.transform([input])[-1]
+
         # Fit, transform, return
         data = self.data[kind]
-        if matrix:
-            self.data[kind] += input.tolist()
-            ret = scaler.fit_transform(data)[-input.shape[0]:]
-        else:
-            data.append(input)
-            ret = scaler.fit_transform(data)[-1]
-        if self.i >= self.STOP_AT and not self.done:
-            self.done = True
-            del self.data  # Clear up memory, fitted scalers have all the info we need.
+        data.append(input)
+        ret = scaler.fit_transform(data)[-1]
+        if data_size + 1 >= self.STOP_AT:
+            del self.data[kind]  # Clear up memory, fitted scalers have all the info we need.
         return ret
 
 
@@ -125,7 +115,8 @@ class BitcoinEnv(Environment):
                 total_steps=0,
                 sharpes=[],
                 returns=[],
-                uniques=[]
+                uniques=[],
+                custom_scores=[]
             ),
             step=dict(),  # setup in reset()
             tests=dict(
@@ -141,7 +132,7 @@ class BitcoinEnv(Environment):
         self.update_btc_price()
 
         # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = f'{h.arbitrage}|{h.indicators_count}|{h.repeat_last_state}|{h.action_type}'
+        scaler_k = f'{h.arbitrage}|{h.indicators_count}|{h.action_type}'
         if scaler_k not in scalers:
             scalers[scaler_k] = Scaler()
         self.scaler = scalers[scaler_k]
@@ -181,8 +172,6 @@ class BitcoinEnv(Environment):
             # height = nothing (1)
             # channels = features/inputs (price actions, OHCLV, etc).
             self.states_['series']['shape'] = (h.step_window, 1, self.cols_)
-            if h.repeat_last_state:
-                self.states_['stationary']['shape'] += self.cols_
 
     def __str__(self): return 'BitcoinEnv'
 
@@ -257,7 +246,7 @@ class BitcoinEnv(Environment):
 
         # Pre-scale all price actions up-front, since they don't change. We'll scale changing values real-time elsewhere
         if self.hypers.scale:
-            states = robust_scale(states, quantile_range=(5., 95.))
+            states = Scaler.transform_series(states)
 
         # Reducing the dimensionality of our states (OHLCV + indicators + arbitrage => 5 or 6 weights)
         # because TensorForce's memory branch changed Policy Gradient models' batching from timesteps to episodes.
@@ -308,12 +297,10 @@ class BitcoinEnv(Environment):
         i = i + self.offset
         series = self.all_observations[i]
         if self.hypers.scale:
-            # series already scaled in self._xform_data()
+            # series already scaled in self.xform_data()
             stationary = self.scaler.transform(stationary, Scaler.STATIONARY).tolist()
 
         if self.conv2d:
-            if self.hypers.repeat_last_state:
-                stationary += series.tolist()
             # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
             # [-something:i], which _excludes_ the list's end (due to Python indexing). Without this +1, conv would
             # have a 1-step-behind delayed response.
@@ -408,8 +395,8 @@ class BitcoinEnv(Environment):
         elif h.reward_type == 'advantage':
             reward += (total_now - total_before) - (step_acc.hold_value - hold_before)
         elif h.reward_type == 'sharpe':
-            # don't tally individual trade rewards for sharpe, it's calculated at the end and passed-back to all
-            # steps via discount=1. We do want the other penalties above though
+            # don't add per-trade rewards for sharpe, it's calculated at the end and passed-back to all
+            # steps via discount=1. We do want the penalties above though
             pass
 
         step_acc.i += 1
@@ -418,20 +405,21 @@ class BitcoinEnv(Environment):
         stationary = [step_acc.last_action] if self.all_or_none else [step_acc.cash, step_acc.value]
         next_state = self.get_next_state(step_acc.i, stationary)
         if h.scale:
-            reward = self.scaler.transform([reward], Scaler.REWARD)[0]
-
-        # if h.reward_type == 'sharpe': reward = 0
+            if h.reward_type != 'sharpe':
+                reward = self.scaler.transform([reward], Scaler.REWARD)[0]
+            else:
+                # since the reward comes at the end, scaling these rewards (which are just the penalties) brings
+                # them to [-1,1]; on-par with the actual sharpe reward. Ensure they're small relative penalties.
+                reward = -.001 if reward < 0. else 0.
 
         terminal = int(step_acc.i + 1 >= self.limit)
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
+            custom = self.end_episode_score()
+            ep_acc.custom_scores.append(custom)
             if h.reward_type == 'sharpe':
-                diff = (pd.Series(step_acc.totals.trade).pct_change() - pd.Series(step_acc.totals.hold).pct_change())[1:]
-                mean, std = diff.mean(), diff.std()
-                if (std, mean) != (0, 0):
-                    reward += mean / std
-
+                reward += custom
 
         if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
             # Only do real buy/sell on last step if LIVE (in case there are multiple steps b/w, we only care about
@@ -496,23 +484,39 @@ class BitcoinEnv(Environment):
         # if step_acc.value <= 0 or step_acc.cash <= 0: terminal = 1
         return next_state, terminal, reward
 
+    def sharpe(self):
+        totals = self.acc.step.totals
+        diff = (pd.Series(totals.trade).pct_change() - pd.Series(totals.hold).pct_change())[1:]
+        mean, std = diff.mean(), diff.std()
+        if (std, mean) != (0, 0):
+            # Usually Sharpe has `sqrt(num_trades)` in front (or `num_trading_days`?). Experimenting being creative w/
+            # trade-diversity, etc. Give Sharpe some extra info
+            # breadth = math.sqrt(np.uniques(signals))  # standard
+            breadth = 1  # disable
+            return breadth * (mean / std)
+        return 0.
+
+    def end_episode_score(self):
+        # These modifications help coax the agent in the right direction; kinda steering him with bumpers. "We
+        # want you to hold more often than not, but more trades is better, and of course make money, ..."
+        sharpe = self.sharpe()
+        signs = [np.sign(x) for x in self.acc.step.signals]  # signal directions. amounts add complication
+        mean_near_zero = 1 - abs(np.mean(signs))  # favor a mean closer to zero (more holds than not)
+        # diversity = np.sqrt(np.std(signs))  # favor more trades - up to a point (sqrt)
+        if self.hypers.scale:
+            sharpe, mean_near_zero = self.scaler.transform(
+                [sharpe, mean_near_zero], Scaler.FINAL_REWARD, skip=False)
+            # now they're scaled, could weight them relatively (eg, sharpe=sharpe*2 if it's more important)
+            sharpe *= 1.5
+        return sharpe + mean_near_zero
+
     def episode_finished(self, runner):
         step_acc, ep_acc, test_acc = self.acc.step, self.acc.episode, self.acc.tests
         signals = step_acc.signals
         totals = step_acc.totals
         n_uniques = float(len(np.unique(signals)))
-
-        # Calculate the Sharpe ratio.
-        diff = (pd.Series(totals.trade).pct_change() - pd.Series(totals.hold).pct_change())[1:]
-        mean, std, sharpe = diff.mean(), diff.std(), 0
-        if (std, mean) != (0, 0):
-            # Usually Sharpe has `sqrt(num_trades)` in front (or `num_trading_days`?). Experimenting being creative w/
-            # trade-diversity, etc. Give Sharpe some extra info
-            # breadth = math.sqrt(np.uniques(signals))
-            # breadth = np.std([np.sign(x) for x in signals])  # get signal direction, amount not as important (and adds complications)
-            breadth = 1
-            sharpe = breadth * (mean / std)
-
+        sharpe = self.sharpe()
+        custom = ep_acc.custom_scores[-1]
         cumm_ret = (totals.trade[-1] / totals.trade[0] - 1) - (totals.hold[-1] / totals.hold[0] - 1)
 
         ep_acc.sharpes.append(float(sharpe))
@@ -524,7 +528,8 @@ class BitcoinEnv(Environment):
         eq_0 = len([s for s in signals if s == 0])
         gt_0 = len([s for s in signals if s > 0])
         completion = int(test_acc.i / test_acc.n_tests * 100)
-        print(f"{completion}%\tSteps: {step_acc.i}\tSharpe: {'%.3f'%sharpe}\tReturn: {'%.3f'%cumm_ret}\tTrades:\t{lt_0}[<0]\t{eq_0}[=0]\t{gt_0}[>0]")
+        steps = ""  # f"\tSteps: {step_acc.i}"
+        print(f"{completion}%{steps}\tCustom: {'%.3f'%custom}\tSharpe: {'%.3f'%sharpe}\tReturn: {'%.3f'%cumm_ret}\tTrades:\t{lt_0}[<0]\t{eq_0}[=0]\t{gt_0}[>0]")
         return True
 
     def run_deterministic(self, runner, print_results=True):

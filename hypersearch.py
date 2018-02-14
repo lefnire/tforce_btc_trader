@@ -41,7 +41,7 @@ def build_net_spec(hypers):
     """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
     different network hypers
     """
-    net = Box(hypers['net'])
+    net = hypers.net
 
     dense = {
         'type': 'dense',
@@ -69,7 +69,7 @@ def build_net_spec(hypers):
 
     # Mid-layer
     if net.type == 'conv2d':
-        steps_out = hypers['step_window']
+        steps_out = hypers.step_window
 
     for i in range(net.depth_mid):
         if net.type == 'lstm':
@@ -130,6 +130,7 @@ def custom_net(hypers, print_net=False):
     network downstream, after the time-series layers. Makes more sense to me that way: imagine the conv layers saying
     "the price is right, buy!" and then getting handed a note with "you have $0 USD". "Oh.. nevermind..."
     """
+    hypers = Box(hypers)
     layers_spec = build_net_spec(hypers)
     if print_net: pprint(layers_spec)
 
@@ -145,11 +146,18 @@ def custom_net(hypers, print_net=False):
             stationary = x['stationary']
             x = series
 
+            if hypers.repeat_last_state:
+                # stationary.shape=(?, 2), series.shape=(?, 400, 1, 6)
+                # full batch, last window-step, 1 (height), all features. tf.squeeze removes the 1(height) dim (note
+                # a dim was already removed via -1, hence axis=1)
+                last_states = tf.squeeze(series[:, -1, :, :], axis=1)
+                stationary = tf.concat([stationary, last_states], axis=1)
+
             # Apply stationary to the first Dense after the last LSTM. in the case of Baseline, there's no LSTM,
             # so apply it to the start
             apply_stationary_here = 0
             for i, layer in enumerate(self.layers):
-                if hypers['net']['extra_stationary'] and isinstance(layer, TForceLayers.Dense):
+                if hypers.net.extra_stationary and isinstance(layer, TForceLayers.Dense):
                     # Last Dense layer
                     apply_stationary_here = i
                 elif isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
@@ -275,17 +283,17 @@ hypers['pg_model'] = {
     },
     'gae_lambda': {
         'type': 'bool',
-        'guess': False,
+        'guess': True,
         'post': lambda x, others: \
             None if not (x and others['baseline_mode']) else True  # True hydrated in main code
 
         # 'type': 'bounded',
         # 'vals': [.8, 1.],
         # 'guess': .8,  # meaning "off",
-        ## use gae_lambda if baseline_mode=True, and if gae_lambda > .9. Turn off if <.9, then .8-.9 has the same
-        ## range as .9-1 for decent experimenting.
-        ## TODO currently setting to 1 if discount=1, is that correct? (is gae_lambda similar to discount?)
-        ## If so, shouldn't gae_lambda always == discount?
+        # # use gae_lambda if baseline_mode=True, and if gae_lambda > .9. Turn off if <.9, then .8-.9 has the same
+        # # range as .9-1 for decent experimenting.
+        # # TODO currently setting to 1 if discount=1, is that correct? (is gae_lambda similar to discount?)
+        # # If so, shouldn't gae_lambda always == discount?
         # 'post': lambda x, others: \
         #     None if not (x > .9 and others['baseline_mode']) \
         #     else 1. if others['discount'] == 1. \
@@ -387,7 +395,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 4,
+        'guess': 6,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -450,11 +458,11 @@ hypers['custom'] = {
     },
     # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
     # and calculate sharpe score at episode-terminal
-    'reward_type': {
-        'type': 'int',
-        'vals': ['raw', 'advantage', 'sharpe'],
-        'guess': 'sharpe'
-    },
+    'reward_type': 'sharpe',  # {
+    #     'type': 'int',
+    #     'vals': ['raw', 'advantage', 'sharpe'],
+    #     'guess': 'sharpe'
+    # },
     # Scale the inputs and rewards
     'scale': {
         'type': 'bool',
