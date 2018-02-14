@@ -6,6 +6,9 @@ A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin tradin
 
 This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.com/podcasts/machine-learning). Those episodes are tutorial for this project; including an intro to Deep RL, hyperparameter decisions, etc.
 
+### Note! Memory branch
+Most of the recent work is done on [#memory](https://github.com/lefnire/tforce_btc_trader/tree/memory), which follows [tensorforce#memory](https://github.com/reinforceio/tensorforce/tree/memory). You'll have much better train/test performance on #memory ([details here](https://github.com/lefnire/tforce_btc_trader/issues/6)), but live-mode is broken. I recommend using that branch and helping fix `--live` if you get that far.
+
 ### 1. Setup
 - Python 3.6+ (I use template strings a lot)
 - Install & setup Postgres
