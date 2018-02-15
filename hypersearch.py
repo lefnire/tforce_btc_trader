@@ -240,7 +240,7 @@ hypers['agent'] = {
     #     'guess': .97
     # },
 }
-MAX_BATCH_SIZE = 10
+MAX_BATCH_SIZE = 8
 hypers['memory_model'] = {
     'update_mode.unit': 'episodes',
     'update_mode.batch_size': {
@@ -254,7 +254,7 @@ hypers['memory_model'] = {
         'vals': [1, 3],  # t-shirt sizes, reverse order
         'guess': 2,
         'pre': round,
-        'post': lambda x, others: others['update_mode.batch_size'] // x
+        'hydrate': lambda x, others: math.ceil(others['update_mode.batch_size'] / x)
     },
 
     'memory.type': 'latest',
@@ -464,10 +464,10 @@ hypers['custom'] = {
     #     'guess': 'sharpe'
     # },
     # Scale the inputs and rewards
-    'scale': {
-        'type': 'bool',
-        'guess': True
-    },
+    'scale': True , # {
+    #     'type': 'bool',
+    #     'guess': True
+    # },
 }
 
 hypers['lstm'] = {
@@ -629,17 +629,18 @@ class HSearchEnv(object):
         env.train_and_test(agent, self.cli_args.n_steps, self.cli_args.n_tests, -1)
 
         step_acc, ep_acc = env.acc.step, env.acc.episode
-        adv_avg = utils.calculate_score(ep_acc.sharpes)
-        print(flat, f"\nAdvantage={adv_avg}\n\n")
+        adv_avg = utils.calculate_score(ep_acc.custom_scores)
+        print(flat, f"\nScore={adv_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, sharpes, returns, uniques, prices, signals, agent, flag)
-          values (:hypers, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
+          insert into runs (hypers, custom_scores, sharpes, returns, uniques, prices, signals, agent, flag)
+          values (:hypers, :custom_scores, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
           returning id;
         """
         row = self.conn_runs.execute(
             text(sql),
             hypers=json.dumps(flat),
+            custom_scores=list(ep_acc.custom_scores),
             sharpes=list(ep_acc.sharpes),
             returns=list(ep_acc.returns),
             uniques=list(ep_acc.uniques),
@@ -809,13 +810,13 @@ def main():
         # Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk,
         # but this allows to distribute across servers easily
         conn_runs = data.engine_runs.connect()
-        sql = "select hypers, sharpes from runs where flag=:f"
+        sql = "select hypers, custom_scores, sharpes from runs where flag=:f"
         runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
         conn_runs.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([utils.calculate_score(run.sharpes)])
+            Y.append([utils.calculate_score(run.custom_scores)])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:

@@ -10,17 +10,17 @@ I actually do want to try NervanaSystems/Coach, that one's new since I started d
 env back to Gym format. Anyone wanna give it a go?
 """
 
-import random, time, requests, pdb, gdax, math
+import random, time, requests, pdb, gdax, math, pickle, os, shutil
+from scipy.stats import truncnorm
 from enum import Enum
 import numpy as np
 import pandas as pd
 import talib.abstract as tlib
-from collections import Counter
-import tensorflow as tf
 from box import Box
 from tensorforce.environments import Environment
 from tensorforce.execution import Runner
-from sklearn.preprocessing import StandardScaler, RobustScaler, robust_scale
+from sklearn import preprocessing
+from sklearn.pipeline import make_pipeline
 from data.data import Exchange, EXCHANGE
 from data import data
 from autoencoder import AutoEncoder
@@ -53,13 +53,54 @@ class Scaler(object):
     STATIONARY = 2
     FINAL_REWARD = 3
 
-    def __init__(self):
+    def __init__(self, key):
+        self.key = key
         self.scalers = {}
         self.data = {}
-        args = dict(quantile_range=(3., 97.))
         for k in [self.REWARD, self.STATIONARY, self.FINAL_REWARD]:
-            self.scalers[k] = StandardScaler()  # RobustScaler(**args)
-            self.data[k] = []
+            # RobustScaler will clean up outliers (not too much; we want to keep big winners, just discard corruptions)
+            # MinMax will bring it to (-1,1) so we can weight reward-types relatively.
+            # self.scalers[k] = make_pipeline(
+            #     preprocessing.RobustScaler(quantile_range=(1.,99.)),
+            #     preprocessing.MinMaxScaler(feature_range=(-1,1))
+            # )
+            self.scalers[k] = preprocessing.QuantileTransformer()
+            self.data[k] = self.seed(k)
+
+    def seed(self, key):
+        """For FINAL_REWARD at least, starting w/o data really messes it up (it gets new rewards very slowly).
+        Hard-code some seed data; may need to update from time-to-time."""
+        if key == self.FINAL_REWARD:
+            mins = [-0.1485341224956853, 9.999999999998899e-05, 0.09999749990624453]  # min from some runs
+            maxs = [0.11046697620762554, 0.9898, 0.9143465648335247]
+            rvs = []
+            for minmax in zip(mins, maxs):
+                low, upp = minmax
+                mean, sd = (low + upp)/2, 1
+                # https://stackoverflow.com/a/44308018/362790
+                dist = truncnorm((low - mean) / sd, (upp - mean) / sd, loc=mean, scale=sd)
+                rvs.append(dist.rvs(50))
+            return np.column_stack(rvs).tolist()
+        return []
+
+    @staticmethod
+    def filepath(k):
+        dir = os.path.join(os.getcwd(), "saves", "scalers")
+        file = os.path.join(dir, f'{k}.pkl')
+        return dir, file
+
+    @staticmethod
+    def load_scaler(k, recreate=False):
+        dir, file = Scaler.filepath(k)
+        if recreate:
+            try: shutil.rmtree(dir)
+            except: pass
+        os.makedirs(dir, exist_ok=True)
+        if os.path.exists(file):
+            scaler = pickle.load(open(file, 'rb'))
+        else:
+            scaler = Scaler(k)
+        return scaler
 
     @staticmethod
     def transform_series(states):
@@ -67,7 +108,7 @@ class Scaler(object):
         to happen just once on init; (2) series needs special outlier-handling (price diffs go [-inf,inf] etc; just
         remove them with RobustScaler. The other things are unlikely to have crazy outliers
         """
-        return robust_scale(states, quantile_range=(3., 97.))
+        return preprocessing.robust_scale(states, quantile_range=(3., 97.))
 
     def transform(self, input, kind, skip=True):
         scaler = self.scalers[kind]
@@ -83,13 +124,16 @@ class Scaler(object):
         data = self.data[kind]
         data.append(input)
         ret = scaler.fit_transform(data)[-1]
-        if data_size + 1 >= self.STOP_AT:
+        if data_size >= self.STOP_AT:
             del self.data[kind]  # Clear up memory, fitted scalers have all the info we need.
+
+        # Save the scaler every so often
+        if kind == self.FINAL_REWARD and data_size % 5 == 0:
+            dir, file = self.filepath(self.key)
+            pickle.dump(self, open(file, 'wb'))
+
         return ret
 
-
-# keep this globally around for all runs forever
-scalers = {}
 
 
 class BitcoinEnv(Environment):
@@ -132,10 +176,8 @@ class BitcoinEnv(Environment):
         self.update_btc_price()
 
         # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = f'{h.arbitrage}|{h.indicators_count}|{h.action_type}'
-        if scaler_k not in scalers:
-            scalers[scaler_k] = Scaler()
-        self.scaler = scalers[scaler_k]
+        scaler_k = h.action_type  # f'{h.arbitrage}|{h.indicators_count}|{h.action_type}'
+        self.scaler = Scaler.load_scaler(scaler_k, recreate=cli_args.clear_scalers)
 
         # Our data is too high-dimensional for the way MemoryModel handles batched episodes. Reduce it (don't like this)
         all_data = data.db_to_dataframe(self.conn, arbitrage=h.arbitrage)
@@ -417,7 +459,7 @@ class BitcoinEnv(Environment):
             # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
             custom = self.end_episode_score()
-            ep_acc.custom_scores.append(custom)
+            ep_acc.custom_scores.append(float(custom))
             if h.reward_type == 'sharpe':
                 reward += custom
 
@@ -502,13 +544,16 @@ class BitcoinEnv(Environment):
         sharpe = self.sharpe()
         signs = [np.sign(x) for x in self.acc.step.signals]  # signal directions. amounts add complication
         mean_near_zero = 1 - abs(np.mean(signs))  # favor a mean closer to zero (more holds than not)
-        # diversity = np.sqrt(np.std(signs))  # favor more trades - up to a point (sqrt)
+        diversity = np.sqrt(np.std(signs))  # favor more trades - up to a point (sqrt)
         if self.hypers.scale:
-            sharpe, mean_near_zero = self.scaler.transform(
-                [sharpe, mean_near_zero], Scaler.FINAL_REWARD, skip=False)
+            sharpe, mean_near_zero, diversity = self.scaler.transform(
+                [sharpe, mean_near_zero, diversity], Scaler.FINAL_REWARD, skip=False)
             # now they're scaled, could weight them relatively (eg, sharpe=sharpe*2 if it's more important)
-            sharpe *= 1.5
-        return sharpe + mean_near_zero
+            mean_near_zero *= .8
+            # diversity *= .25
+        else:
+            raise NotImplementedError
+        return sharpe + mean_near_zero # + diversity
 
     def episode_finished(self, runner):
         step_acc, ep_acc, test_acc = self.acc.step, self.acc.episode, self.acc.tests

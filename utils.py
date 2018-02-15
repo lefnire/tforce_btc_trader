@@ -45,6 +45,7 @@ def add_common_args(parser):
     parser.add_argument('-t', '--n-tests', type=int, default=40, help="Number of times to split to training and run a test. This slows things down, so balance graph resolution w/ performance.")
     parser.add_argument('-s', '--n-steps', type=int, default=80, help="Number of 1k timesteps total to train. (using 50 means 500,000)")
     parser.add_argument('--autoencode', action="store_true", default=False, help="If you're running out of GPU memory, try --autoencode which scales things down")
+    parser.add_argument('--clear-scalers', action="store_true", default=False, help="Should we delete the saved reward/state scaler.pkl objects, start over?")
 
 
 # One array per running instance (ie, if you have 2 separate tabs running hypersearch.py, then you'll want an array of
