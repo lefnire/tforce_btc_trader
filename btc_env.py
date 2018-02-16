@@ -45,62 +45,52 @@ class Scaler(object):
     """
 
     # At some point we can safely say "I've seen enough, just scale (don't fit) going forward")
-    STOP_AT = int(1e6)
-    SKIP = 15
+    STOP_AT = int(5e5)
 
     # state types
-    REWARD = 1
-    STATIONARY = 2
-    FINAL_REWARD = 3
+    class Type(Enum):
+        REWARD = 1
+        STATIONARY_1 = 2
+        STATIONARY_2 = 3
+        FINAL_REWARD = 4
 
-    def __init__(self, key):
-        self.key = key
+    def __init__(self, recreate=False):
         self.scalers = {}
-        self.data = {}
-        for k in [self.REWARD, self.STATIONARY, self.FINAL_REWARD]:
+        self.file_data = {}
+        self.buffer_data = {}
+        self.i = {}
+
+        # (re)create folder
+        if recreate:
+            try: shutil.rmtree(self.dirpath())
+            except: pass
+        os.makedirs(self.dirpath(), exist_ok=True)
+
+        for k in Scaler.Type:
             # RobustScaler will clean up outliers (not too much; we want to keep big winners, just discard corruptions)
             # MinMax will bring it to (-1,1) so we can weight reward-types relatively.
-            # self.scalers[k] = make_pipeline(
-            #     preprocessing.RobustScaler(quantile_range=(1.,99.)),
-            #     preprocessing.MinMaxScaler(feature_range=(-1,1))
-            # )
-            self.scalers[k] = preprocessing.QuantileTransformer()
-            self.data[k] = self.seed(k)
+            self.scalers[k] = make_pipeline(
+                preprocessing.RobustScaler(quantile_range=(1.,99.)),
+                preprocessing.MinMaxScaler(feature_range=(-1,1))
+            )
+            # self.scalers[k] = preprocessing.QuantileTransformer()
+            self.buffer_data[k] = []
+            self.i[k] = 0
 
-    def seed(self, key):
-        """For FINAL_REWARD at least, starting w/o data really messes it up (it gets new rewards very slowly).
-        Hard-code some seed data; may need to update from time-to-time."""
-        if key == self.FINAL_REWARD:
-            mins = [-0.1485341224956853, 9.999999999998899e-05, 0.09999749990624453]  # min from some runs
-            maxs = [0.11046697620762554, 0.9898, 0.9143465648335247]
-            rvs = []
-            for minmax in zip(mins, maxs):
-                low, upp = minmax
-                mean, sd = (low + upp)/2, 1
-                # https://stackoverflow.com/a/44308018/362790
-                dist = truncnorm((low - mean) / sd, (upp - mean) / sd, loc=mean, scale=sd)
-                rvs.append(dist.rvs(50))
-            return np.column_stack(rvs).tolist()
-        return []
+            # Load prior runs' data to seed from
+            filepath = self.filepath(k)
+            if os.path.exists(filepath):
+                f = open(filepath, 'rb')
+                self.file_data[k] = pickle.load(f)
+                f.close()
+            else:
+                self.file_data[k] = []
 
-    @staticmethod
-    def filepath(k):
-        dir = os.path.join(os.getcwd(), "saves", "scalers")
-        file = os.path.join(dir, f'{k}.pkl')
-        return dir, file
+    def dirpath(self):
+        return os.path.join(os.getcwd(), "saves", "scalers")
 
-    @staticmethod
-    def load_scaler(k, recreate=False):
-        dir, file = Scaler.filepath(k)
-        if recreate:
-            try: shutil.rmtree(dir)
-            except: pass
-        os.makedirs(dir, exist_ok=True)
-        if os.path.exists(file):
-            scaler = pickle.load(open(file, 'rb'))
-        else:
-            scaler = Scaler(k)
-        return scaler
+    def filepath(self, k):
+        return os.path.join(self.dirpath(), f'{k.name}.pkl')
 
     @staticmethod
     def transform_series(states):
@@ -110,30 +100,43 @@ class Scaler(object):
         """
         return preprocessing.robust_scale(states, quantile_range=(3., 97.))
 
-    def transform(self, input, kind, skip=True):
-        scaler = self.scalers[kind]
+    def is_done(self, k):
+        """After we've fitted enough (see STOP_AT), start returning direct-transforms for performance improvement"""
+        if self.file_data[k] == -1:
+            return True
+        if len(self.file_data[k]) > self.STOP_AT:
+            self.scalers[k].fit(self.file_data[k])
+            self.file_data[k] = self.buffer_data[k] = -1
+            return True
+        return False
 
-        # After we've fitted enough (see STOP_AT), start returning direct-transforms for performance improvement
+    def transform(self, input, k, skip_every=50, save_every=20000):
+        scaler = self.scalers[k]
+        if self.is_done(k):
+            return scaler.transform([input])[0]
+        self.buffer_data[k].append(input)
+        self.i[k] += 1
+
         # Skip every x fittings. Each individual doesn't contribute a whole lot anyway, and costs a lot
-        data_size = -1 if kind not in self.data else len(self.data[kind])
-        if data_size == -1 or \
-            (skip and data_size > self.SKIP and data_size % self.SKIP != 0):
-            return scaler.transform([input])[-1]
-
-        # Fit, transform, return
-        data = self.data[kind]
-        data.append(input)
-        ret = scaler.fit_transform(data)[-1]
-        if data_size >= self.STOP_AT:
-            del self.data[kind]  # Clear up memory, fitted scalers have all the info we need.
+        if self.i[k] > skip_every and self.i[k] % skip_every != 0:
+            return scaler.transform([input])[0]
 
         # Save the scaler every so often
-        if kind == self.FINAL_REWARD and data_size % 5 == 0:
-            dir, file = self.filepath(self.key)
-            pickle.dump(self, open(file, 'wb'))
+        if self.i[k] % save_every == 0:
+            filepath = self.filepath(k)
+            file_data = self.file_data[k]
+            if os.path.exists(filepath):
+                f = open(filepath, 'rb')
+                file_data = pickle.load(f)
+                f.close()
+            self.file_data[k] = file_data + self.buffer_data[k]
+            f = open(filepath, 'wb')
+            pickle.dump(self.file_data[k], f)
+            f.close()
+            self.buffer_data[k] = []
 
-        return ret
-
+        scaler.fit(self.file_data[k] + self.buffer_data[k])
+        return scaler.transform([input])[0]
 
 
 class BitcoinEnv(Environment):
@@ -175,9 +178,7 @@ class BitcoinEnv(Environment):
         self.min_trade = {Exchange.GDAX: .01, Exchange.KRAKEN: .002}[EXCHANGE]
         self.update_btc_price()
 
-        # Should be one scaler for any permutation of data (since the columns need to align exactly)
-        scaler_k = h.action_type  # f'{h.arbitrage}|{h.indicators_count}|{h.action_type}'
-        self.scaler = Scaler.load_scaler(scaler_k, recreate=cli_args.clear_scalers)
+        self.scaler = Scaler(recreate=cli_args.clear_scalers)
 
         # Our data is too high-dimensional for the way MemoryModel handles batched episodes. Reduce it (don't like this)
         all_data = data.db_to_dataframe(self.conn, arbitrage=h.arbitrage)
@@ -340,7 +341,8 @@ class BitcoinEnv(Environment):
         series = self.all_observations[i]
         if self.hypers.scale:
             # series already scaled in self.xform_data()
-            stationary = self.scaler.transform(stationary, Scaler.STATIONARY).tolist()
+            type_ = Scaler.Type.STATIONARY_1 if len(stationary) == 1 else Scaler.Type.STATIONARY_2
+            stationary = self.scaler.transform(stationary, type_).tolist()
 
         if self.conv2d:
             # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
@@ -448,7 +450,7 @@ class BitcoinEnv(Environment):
         next_state = self.get_next_state(step_acc.i, stationary)
         if h.scale:
             if h.reward_type != 'sharpe':
-                reward = self.scaler.transform([reward], Scaler.REWARD)[0]
+                reward = self.scaler.transform([reward], Scaler.Type.REWARD)[0]
             else:
                 # since the reward comes at the end, scaling these rewards (which are just the penalties) brings
                 # them to [-1,1]; on-par with the actual sharpe reward. Ensure they're small relative penalties.
@@ -547,7 +549,7 @@ class BitcoinEnv(Environment):
         diversity = np.sqrt(np.std(signs))  # favor more trades - up to a point (sqrt)
         if self.hypers.scale:
             sharpe, mean_near_zero, diversity = self.scaler.transform(
-                [sharpe, mean_near_zero, diversity], Scaler.FINAL_REWARD, skip=False)
+                [sharpe, mean_near_zero, diversity], Scaler.Type.FINAL_REWARD, skip_every=1, save_every=5)
             # now they're scaled, could weight them relatively (eg, sharpe=sharpe*2 if it's more important)
             mean_near_zero *= .8
             # diversity *= .25
