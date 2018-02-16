@@ -288,8 +288,7 @@ class BitcoinEnv(Environment):
             prices = prices[self.hypers.indicators_window:]
 
         # Pre-scale all price actions up-front, since they don't change. We'll scale changing values real-time elsewhere
-        if self.hypers.scale:
-            states = Scaler.transform_series(states)
+        states = Scaler.transform_series(states)
 
         # Reducing the dimensionality of our states (OHLCV + indicators + arbitrage => 5 or 6 weights)
         # because TensorForce's memory branch changed Policy Gradient models' batching from timesteps to episodes.
@@ -339,10 +338,9 @@ class BitcoinEnv(Environment):
     def get_next_state(self, i, stationary):
         i = i + self.offset
         series = self.all_observations[i]
-        if self.hypers.scale:
-            # series already scaled in self.xform_data()
-            type_ = Scaler.Type.STATIONARY_1 if len(stationary) == 1 else Scaler.Type.STATIONARY_2
-            stationary = self.scaler.transform(stationary, type_).tolist()
+
+        type_ = Scaler.Type.STATIONARY_1 if len(stationary) == 1 else Scaler.Type.STATIONARY_2
+        stationary = self.scaler.transform(stationary, type_).tolist()
 
         if self.conv2d:
             # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
@@ -448,13 +446,14 @@ class BitcoinEnv(Environment):
 
         stationary = [step_acc.last_action] if self.all_or_none else [step_acc.cash, step_acc.value]
         next_state = self.get_next_state(step_acc.i, stationary)
-        if h.scale:
-            if h.reward_type != 'sharpe':
-                reward = self.scaler.transform([reward], Scaler.Type.REWARD)[0]
-            else:
-                # since the reward comes at the end, scaling these rewards (which are just the penalties) brings
-                # them to [-1,1]; on-par with the actual sharpe reward. Ensure they're small relative penalties.
-                reward = -.001 if reward < 0. else 0.
+
+        # Scale
+        if h.reward_type == 'sharpe':
+            # since the reward comes at the end, scaling these rewards (which are just the penalties) brings
+            # them to [-1,1]; on-par with the actual sharpe reward. Ensure they're small relative penalties.
+            reward = -.001 if reward < 0. else 0.
+        else:
+            reward = self.scaler.transform([reward], Scaler.Type.REWARD)[0]
 
         terminal = int(step_acc.i + 1 >= self.limit)
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
@@ -547,14 +546,14 @@ class BitcoinEnv(Environment):
         signs = [np.sign(x) for x in self.acc.step.signals]  # signal directions. amounts add complication
         mean_near_zero = 1 - abs(np.mean(signs))  # favor a mean closer to zero (more holds than not)
         diversity = np.sqrt(np.std(signs))  # favor more trades - up to a point (sqrt)
-        if self.hypers.scale:
-            sharpe, mean_near_zero, diversity = self.scaler.transform(
-                [sharpe, mean_near_zero, diversity], Scaler.Type.FINAL_REWARD, skip_every=1, save_every=5)
-            # now they're scaled, could weight them relatively (eg, sharpe=sharpe*2 if it's more important)
-            mean_near_zero *= .8
-            # diversity *= .25
-        else:
-            raise NotImplementedError
+
+        # Scale them
+        sharpe, mean_near_zero, diversity = self.scaler.transform(
+            [sharpe, mean_near_zero, diversity], Scaler.Type.FINAL_REWARD, skip_every=1, save_every=5)
+        # now they're scaled, could weight them by relative importance
+        mean_near_zero *= .7
+        # diversity *= .25
+
         return sharpe + mean_near_zero # + diversity
 
     def episode_finished(self, runner):

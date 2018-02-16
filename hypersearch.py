@@ -463,11 +463,6 @@ hypers['custom'] = {
     #     'vals': ['raw', 'advantage', 'sharpe'],
     #     'guess': 'sharpe'
     # },
-    # Scale the inputs and rewards
-    'scale': True , # {
-    #     'type': 'bool',
-    #     'guess': True
-    # },
 }
 
 hypers['lstm'] = {
