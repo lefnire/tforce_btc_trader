@@ -145,16 +145,22 @@ class App extends Component {
     svg.select('g').remove(); // start clean
     let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-    let rewards = data.map(d => d.sharpes.map((v,i) => {
-      let y = v; // just human
+    let main_line = 'sharpes';
+    let lines = ['sharpes'];
+    let rewards = data.map(d => d[main_line].map((none, i) => {
       // let y = (d.rewards_agent[i] + v)/2; // human-agent average
       // y = _.clamp(y, -100, 100); // clamp so we don't break the graph
-      return {
-        y,
-        x:i, parent:d
-      }
+      let obj = {
+        x: i,
+        parent: d,
+        max: _.max(lines.map(k => d[k][i])),
+        min: _.min(lines.map(k => d[k][i])),
+      };
+      lines.forEach(k => obj[k] = d[k][i]);
+      return obj;
     }));
     let all_rewards = _.flatten(rewards);
+    console.log(all_rewards);
 
     let colorScale = d3.scaleOrdinal(d3.schemeCategory10)
       .domain([0, data.length]);
@@ -164,7 +170,7 @@ class App extends Component {
       .domain([0, d3.max(rewards, r => r.length)]);
     let y = d3.scaleLinear()
       .rangeRound([height, 0])
-      .domain(d3.extent(all_rewards, d => d.y));
+      .domain([_.minBy(all_rewards, 'min').min, _.maxBy(all_rewards, 'max').max]);
 
     let axes = {
       x: d3.axisBottom(x),
@@ -193,15 +199,18 @@ class App extends Component {
       lineWidth = 1.5;
 
     rewards.forEach((row, i) => {
-      g.append("path")
-        .datum(row)
-        .classed('line', true)
-        .attr("fill", "none")
-        .attr("stroke", () => colorScale(i))
-        .attr("stroke-linejoin", "round")
-        .attr("stroke-linecap", "round")
-        .attr("d", line)
-        .on("click", this.clickRun)
+      lines.forEach(k => {
+        let stroke = k === main_line ? colorScale(i) : "rgba(0,0,0,.5)";
+        g.append("path")
+          .datum(row.map(d => _.defaults({y: d[k]}, d)))
+          .classed('line', true)
+          .attr("fill", "none")
+          .attr("stroke", () => stroke)
+          .attr("stroke-linejoin", "round")
+          .attr("stroke-linecap", "round")
+          .attr("d", line)
+          .on("click", this.clickRun);
+      });
     });
 
     // Add a 0-line
@@ -244,10 +253,10 @@ class App extends Component {
         })
         .attr("r", radius)
         .attr("cx", d => x(d.x))
-        .attr("cy", d => y(d.y))
+        .attr("cy", d => y(d[main_line]))
         .on("mouseover", tip.show)
         .on("mouseout", tip.hide)
-        .on("click", this.clickRun)
+        .on("click", this.clickRun);
 
     let zoom = d3.zoom()
       .scaleExtent([0,500])

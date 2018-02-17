@@ -13,10 +13,12 @@ class ScoreMode(Enum):
     MIX = 6
 
 
-MODE = ScoreMode.LAST
+MODE = ScoreMode.MIX
 
 
 def calculate_score(advantages):
+    for i, a in enumerate(advantages):
+        if a == 0.: advantages[i] = -1.
     if MODE == ScoreMode.MEAN:
         return np.mean(advantages)
     elif MODE == ScoreMode.LAST:

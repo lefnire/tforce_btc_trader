@@ -69,20 +69,20 @@ class Scaler(object):
         for k in Scaler.Type:
             # RobustScaler will clean up outliers (not too much; we want to keep big winners, just discard corruptions)
             # MinMax will bring it to (-1,1) so we can weight reward-types relatively.
-            self.scalers[k] = make_pipeline(
-                preprocessing.RobustScaler(quantile_range=(1.,99.)),
-                preprocessing.MinMaxScaler(feature_range=(-1,1))
-            )
-            # self.scalers[k] = preprocessing.QuantileTransformer()
+            #self.scalers[k] = make_pipeline(
+            #    preprocessing.RobustScaler(quantile_range=(1.,99.)),
+            #    preprocessing.MinMaxScaler(feature_range=(-1,1))
+            #)
+            self.scalers[k] = preprocessing.QuantileTransformer()
+            #self.scalers[k] = preprocessing.MinMaxScaler(feature_range=(-1,1))
             self.buffer_data[k] = []
             self.i[k] = 0
 
             # Load prior runs' data to seed from
             filepath = self.filepath(k)
             if os.path.exists(filepath):
-                f = open(filepath, 'rb')
-                self.file_data[k] = pickle.load(f)
-                f.close()
+                with open(filepath, 'rb') as f:
+                    self.file_data[k] = pickle.load(f)
             else:
                 self.file_data[k] = []
 
@@ -126,13 +126,15 @@ class Scaler(object):
             filepath = self.filepath(k)
             file_data = self.file_data[k]
             if os.path.exists(filepath):
-                f = open(filepath, 'rb')
-                file_data = pickle.load(f)
-                f.close()
+                try:
+                    # FIXME this keeps crashing w/ "EOFError: Ran out of input"; investigate
+                    with open(filepath, 'rb') as f:
+                        file_data = pickle.load(f)
+                except:
+                    return scaler.transform([input])[0]
             self.file_data[k] = file_data + self.buffer_data[k]
-            f = open(filepath, 'wb')
-            pickle.dump(self.file_data[k], f)
-            f.close()
+            with open(filepath, 'wb') as f:
+                pickle.dump(self.file_data[k], f)
             self.buffer_data[k] = []
 
         scaler.fit(self.file_data[k] + self.buffer_data[k])
@@ -551,10 +553,10 @@ class BitcoinEnv(Environment):
         sharpe, mean_near_zero, diversity = self.scaler.transform(
             [sharpe, mean_near_zero, diversity], Scaler.Type.FINAL_REWARD, skip_every=1, save_every=5)
         # now they're scaled, could weight them by relative importance
-        mean_near_zero *= .7
-        # diversity *= .25
 
-        return sharpe + mean_near_zero # + diversity
+        score = sharpe + mean_near_zero  # + diversity * .25
+        if sharpe > 0.: score += .5
+        return score
 
     def episode_finished(self, runner):
         step_acc, ep_acc, test_acc = self.acc.step, self.acc.episode, self.acc.tests
