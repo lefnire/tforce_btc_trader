@@ -15,7 +15,7 @@ This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.co
 - `pip install -r requirements.txt`
   - If issues, try installing these deps manually.
 - Install TensorForce from git repo (constantly changing, we chase HEAD)
-  - `git clone -b memory https://github.com/lefnire/tensorforce.git`
+  - `git clone https://github.com/reinforceio/tensorforce.git`
   - `cd tensorforce && pip install -e .`
 
 Note: you'll wanna run this on a GPU rig with some RAM. I'm using a 1080ti and 16GB RAM; 8GB+ is often in used. You _can_ use a standard PC, no GPU (CPU-only); in that case `pip install -I tensorflow==1.5.0rc1` (instead of `tensorflow-gpu`). The only downside is performance; CPU is _way_ slower than GPU for ConvNet computations. Worth evaluating this repo on a CPU before you decide "yeah, it's worth the upgrade."

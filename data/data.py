@@ -50,7 +50,8 @@ if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
             ask_price=F,
             ask_size=Z,
             ask_num_orders=Z
-        )
+        ),
+        'price_cols': 'last_trade_price bid_price ask_price'.split(' ')
     },
     {
         'name': 'exch_ticker_kraken_usd',
@@ -81,6 +82,7 @@ if 'alex' in DB or DB == 'dbk0cfbk3mfsb6':
             close='last_trade_price',
             volume='volume'
         ),
+        'price_cols': 'last_trade_price ask_price bid_price vwap low high open_price'.split(' ')
     },
     ]
     target = 'exch_ticker_coinbase_usd_last_trade_price'
@@ -110,7 +112,8 @@ else:
             low='low',
             close='close',
             volume='volume_currency'
-        )
+        ),
+        'price_cols': 'open high low close weighted_price'
     },
     {
         'name': 'coincheck',
@@ -130,7 +133,8 @@ else:
             low='low',
             close='close',
             volume='volume_currency'
-        )
+        ),
+        'price_cols': 'open high low close weighted_price'
     }
     ]
     target = 'coinbase_close'
@@ -298,7 +302,6 @@ def setup_runs_table():
         (
             id serial not null,
             hypers jsonb not null,
-            custom_scores double precision[],
             sharpes double precision[],
             returns double precision[],
             signals double precision[],

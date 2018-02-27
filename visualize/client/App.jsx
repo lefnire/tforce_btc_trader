@@ -145,8 +145,8 @@ class App extends Component {
     svg.select('g').remove(); // start clean
     let g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-    let main_line = 'sharpes';
-    let lines = ['sharpes'];
+    let main_line = 'returns';
+    let lines = ['returns'];
     let rewards = data.map(d => d[main_line].map((none, i) => {
       // let y = (d.rewards_agent[i] + v)/2; // human-agent average
       // y = _.clamp(y, -100, 100); // clamp so we don't break the graph

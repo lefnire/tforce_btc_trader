@@ -234,7 +234,7 @@ hypers['agent'] = {
     # I'm pretty sure we don't want to experiment any less than .99 for non-terminal reward-types (which are 1.0).
     # .99^500 ~= .6%, so looses value sooner than makes sense for our trading horizon. A trade now could effect
     # something 2-5k steps later. So .999 is more like it (5k steps ~= .6%)
-    # 'discount': .999,  # {
+    'discount': .999,  # {
     #     'type': 'bounded',
     #     'vals': [.9, .99],
     #     'guess': .97
@@ -348,18 +348,11 @@ hypers['custom'] = {
     # Use a handful of TA-Lib technical indicators (SMA, EMA, RSI, etc). Which indicators used and for what time-frame
     # not optimally chosen at all; just figured "if some randos are better than nothing, there's something there and
     # I'll revisit". Help wanted.
-    'indicators_count': {
-        'type': 'bounded',
-        'vals': [0, 5],
-        'guess': 5,
-        'pre': round
-    },
-    'indicators_window': {
-        'type': 'bounded',
-        'vals': [0, 600],
-        'guess': 200,
-        'pre': int,
-    },
+
+    # Currently disabling indicators in general. A good CNN should "see" those automatically in the window, right?
+    # If I'm wrong, experiment with these (see commit 6fc4ed2)
+    'indicators_count': 0,
+    'indicators_window': 0,
 
     # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
     # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
@@ -371,10 +364,7 @@ hypers['custom'] = {
     # data.py) which makes it hard for the net to follow.
     # Note: not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
     # if the smaller exchange (eg Kraken) is main)
-    'arbitrage': {
-        'type': 'bool',
-        'guess': False
-    },
+    'arbitrage': False,  # see 6fc4ed2
 
     # Conv / LSTM layers
     'net.depth_mid': {
@@ -444,21 +434,17 @@ hypers['custom'] = {
         'hydrate': min_ten_neg(1e-6, 0.)
     },
 
-    # Instead of using absolute price diffs, use percent-change.
-    'pct_change': {
-        'type': 'bool',
-        'guess': False
-    },
     # single = one action (-$x to +$x). multi = two actions: (buy|sell|hold) and (how much?). all_or_none = buy/sell
     # w/ all the cash or value owned
     'action_type': {
         'type': 'int',
-        'vals': ['single', 'multi', 'all_or_none'],
+        'vals': ['single', 'multi'],
         'guess': 'multi'
     },
     # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
-    # and calculate sharpe score at episode-terminal
-    'reward_type': 'sharpe',  # {
+    # and calculate sharpe score at episode-terminal.
+    # See 6fc4ed2 for handling Sharpe rewards
+    'reward_type': 'raw',  # {
     #     'type': 'int',
     #     'vals': ['raw', 'advantage', 'sharpe'],
     #     'guess': 'sharpe'
@@ -494,12 +480,7 @@ hypers['conv2d'] = {
     },
     # Size of the window to look at w/ the CNN (ie, width of the image). Would like to have more than 400 "pixels" here,
     # but it causes memory issues the way PPO's MemoryModel batches things. This is made up for via indicators
-    'step_window': {
-        'type': 'bounded',
-        'vals': [100, 400],
-        'guess': 400,
-        'pre': round,
-    },
+    'step_window': 300,
 
     # Because ConvNets boil pictures down (basically downsampling), the precise current timestep numbers can get
     # averaged away. This will repeat them in state['stationary'] downstream ("sir, you dropped this")
@@ -588,7 +569,7 @@ class HSearchEnv(object):
         if flat['baseline_mode']:
             if type(self.hypers['baseline_mode']) == bool:
                 main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
-            main['baseline']['network_spec'] = network
+            main['baseline']['network'] = network
 
         # TODO remove this special-handling
         main['discount'] = 1. if flat['reward_type'] == 'sharpe' else .999
@@ -624,18 +605,17 @@ class HSearchEnv(object):
         env.train_and_test(agent, self.cli_args.n_steps, self.cli_args.n_tests, -1)
 
         step_acc, ep_acc = env.acc.step, env.acc.episode
-        adv_avg = utils.calculate_score(ep_acc.custom_scores)
+        adv_avg = utils.calculate_score(ep_acc.returns)
         print(flat, f"\nScore={adv_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, custom_scores, sharpes, returns, uniques, prices, signals, agent, flag)
-          values (:hypers, :custom_scores, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
+          insert into runs (hypers, sharpes, returns, uniques, prices, signals, agent, flag)
+          values (:hypers, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
           returning id;
         """
         row = self.conn_runs.execute(
             text(sql),
             hypers=json.dumps(flat),
-            custom_scores=list(ep_acc.custom_scores),
             sharpes=list(ep_acc.sharpes),
             returns=list(ep_acc.returns),
             uniques=list(ep_acc.uniques),
@@ -645,7 +625,7 @@ class HSearchEnv(object):
             flag=self.cli_args.net_type
         ).fetchone()
 
-        if ep_acc.sharpes[-1] > 0:
+        if ep_acc.returns[-1] > 0:
             _id = str(row[0])
             directory = os.path.join(os.getcwd(), "saves", _id)
             filestar = os.path.join(directory, _id)
@@ -805,13 +785,13 @@ def main():
         # Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk,
         # but this allows to distribute across servers easily
         conn_runs = data.engine_runs.connect()
-        sql = "select hypers, custom_scores, sharpes from runs where flag=:f"
+        sql = "select hypers, returns from runs where flag=:f"
         runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
         conn_runs.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([utils.calculate_score(run.custom_scores)])
+            Y.append([utils.calculate_score(run.returns)])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:
