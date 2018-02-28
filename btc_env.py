@@ -213,7 +213,7 @@ class BitcoinEnv(Environment):
             # Work with 6000 timesteps up until the present (play w/ diff numbers, depends on LSTM)
             # Offset=0 data.py currently pulls recent-to-oldest, then reverses
             rampup = int(1e5)  # 6000  # FIXME temporarily using big number to build up Scaler (since it's not saved)
-            limit, offset = (rampup, 0) # if not self.conv2d else (self.hypers.step_window + 1, 0)
+            limit, offset = (rampup, 0)  # if not self.conv2d else (self.hypers.step_window + 1, 0)
             df, self.last_timestamp = data.db_to_dataframe(
                 self.conn, limit=limit, offset=offset, arbitrage=self.hypers.arbitrage, last_timestamp=True)
             # save away for now so we can keep transforming it as we add new data (find a more efficient way)
@@ -271,45 +271,43 @@ class BitcoinEnv(Environment):
         h = self.hypers
 
         if h.action_type == 'single':
-            action = actions
-            signal = action * (step_acc.cash if action > 0 else step_acc.value)
+            act_pct = actions
         elif h.action_type == 'multi':
             # Two actions: `action` (buy/sell/hold) and `amount` (how much)
-            action = {
+            act_pct = {
                 0: -1,  # make amount negative
                 1: 0,  # hold
                 2: 1  # make amount positive
             }[actions['action']] * actions['amount']
-            signal = action * (step_acc.cash if action > 0 else step_acc.value)
-            if not signal: signal = 0  # sometimes gives -0.0, dunno if that matters anywhere downstream
             # multi-action min_trade accounted for in constructor
-
-        if -self.min_trade < signal < self.min_trade:
-            if signal > 0 and step_acc.cash < self.min_trade:
-                signal = action * self.start_cash
-            elif signal < 0 and step_acc.value < self.min_trade:
-                signal = action * self.start_value
-            else:
-                signal = 0
-
-        step_acc.signals.append(float(action))
+        act_btc = act_pct * (step_acc.cash if act_pct > 0 else step_acc.value)
 
         fee = {
             Exchange.GDAX: 0.0025,  # https://support.gdax.com/customer/en/portal/articles/2425097-what-are-the-fees-on-gdax-
             Exchange.KRAKEN: 0.0026  # https://www.kraken.com/en-us/help/fees
         }[EXCHANGE]
-        abs_sig = abs(signal)
-        total_before = step_acc.cash + step_acc.value
+
         # Perform the trade. In training mode, we'll let it dip into negative here, but then kill and punish below.
         # In testing/live, we'll just block the trade if they can't afford it
-        if signal > 0:
-            if abs_sig <= step_acc.cash:
-                step_acc.value += abs_sig - abs_sig*fee
-            step_acc.cash -= abs_sig
-        elif signal < 0:
-            if abs_sig <= step_acc.value:
-                step_acc.cash += abs_sig - abs_sig*fee
-            step_acc.value -= abs_sig
+        if act_pct > 0:
+            if step_acc.cash < self.min_trade:
+                act_btc = -(self.start_cash + self.start_value)
+            elif act_btc < self.min_trade:
+                act_btc = 0
+            else:
+                step_acc.value += act_btc - act_btc*fee
+            step_acc.cash -= act_btc
+
+        elif act_pct < 0:
+            if step_acc.value < self.min_trade:
+                act_btc = -(self.start_cash + self.start_value)
+            elif abs(act_btc) < self.min_trade:
+                act_btc = 0
+            else:
+                step_acc.cash += abs(act_btc) - abs(act_btc)*fee
+            step_acc.value -= abs(act_btc)
+
+        step_acc.signals.append(float(act_btc))
 
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         pct_change = self.prices_diff[step_acc.i + 1]
@@ -323,7 +321,7 @@ class BitcoinEnv(Environment):
         step_acc.hold_value += pct_change * hold_before
         totals.hold.append(step_acc.hold_value + self.start_cash)
 
-        reward = totals.trade[-1]/totals.trade[-2] - 1
+        reward = 0
 
         step_acc.i += 1
         ep_acc.total_steps += 1
@@ -332,9 +330,13 @@ class BitcoinEnv(Environment):
         next_state = self.get_next_state(step_acc.i, stationary)
 
         terminal = int(step_acc.i + 1 >= self.limit)
+        if step_acc.value < 0 or step_acc.cash < 0:
+            terminal = True
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
+            reward = self.sharpe()
+            if reward == 0: reward = -self.start_cash # punish for holding
 
         if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
             # See 6fc4ed2 for prior live-mode code which worked. Much has changed since then and it won't work in
@@ -345,16 +347,21 @@ class BitcoinEnv(Environment):
         return next_state, terminal, reward
 
     def sharpe(self):
+        """https://www.investopedia.com/terms/s/sharperatio.asp
+        = (portfolio_return - risk_free_rate) / (portfolio_std - risk_free_std)
+        """
         totals = self.acc.step.totals
+        if np.count_nonzero(totals.trade) == 0:
+            return 0.
         diff = (pd.Series(totals.trade).pct_change() - pd.Series(totals.hold).pct_change())[1:]
-        mean, std = diff.mean(), diff.std()
-        if (std, mean) != (0, 0):
-            # Usually Sharpe has `sqrt(num_trades)` in front (or `num_trading_days`?). Experimenting being creative w/
-            # trade-diversity, etc. Give Sharpe some extra info
-            # breadth = math.sqrt(np.uniques(signals))  # standard
-            breadth = 1  # disable
-            return breadth * (mean / std)
-        return 0.
+        numerator = self.cumm_return()  # diff.mean()
+        denominator = 1  # FIXME cumm_return / std() in different scales, getting funky results
+        # denominator = pd.Series(totals.trade).pct_change().std() - pd.Series(totals.hold).pct_change.std()
+        return numerator / denominator
+
+    def cumm_return(self):
+        totals = self.acc.step.totals
+        return (totals.trade[-1] / totals.trade[0] - 1) - (totals.hold[-1] / totals.hold[0] - 1)
 
     def episode_finished(self, runner):
         step_acc, ep_acc, test_acc = self.acc.step, self.acc.episode, self.acc.tests
@@ -362,7 +369,7 @@ class BitcoinEnv(Environment):
         totals = step_acc.totals
         n_uniques = float(len(np.unique(signals)))
         sharpe = self.sharpe()
-        cumm_ret = (totals.trade[-1] / totals.trade[0] - 1) - (totals.hold[-1] / totals.hold[0] - 1)
+        cumm_ret = self.cumm_return()
 
         ep_acc.sharpes.append(float(sharpe))
         ep_acc.returns.append(float(cumm_ret))
@@ -373,7 +380,7 @@ class BitcoinEnv(Environment):
         eq_0 = len([s for s in signals if s == 0])
         gt_0 = len([s for s in signals if s > 0])
         completion = int(test_acc.i / test_acc.n_tests * 100)
-        steps = ""  # f"\tSteps: {step_acc.i}"
+        steps = f"\tSteps: {step_acc.i}"
         print(f"{completion}%{steps}\tSharpe: {'%.3f'%sharpe}\tReturn: {'%.3f'%cumm_ret}\tTrades:\t{lt_0}[<0]\t{eq_0}[=0]\t{gt_0}[>0]")
         return True
 

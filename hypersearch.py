@@ -234,7 +234,7 @@ hypers['agent'] = {
     # I'm pretty sure we don't want to experiment any less than .99 for non-terminal reward-types (which are 1.0).
     # .99^500 ~= .6%, so looses value sooner than makes sense for our trading horizon. A trade now could effect
     # something 2-5k steps later. So .999 is more like it (5k steps ~= .6%)
-    'discount': .999,  # {
+    'discount': 1.,  # {
     #     'type': 'bounded',
     #     'vals': [.9, .99],
     #     'guess': .97
@@ -572,7 +572,6 @@ class HSearchEnv(object):
             main['baseline']['network'] = network
 
         # TODO remove this special-handling
-        main['discount'] = 1. if flat['reward_type'] == 'sharpe' else .999
         if main['gae_lambda']: main['gae_lambda'] = main['discount']
 
         ## GPU split
