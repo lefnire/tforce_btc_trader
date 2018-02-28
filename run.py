@@ -34,11 +34,12 @@ def main():
 
     hs = HSearchEnv(cli_args=args)
     flat, hydrated, network = hs.get_winner(id=args.id)
-    env = BitcoinEnv(flat, name='ppo_agent')
+    env = BitcoinEnv(flat, cli_args=args)
+
     agent = agents_dict['ppo_agent'](
-        states_spec=env.states,
-        actions_spec=env.actions,
-        network_spec=network,
+        states=env.states,
+        actions=env.actions,
+        network=network,
         **hydrated
     )
 

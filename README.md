@@ -6,9 +6,6 @@ A [TensorForce](https://github.com/reinforceio/tensorforce)-based Bitcoin tradin
 
 This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.com/podcasts/machine-learning). Those episodes are tutorial for this project; including an intro to Deep RL, hyperparameter decisions, etc.
 
-### Note! Memory branch
-Most of the recent work is done on [#memory](https://github.com/lefnire/tforce_btc_trader/tree/memory), which follows [tensorforce#memory](https://github.com/reinforceio/tensorforce/tree/memory). You'll have much better train/test performance on #memory ([details here](https://github.com/lefnire/tforce_btc_trader/issues/6)), but live-mode is broken. I recommend using that branch and helping fix `--live` if you get that far.
-
 ### 1. Setup
 - Python 3.6+ (I use template strings a lot)
 - Install & setup Postgres
@@ -17,6 +14,9 @@ Most of the recent work is done on [#memory](https://github.com/lefnire/tforce_b
 - Install [TA-Lib](https://github.com/mrjbq7/ta-lib) manually.
 - `pip install -r requirements.txt`
   - If issues, try installing these deps manually.
+- Install TensorForce from git repo (constantly changing, we chase HEAD)
+  - `git clone https://github.com/reinforceio/tensorforce.git`
+  - `cd tensorforce && pip install -e .`
 
 Note: you'll wanna run this on a GPU rig with some RAM. I'm using a 1080ti and 16GB RAM; 8GB+ is often in used. You _can_ use a standard PC, no GPU (CPU-only); in that case `pip install -I tensorflow==1.5.0rc1` (instead of `tensorflow-gpu`). The only downside is performance; CPU is _way_ slower than GPU for ConvNet computations. Worth evaluating this repo on a CPU before you decide "yeah, it's worth the upgrade."
 
@@ -34,9 +34,10 @@ The crux of practical reinforcement learning is finding the right hyper-paramete
 
 Optional flags:
 - `--guess <int>`: sometimes you don't want BO, which is pretty willy-nilly at first, to do the searching. Instead you want to try a hunch or two of your own first. See instructions in `utils.py#guess_overrides`.
-- `--gpu-split <int>`: number of ways to split a single GPU. Sometimes you'll be using a 1080ti or Tesla V100 - beastly GPUs - and `nvidia-smi -l` will show you're using some 10-20% of your GPU. What a waste. So you can use `--gpu-split 3` to split your V100 3 ways in 3 separate tabs, getting more bang-for-buck.
 - `--net-type <lstm|conv2d>`: see discussion below (LSTM v CNN)
 - `--boost`: you can optionally use gradient boosting when searching for the best hyper combo, instead of BO. BO is more exploratory and thorough, gradient boosting is more "find the best solution _now_". I tend to use `--boost` after say 100 runs are in the database, since BO may still be dilly-dallying till 200-300 and daylight's burning. Boost will suck in the early runs.
+- `--autoencode`: many of you might hit some GPU RAM constraints (hypersearch crashes due to maxed memory). If so, use this flag. It dimensionality-reduces the price-history timesteps so more can fit into RAM. It does so destructively - think of lossy image compression - but might be required for your case. See [#6](https://github.com/lefnire/tforce_btc_trader/issues/6#issuecomment-364179764) for info on what leads to mem-maxing.
+- `--n-steps <int>`, `--n-tests <int>`: vary how long to train and how often to report. `n-steps` is number of timesteps to train (in 10k; ie `--n-steps 100` means 1M). `n-tests` is how many times to split that and report back to you / save an entry for viz.
 
 ### 4. Run
 Once you've found a good hyper combo from above (this could take days or weeks!), it's time to run your results.
@@ -45,7 +46,6 @@ Once you've found a good hyper combo from above (this could take days or weeks!)
 
 - `--name <str>` (required): name of the folder to save your run (during training) or load from (during `--live/--test-live`.
 - `--id <int>`: the id of some winning hyper-combo you want to run with. Without this, it'll run from the hard-coded hyper defaults.
-- `--gpu-split`: (see Hypersearch section)
 - `--early-stop <int>`: sometimes your models can overfit. In particular, PPO can give you great performance for a long time and then crash-and-burn. That kind of behavior will be obvious in your visualization (below), so you can tell your run to stop after x consecutive positive episodes (depends on the agent - some find an optimum and roll for 3 positive episodes, some 8, just eyeball your graph).
 - `--live`: whooa boy, time to put your agent on GDAX and make real trades! I'm gonna let you figure out how to plug it in on your own, 'cause that's danger territory. I ain't responsible for shit. In fact, let's make that real - disclaimer at the end of README.
 - `--test-live`: same as `live`, but without making the real trades. This will start monitoring a live-updated database (from config.json), same as `live`, but instead of making the actual trade, it pretends it did and reports back how much you would have made/lost. Dry-run. You'll definitely want to run this once or twice before running `--live`.
@@ -72,6 +72,7 @@ This project is a [TensorForce](https://github.com/reinforceio/tensorforce)-base
 
 - [Sutton & Barto](http://amzn.to/2EWvnVf): de-facto textbook on RL basics
 - [CS 294](http://rll.berkeley.edu/deeprlcourse/): the modern deep-learning spin on ^.
+- [Machine Learning for Trading](https://www.udacity.com/course/machine-learning-for-trading--ud501): teaches you algo-trading, stock stuff, and applied RL.
 
 This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.com/podcasts/machine-learning). Those episodes are tutorial for this project; including an intro to Deep RL, hyperparameter decisions, etc.
 
@@ -109,3 +110,5 @@ GPL bit so we share our findings. Community effort, right? Boats and tides. Affe
 ### Disclaimer
 
 By using this code you accept all responsibility for money lost because of this code.
+
+FYI, I haven't made a dime. Doubtful the project as-is will fly. It could benefit from add-ons, like some NLP fundamentals functionality. But it's a start!

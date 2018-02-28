@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sqlalchemy.sql import text
+from tensorforce import TensorForceError
 from tensorforce.agents import agents as agents_dict
 from tensorforce.core.networks import layer as TForceLayers
 from tensorforce.core.networks.network import LayeredNetwork
@@ -36,11 +37,11 @@ import utils
 from data import data
 
 
-def build_net_spec(hypers, baseline=False):
+def build_net_spec(hypers):
     """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
     different network hypers
     """
-    net, indicators, arbitrage = Box(hypers['net']), hypers['indicators'], hypers['arbitrage']
+    net = hypers.net
 
     dense = {
         'type': 'dense',
@@ -67,46 +68,43 @@ def build_net_spec(hypers, baseline=False):
             if net.dropout: arr.append({**dropout})
 
     # Mid-layer
-    # TODO figure out how to use LSTM's internals w/ baseline, currently not series-aware. Update: looks like TForce's
-    # `memory` branch fixes this, when merged to master we can get rid of this `if not`
-    if not (net.type == 'lstm' and baseline):
-        if net.type == 'conv2d':
-            steps_out = hypers['step_window']
+    if net.type == 'conv2d':
+        steps_out = hypers.step_window
 
-        for i in range(net.depth_mid):
-            if net.type == 'lstm':
-                # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
-                arr.append({'size': net.width, **lstm})
-                continue
+    for i in range(net.depth_mid):
+        if net.type == 'lstm':
+            # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
+            arr.append({'size': net.width, **lstm})
+            continue
 
-            # For each Conv2d layer, the window/stride is a function of the step-window size. So `net.window=1` means
-            # divide the step-window 10 ways; `net.window=2` means divide it 20 ways. This gives us flexibility to
-            # define window/stride relative to step_window without having to know either. Note, each layer is reduced
-            # from the prior, so window/stride gets recalculated
-            step_window = math.ceil(steps_out / (net.window * 10))
-            step_stride = math.ceil(step_window / net.stride)
+        # For each Conv2d layer, the window/stride is a function of the step-window size. So `net.window=1` means
+        # divide the step-window 10 ways; `net.window=2` means divide it 20 ways. This gives us flexibility to
+        # define window/stride relative to step_window without having to know either. Note, each layer is reduced
+        # from the prior, so window/stride gets recalculated
+        step_window = math.ceil(steps_out / (net.window * 10))
+        step_stride = math.ceil(step_window / net.stride)
 
-            # next = (length - window)/stride + 1
-            steps_out = (steps_out - step_window)/step_stride + 1
+        # next = (length - window)/stride + 1
+        steps_out = (steps_out - step_window)/step_stride + 1
 
-            # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1
-            # to next layer). TODO this is ugly, better way?
-            min_window, min_stride = 3, 2
-            step_window = max([step_window, min_window])
-            step_stride = max([step_stride, min_stride])
+        # Ensure there's some minimal amount of reduction at the lower levels (else, we get layers that map 1-1
+        # to next layer). TODO this is ugly, better way?
+        min_window, min_stride = 3, 2
+        step_window = max([step_window, min_window])
+        step_stride = max([step_stride, min_stride])
 
-            # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
-            # (like 32-64-64 -> 512-256). If anyone has better intuition...
-            size = max([32, int(net.width / 4)])
-            # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
-            arr.append({
-                'size': size,
-                'window': (step_window, 1),
-                'stride': (step_stride, 1),
-                **conv2d
-            })
-        if net.type == 'conv2d':
-            arr.append({'type': 'flatten'})
+        # This is just my hunch from CNNs I've seen; the filter sizes are much smaller than the downstream denses
+        # (like 32-64-64 -> 512-256). If anyone has better intuition...
+        size = max([16, int(net.width // 4)])
+        # if i == 0: size = int(size / 2)  # Most convs have their first layer smaller... right? just the first, or what?
+        arr.append({
+            'size': size,
+            'window': (step_window, 1),
+            'stride': (step_stride, 1),
+            **conv2d
+        })
+    if net.type == 'conv2d':
+        arr.append({'type': 'flatten'})
 
     # Post Dense layers
     for i in range(net.depth_post):
@@ -114,10 +112,14 @@ def build_net_spec(hypers, baseline=False):
         arr.append({'size': size, **dense})
         if net.dropout: arr.append({**dropout})
 
+    if net.extra_stationary:
+        arr.append({'size': 9, **dense})  # TODO fiddle with size? Found 9 from a book, seems legit.
+        if net.dropout: arr.append({**dropout})
+
     return arr
 
 
-def custom_net(hypers, print_net=False, baseline=False):
+def custom_net(hypers, print_net=False):
     """First builds up an array of dicts compatible with TForce's network spec. Then passes off to a custom neural
     network architecture, rather than using TForce's default LayeredNetwork. The only reason for this is so we can pipe
     in the "stationary" inputs after the LSTM/Conv2d layers. Think about it. LTSM/Conv2d are tracking time-series data
@@ -128,7 +130,8 @@ def custom_net(hypers, print_net=False, baseline=False):
     network downstream, after the time-series layers. Makes more sense to me that way: imagine the conv layers saying
     "the price is right, buy!" and then getting handed a note with "you have $0 USD". "Oh.. nevermind..."
     """
-    layers_spec = build_net_spec(hypers, baseline)
+    hypers = Box(hypers)
+    layers_spec = build_net_spec(hypers)
     if print_net: pprint(layers_spec)
 
     class CustomNet(LayeredNetwork):
@@ -136,33 +139,47 @@ def custom_net(hypers, print_net=False, baseline=False):
             super(CustomNet, self).__init__(layers_spec, **kwargs)
 
         def tf_apply(self, x, internals, update, return_internals=False):
+            """This method is copied from LayeredNetwork and modified slightly to insert stationary after the series
+            layers. If anything's confusing, or if anything changes, consult original function.
+            """
             series = x['series']
             stationary = x['stationary']
             x = series
 
+            if hypers.repeat_last_state:
+                # stationary.shape=(?, 2), series.shape=(?, 400, 1, 6)
+                # full batch, last window-step, 1 (height), all features. tf.squeeze removes the 1(height) dim (note
+                # a dim was already removed via -1, hence axis=1)
+                last_states = tf.squeeze(series[:, -1, :, :], axis=1)
+                stationary = tf.concat([stationary, last_states], axis=1)
+
             # Apply stationary to the first Dense after the last LSTM. in the case of Baseline, there's no LSTM,
             # so apply it to the start
             apply_stationary_here = 0
-            # Find the last LSTM layer, peg to the next layer (a Dense)
             for i, layer in enumerate(self.layers):
-                if isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
+                if hypers.net.extra_stationary and isinstance(layer, TForceLayers.Dense):
+                    # Last Dense layer
+                    apply_stationary_here = i
+                elif isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
+                    # Last LSTM layer, peg to the next layer (a Dense)
                     apply_stationary_here = i + 1
 
-            internal_outputs = list()
-            index = 0
+            next_internals = dict()
             for i, layer in enumerate(self.layers):
-                layer_internals = [internals[index + n] for n in range(layer.num_internals)]
-                index += layer.num_internals
                 if i == apply_stationary_here:
                     x = tf.concat([x, stationary], axis=1)
-                x = layer.apply(x, update, *layer_internals)
 
-                if not isinstance(x, tf.Tensor):
-                    internal_outputs.extend(x[1])
-                    x = x[0]
+                layer_internals = {name: internals['{}_{}'.format(layer.scope, name)] for name in
+                                   layer.internals_spec()}
+                if len(layer_internals) > 0:
+                    x, layer_internals = layer.apply(x=x, update=update, **layer_internals)
+                    for name, internal in layer_internals.items():
+                        next_internals['{}_{}'.format(layer.scope, name)] = internal
+                else:
+                    x = layer.apply(x=x, update=update)
 
             if return_internals:
-                return x, internal_outputs
+                return x, next_internals
             else:
                 return x
     return CustomNet
@@ -194,7 +211,10 @@ def hydrate_baseline(x, flat):
             'baseline_mode': 'states',
             'baseline_optimizer': {
                 'type': 'multi_step',
-                'num_steps': flat['optimization_steps'],
+                # Consider having baseline_optimizer learning hypers independent of the main learning hypers.
+                # At least with PPO, it seems the step_optimizer learning hypers function quite differently than
+                # expected; where baseline_optimizer's function more as-expected. TODO Investigate.
+                'num_steps': 5,  # flat['baseline_optimizer.num_steps'],
                 'optimizer': {
                     'type': flat['step_optimizer.type'],
                     'learning_rate': 10 ** -flat['step_optimizer.learning_rate']
@@ -204,55 +224,56 @@ def hydrate_baseline(x, flat):
     }[x]
 
 
-# Many of these hypers come directly from tensorforce/tensorforce/agents/ppo_agent.py, see that for documentation
+# Most hypers come directly from tensorforce/tensorforce/agents/ppo_agent.py, see that for documentation
 hypers = {}
-hypers['agent'] = {}
-hypers['batch_agent'] = {
-    'batch_size': {
-        'type': 'bounded',
-        'vals': [3, 11],
-        'guess': 5,
-        'pre': round,
-        'hydrate': two_to_the
-    },
-    'keep_last_timestep': {
-        'type': 'bool',
-        'guess': False
-    }
+hypers['agent'] = {
+    # 'states_preprocessing': None,
+    # 'actions_exploration': None,
+    # 'reward_preprocessing': None,
+
+    # I'm pretty sure we don't want to experiment any less than .99 for non-terminal reward-types (which are 1.0).
+    # .99^500 ~= .6%, so looses value sooner than makes sense for our trading horizon. A trade now could effect
+    # something 2-5k steps later. So .999 is more like it (5k steps ~= .6%)
+    'discount': .999,  # {
+    #     'type': 'bounded',
+    #     'vals': [.9, .99],
+    #     'guess': .97
+    # },
 }
-hypers['model'] = {
-    # Doesn't seem to matter; consider removing
-    'optimizer.type': {
-        'type': 'int',
-        'vals': ['nadam', 'adam'],
-        'guess': 'adam'
-    },
-    'optimizer.learning_rate': {
+MAX_BATCH_SIZE = 8
+hypers['memory_model'] = {
+    'update_mode.unit': 'episodes',
+    'update_mode.batch_size': {
         'type': 'bounded',
-        'vals': [0., 9.],
-        'guess': 7.9,
-        'hydrate': ten_to_the_neg
+        'vals': [1, MAX_BATCH_SIZE],
+        'guess': 4,
+        'pre': round,
     },
-    'optimization_steps': {
+    'update_mode.frequency': {
         'type': 'bounded',
-        'vals': [1, 50],  # want to try higher, but too slow to test
-        'guess': 29,
-        'pre': round
+        'vals': [1, 3],  # t-shirt sizes, reverse order
+        'guess': 2,
+        'pre': round,
+        'hydrate': lambda x, others: math.ceil(others['update_mode.batch_size'] / x)
     },
-    'discount': {
-        'type': 'bounded',
-        'vals': [.9, .99],
-        'guess': .94
-    },
-    # TODO variable_noise
+
+    'memory.type': 'latest',
+    'memory.include_next_states': False,
+    'memory.capacity': BitcoinEnv.EPISODE_LEN * MAX_BATCH_SIZE,  # {
+    #     'type': 'bounded',
+    #     'vals': [2000, 20000],
+    #     'guess': 5000
+    # }
 }
 hypers['distribution_model'] = {
-    'entropy_regularization': {
-        'type': 'bounded',
-        'vals': [0, 5],
-        'guess': 2.46,
-        'hydrate': min_ten_neg(1e-4, 0.)
-    }
+    # 'distributions': None,
+    'entropy_regularization': .01,  # {
+    #     'type': 'bounded',
+    #     'vals': [0, 5],
+    #     'guess': 2.,
+    #     'hydrate': min_ten_neg(1e-4, 0.)
+    # },
+    # 'variable_noise': TODO
 }
 hypers['pg_model'] = {
     'baseline_mode': {
@@ -261,51 +282,95 @@ hypers['pg_model'] = {
         'hydrate': hydrate_baseline
     },
     'gae_lambda': {
-        'type': 'bounded',
-        'vals': [.8, 1.],
-        'guess': .97,
-        # Pretty ugly: says "use gae_lambda if baseline_mode=True, and if gae_lambda > .9" (which is why `vals`
-        # allows a number below .9, so we can experiment with it off when baseline_mode=True)
-        'post': lambda x, others: x if (x and x > .9 and others['baseline_mode']) else None
+        'type': 'bool',
+        'guess': True,
+        'post': lambda x, others: \
+            None if not (x and others['baseline_mode']) else True  # True hydrated in main code
+
+        # 'type': 'bounded',
+        # 'vals': [.8, 1.],
+        # 'guess': .8,  # meaning "off",
+        # # use gae_lambda if baseline_mode=True, and if gae_lambda > .9. Turn off if <.9, then .8-.9 has the same
+        # # range as .9-1 for decent experimenting.
+        # # TODO currently setting to 1 if discount=1, is that correct? (is gae_lambda similar to discount?)
+        # # If so, shouldn't gae_lambda always == discount?
+        # 'post': lambda x, others: \
+        #     None if not (x > .9 and others['baseline_mode']) \
+        #     else 1. if others['discount'] == 1. \
+        #     else x
     },
+    # 'baseline_optimizer.num_steps': 5
 }
 hypers['pg_prob_ration_model'] = {
-    'likelihood_ratio_clipping': {
+    'likelihood_ratio_clipping': .2,  #{
+    #     'type': 'bounded',
+    #     'vals': [0., 1.],
+    #     'guess': .2,
+    #     'hydrate': min_threshold(.05, None)
+    # }
+}
+hypers['ppo_model'] = {
+    # Doesn't seem to matter; consider removing
+    'step_optimizer.type': {
+        'type': 'int',
+        'vals': ['nadam', 'adam'],
+        'guess': 'nadam'
+    },
+    'step_optimizer.learning_rate': {
         'type': 'bounded',
-        'vals': [0., 1.],
-        'guess': .1,
-        'hydrate': min_threshold(.05, None)
-    }
+        'vals': [0., 9.],
+        'guess': 4.5,
+        'hydrate': ten_to_the_neg
+    },
+    'optimization_steps': 25, #{
+    #     'type': 'bounded',
+    #     'vals': [1, 50],  # want to try higher, but too slow to test
+    #     'guess': 25,
+    #     'pre': round
+    # },
+    'subsampling_fraction': .2, #{
+    #     'type': 'bounded',
+    #     'vals': [0., 1.],
+    #     'guess': .2
+    # },
 }
 
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
     **hypers['agent'],
-    **hypers['batch_agent'],
-    **hypers['model'],
+    **hypers['memory_model'],
     **hypers['distribution_model'],
     **hypers['pg_model'],
-    **hypers['pg_prob_ration_model']
-
+    **hypers['pg_prob_ration_model'],
+    **hypers['ppo_model']
 }
-
-
-# Renaming this way since I was experimenting with other RL models, like DQN & NAF; revisit)
-hypers['ppo_agent']['step_optimizer.learning_rate'] = hypers['ppo_agent'].pop('optimizer.learning_rate')
-hypers['ppo_agent']['step_optimizer.type'] = hypers['ppo_agent'].pop('optimizer.type')
 
 hypers['custom'] = {
     # Use a handful of TA-Lib technical indicators (SMA, EMA, RSI, etc). Which indicators used and for what time-frame
     # not optimally chosen at all; just figured "if some randos are better than nothing, there's something there and
     # I'll revisit". Help wanted.
-    'indicators': {
-        'type': 'bool',
-        'guess': True
-    },
+
+    # Currently disabling indicators in general. A good CNN should "see" those automatically in the window, right?
+    # If I'm wrong, experiment with these (see commit 6fc4ed2)
+    'indicators_count': 0,
+    'indicators_window': 0,
+
+    # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
+    # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
+    # exchange, so it tends to play "follow the leader". Ie, Kraken will likely try to get to $10k
+    # to match GDAX (oversimplifying obviously). This is called "risk arbitrage" ("arbitrage"
+    # by itself is slightly different, not useful for us). Presumably that's golden info for the neural net:
+    # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
+    # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
+    # data.py) which makes it hard for the net to follow.
+    # Note: not valuable if GDAX is main (ie, not valuable if the bigger exchange is the main, only
+    # if the smaller exchange (eg Kraken) is main)
+    'arbitrage': False,  # see 6fc4ed2
+
     # Conv / LSTM layers
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 3,
+        'guess': 2,
         'pre': round
     },
     # Dense layers
@@ -320,7 +385,7 @@ hypers['custom'] = {
     'net.width': {
         'type': 'bounded',
         'vals': [3, 9],
-        'guess': 8,
+        'guess': 6,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -335,67 +400,55 @@ hypers['custom'] = {
     'net.activation': {
         'type': 'int',
         'vals': ['tanh', 'relu'],
-        'guess': 'tanh'
+        'guess': 'relu'
+    },
+
+    # Whether to append one extra tiny layer at the network's end for merging in the stationary data. This would give
+    # stationary data extra oomph. Currently, stationary (which is 2-3 features) gets merged in after flatten (in conv)
+    # which takes 256+ neurons, so stationary can easily get ignored without this hyper.
+    'net.extra_stationary': {
+        'type': 'bool',
+        'guess': True
     },
 
     # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
     # papers just role L2 (.001) and ignore the other two; but that hasn't jived for me. Below is the best combo I've
     # gotten so far, and I'll update as I go.
-    'net.dropout': {
-        'type': 'bounded',
-        'vals': [0., .2],
-        'guess': .28,
-        'hydrate': min_threshold(.1, None)
-    },
+    'net.dropout': None,  # FIXME not yet supported in tensorforce#memory (https://github.com/reinforceio/tensorforce/issues/317)
+    # {
+    #    'type': 'bounded',
+    #    'vals': [0., .2],
+    #    'guess': .001,
+    #    'hydrate': min_threshold(.1, None)
+    #},
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],  # to disable, set to 7 (not 0)
-        'guess': 1.7,
+        'guess': 2.3,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
     'net.l1': {
         'type': 'bounded',
         'vals': [0, 7],
-        'guess': 5.8,
+        'guess': 7.,
         'hydrate': min_ten_neg(1e-6, 0.)
     },
 
-
-    # Instead of using absolute price diffs, use percent-change.
-    'pct_change': {
-        'type': 'bool',
-        'guess': True
+    # single = one action (-$x to +$x). multi = two actions: (buy|sell|hold) and (how much?). all_or_none = buy/sell
+    # w/ all the cash or value owned
+    'action_type': {
+        'type': 'int',
+        'vals': ['single', 'multi'],
+        'guess': 'multi'
     },
-    # True = one action (-$x to +$x). False = two actions: (buy|sell|hold) and (how much?)
-    'single_action': {
-        'type': 'bool',
-        'guess': True
-    },
-    # Scale the inputs and rewards
-    'scale': {
-        'type': 'bool',
-        'guess': True
-    },
-    # After this many time-steps of doing the same thing we will terminate the episode and give the agent a huge
-    # spanking. I didn't raise no investor, I raised a TRADER
-    'punish_repeats': {
-        'type': 'bounded',
-        'vals': [5000, 20000],
-        'guess': 20000,
-        'pre': int
-    },
-    # This is special. "Risk arbitrage" is the idea of watching two exchanges for the same
-    # instrument's price. Let's say BTC is $10k in GDAX and $9k in Kraken. Well, Kraken is a smaller / less popular
-    # exchange, so it tends to play "follow the leader". Ie, Kraken will likely try to get to $10k
-    # to match GDAX (oversimplifying obviously). This is called "risk arbitrage" ("arbitrage"
-    # by itself is slightly different, not useful for us). Presumably that's golden info for the neural net:
-    # "Kraken < GDAX? Buy in Kraken!". It's not a gaurantee, so this is a hyper in hypersearch.py.
-    # Incidentally I have found it detrimental, I think due to imperfect time-phase alignment (arbitrage code in
-    # data.py) which makes it hard for the net to follow.
-    'arbitrage': {
-        'type': 'bool',
-        'guess': False
-    }
+    # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
+    # and calculate sharpe score at episode-terminal.
+    # See 6fc4ed2 for handling Sharpe rewards
+    'reward_type': 'raw',  # {
+    #     'type': 'int',
+    #     'vals': ['raw', 'advantage', 'sharpe'],
+    #     'guess': 'sharpe'
+    # },
 }
 
 hypers['lstm'] = {
@@ -414,7 +467,7 @@ hypers['conv2d'] = {
     'net.window': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 3,
+        'guess': 1,
         'pre': round,
     },
     # How many ways to divide a window? 1=no-overlap, 2=half-overlap (smaller # = more destructive). See comments
@@ -425,12 +478,9 @@ hypers['conv2d'] = {
         'guess': 2,
         'pre': round
     },
-    'step_window': {
-        'type': 'bounded',
-        'vals': [100, 600],
-        'guess': 229,
-        'pre': round,
-    },
+    # Size of the window to look at w/ the CNN (ie, width of the image). Would like to have more than 400 "pixels" here,
+    # but it causes memory issues the way PPO's MemoryModel batches things. This is made up for via indicators
+    'step_window': 300,
 
     # Because ConvNets boil pictures down (basically downsampling), the precise current timestep numbers can get
     # averaged away. This will repeat them in state['stationary'] downstream ("sir, you dropped this")
@@ -486,6 +536,8 @@ class HSearchEnv(object):
         :param actions: the hyperparamters
         """
         self.flat = flat = {}
+
+
         # Preprocess hypers
         for k, v in actions.items():
             try: v = v.item()  # sometimes primitive, sometimes numpy
@@ -517,16 +569,20 @@ class HSearchEnv(object):
         if flat['baseline_mode']:
             if type(self.hypers['baseline_mode']) == bool:
                 main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
+            main['baseline']['network'] = network
 
-            main['baseline']['network_spec'] = custom_net(custom, baseline=True)
+        # TODO remove this special-handling
+        main['discount'] = 1. if flat['reward_type'] == 'sharpe' else .999
+        if main['gae_lambda']: main['gae_lambda'] = main['discount']
 
-        # GPU split
-        session_config = None
-        gpu_split = self.cli_args.gpu_split
-        if gpu_split != 1:
-            fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
-            session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
-        main['session_config'] = session_config
+        ## GPU split
+        ## FIXME add back to tensorforce#memory
+        # session_config = None
+        # gpu_split = self.cli_args.gpu_split
+        # if gpu_split != 1:
+        #     fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
+        #     session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
+        # main['session_config'] = session_config
 
         print('--- Flat ---')
         pprint(flat)
@@ -538,38 +594,38 @@ class HSearchEnv(object):
     def execute(self, actions):
         flat, hydrated, network = self.get_hypers(actions)
 
-        env = BitcoinEnv(flat, name=self.agent)
+        env = BitcoinEnv(flat, self.cli_args)
         agent = agents_dict[self.agent](
-            states_spec=env.states,
-            actions_spec=env.actions,
-            network_spec=network,
+            states=env.states,
+            actions=env.actions,
+            network=network,
             **hydrated
         )
 
         env.train_and_test(agent, self.cli_args.n_steps, self.cli_args.n_tests, -1)
 
         step_acc, ep_acc = env.acc.step, env.acc.episode
-        adv_avg = utils.calculate_score(ep_acc.advantages)
-        print(flat, f"\nAdvantage={adv_avg}\n\n")
+        adv_avg = utils.calculate_score(ep_acc.returns)
+        print(flat, f"\nScore={adv_avg}\n\n")
 
         sql = """
-          insert into runs (hypers, advantage_avg, advantages, uniques, prices, actions, agent, flag) 
-          values (:hypers, :advantage_avg, :advantages, :uniques, :prices, :actions, :agent, :flag)
+          insert into runs (hypers, sharpes, returns, uniques, prices, signals, agent, flag)
+          values (:hypers, :sharpes, :returns, :uniques, :prices, :signals, :agent, :flag)
           returning id;
         """
         row = self.conn_runs.execute(
             text(sql),
             hypers=json.dumps(flat),
-            advantage_avg=adv_avg,
-            advantages=list(ep_acc.advantages),
+            sharpes=list(ep_acc.sharpes),
+            returns=list(ep_acc.returns),
             uniques=list(ep_acc.uniques),
             prices=list(env.prices),
-            actions=list(step_acc.signals),
+            signals=list(step_acc.signals),
             agent=self.agent,
             flag=self.cli_args.net_type
         ).fetchone()
 
-        if ep_acc.advantages[-1] > 0:
+        if ep_acc.returns[-1] > 0:
             _id = str(row[0])
             directory = os.path.join(os.getcwd(), "saves", _id)
             filestar = os.path.join(directory, _id)
@@ -678,6 +734,7 @@ def main():
     bounds = []
     for k in feat_names:
         hyper = hypers_.get(k, False)
+        bounded = False
         if hyper:
             bounded, min_, max_ = hyper['type'] == 'bounded', min(hyper['vals']), max(hyper['vals'])
         b = [min_, max_] if bounded else [0, 1]
@@ -728,13 +785,13 @@ def main():
         # Every iteration, re-fetch from the database & pre-train new model. Acts same as saving/loading a model to disk,
         # but this allows to distribute across servers easily
         conn_runs = data.engine_runs.connect()
-        sql = "select hypers, advantages, advantage_avg from runs where flag=:f"
+        sql = "select hypers, returns from runs where flag=:f"
         runs = conn_runs.execute(text(sql), f=args.net_type).fetchall()
         conn_runs.close()
         X, Y = [], []
         for run in runs:
             X.append(hypers2vec(run.hypers))
-            Y.append([utils.calculate_score(run.advantages)])
+            Y.append([utils.calculate_score(run.returns)])
         boost_model = print_feature_importances(X, Y, feat_names)
 
         if args.guess != -1:

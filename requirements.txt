@@ -13,5 +13,3 @@ sklearn==0.0
 SQLAlchemy==1.1.12
 TA-Lib==0.4.10
 tensorflow-gpu==1.5.0rc1
-tensorforce==0.3.5.1
--e git+https://github.com/reinforceio/tensorforce.git@master

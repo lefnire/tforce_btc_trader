@@ -15,9 +15,9 @@ def get_runs():
     rows = []
     conn = engine_runs.connect()
     # TODO prices/actions in separate route
-    for row in conn.execute('select id, hypers, advantage_avg, advantages, uniques from runs where advantage_avg > 0').fetchall():
+    for row in conn.execute('select id, hypers, sharpes, returns, uniques from runs').fetchall():
         row = dict(row.items())
-        row['advantage_avg'] = utils.calculate_score(row['advantages'])
+        row['reward_avg'] = utils.calculate_score(row['returns'])
         rows.append(row)
     conn.close()
 
@@ -25,10 +25,10 @@ def get_runs():
     return jsonify(rows)
 
 
-@app.route("/actions/<run_id>")
+@app.route("/signals/<run_id>")
 def get_actions(run_id):
     conn = engine_runs.connect()
-    query = 'select actions, prices from runs where id=:run_id'
+    query = 'select signals, prices from runs where id=:run_id'
     row = conn.execute(text(query), run_id=run_id).fetchone()
     conn.close()
 
