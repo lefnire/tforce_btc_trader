@@ -15,7 +15,7 @@ This project goes with Episode 26+ of [Machine Learning Guide](http://ocdevel.co
 - `pip install -r requirements.txt`
   - If issues, try installing these deps manually.
 - Install TensorForce from git repo (constantly changing, we chase HEAD)
-  - `git clone https://github.com/reinforceio/tensorforce.git`
+  - `git clone https://github.com/lefnire/tensorforce.git`
   - `cd tensorforce && pip install -e .`
 
 Note: you'll wanna run this on a GPU rig with some RAM. I'm using a 1080ti and 16GB RAM; 8GB+ is often in used. You _can_ use a standard PC, no GPU (CPU-only); in that case `pip install -I tensorflow==1.5.0rc1` (instead of `tensorflow-gpu`). The only downside is performance; CPU is _way_ slower than GPU for ConvNet computations. Worth evaluating this repo on a CPU before you decide "yeah, it's worth the upgrade."
@@ -88,6 +88,8 @@ Then, when you're ready for live mode, you'll want a `live` database which is re
 You'll notice the `--net-type <lstm|conv2d>` flag in `hypersearch.py` and `run.py`. This will select between an LSTM Recurrent Neural Networks (RNNs) or Convolutional Neural Networks (CNN). I have them broken out of the hypersearch since they're so different, they kinda deserve their own `runs` DB each - but if someone can consolidate them into the hypersearch framework, please do. You may be thinking, "BTC prices is time-series, time-series is LSTM... why CNN?" It strangely turns out that LSTM doesn't do so hot here. In my own experience, in colleagues' experience, and in 2-3 papers I've read ([here's one](https://arxiv.org/pdf/1706.10059.pdf)) - we're all coming to the same conclusion. We're not sure why... the running theory is vanishing/exploding gradient. LSTMs work well in NLP which has some maximum 50-word sentences or so. LSTMs mitigated vanilla RNN's vanishing/exploding gradient for such sentences, true - but BTC history is infinite (on-going). Maybe LSTM can only go so far with time-series. Another possibility is that Deep Reinforcement Learning is most commonly researched, published, and open-sourced using CNNs. This because RL is super video-game centric, self-driving cars, all the vision stuff. So maybe the math behind these models lends better to CNNs? Who knows. The point is - experiment with both. Report back on Github your own findings.
 
 So how does CNN even make sense for time-series? Well we construct an "image" of a time-slice, where the x-axis is time (obviously), the y-axis (height) is nothing... it's [1]. The z-axis (channels) is features (OHLCV, VWAP, bid/ask, etc). This is kinda like our agent literally looking at an image of price actions, like we do when day-trading, but a bit more robot-friendly / less human-friendly.
+
+[Update March 04 2018]: I'm having better success recently w/ LSTMs and have made that the default. A change in TensorForce perhaps?
 
 ### Reinforcement Models
 

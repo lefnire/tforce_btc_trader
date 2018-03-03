@@ -336,7 +336,6 @@ class BitcoinEnv(Environment):
             # We're done.
             step_acc.signals.append(0)  # Add one last signal (to match length)
             reward = self.sharpe()
-            if reward == 0: reward = -self.start_cash # punish for holding
 
         if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
             # See 6fc4ed2 for prior live-mode code which worked. Much has changed since then and it won't work in
