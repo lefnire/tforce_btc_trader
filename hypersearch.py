@@ -56,14 +56,20 @@ def build_net_spec(hypers, baseline):
         'l2_regularization': net.l2,
         'l1_regularization': net.l1
     }
-    lstm = {'type': 'internal_lstm', 'dropout': net.dropout}
+    lstm = {
+        'type': 'internal_lstm',
+        'dropout': net.dropout,
+        'cell_clip': net.cell_clip if not isconv else None,
+        'use_peepholes': net.use_peepholes if not isconv else None
+    }
     dropout = {'type': 'dropout', 'rate': net.dropout}
 
     arr = []
 
     def add_dense(s):
         arr.append({'size': s, **dense})
-        if net.dropout: arr.append({**dropout})
+        # FIXME dense dropout bug https://github.com/reinforceio/tensorforce/issues/317
+        # if net.dropout: arr.append({**dropout})
 
     # Pre-layer (TMK only makes sense for LSTM)
     for i in range(net.get('depth_pre', 0)):
@@ -263,7 +269,7 @@ hypers['memory_model'] = {
     'update_mode.frequency': {
         'type': 'bounded',
         'vals': [1, 3],  # t-shirt sizes, reverse order
-        'guess': 2,
+        'guess': 1,
         'pre': round,
         'hydrate': lambda x, others: math.ceil(others['update_mode.batch_size'] / x)
     },
@@ -278,12 +284,12 @@ hypers['memory_model'] = {
 }
 hypers['distribution_model'] = {
     # 'distributions': None,
-    'entropy_regularization': .01,  # {
-    #     'type': 'bounded',
-    #     'vals': [0, 5],
-    #     'guess': 2.,
-    #     'hydrate': min_ten_neg(1e-4, 0.)
-    # },
+    'entropy_regularization': {
+        'type': 'bounded',
+        'vals': [0, 5],
+        'guess': 2.,
+        'hydrate': min_ten_neg(1e-4, None)
+    },
     # 'variable_noise': TODO
 }
 hypers['pg_model'] = {
@@ -294,7 +300,7 @@ hypers['pg_model'] = {
     },
     'gae_lambda': {
         'type': 'bool',
-        'guess': True,
+        'guess': False,
         'post': lambda x, others: \
             None if not (x and others['baseline_mode']) else True  # True hydrated in main code
 
@@ -313,37 +319,37 @@ hypers['pg_model'] = {
     # 'baseline_optimizer.num_steps': 5
 }
 hypers['pg_prob_ration_model'] = {
-    'likelihood_ratio_clipping': .2,  #{
-    #     'type': 'bounded',
-    #     'vals': [0., 1.],
-    #     'guess': .2,
-    #     'hydrate': min_threshold(.05, None)
-    # }
+    'likelihood_ratio_clipping': {
+        'type': 'bounded',
+        'vals': [0., 1.],
+        'guess': .2,
+        'hydrate': min_threshold(.05, None)
+    }
 }
 hypers['ppo_model'] = {
     # Doesn't seem to matter; consider removing
     'step_optimizer.type': {
         'type': 'int',
         'vals': ['nadam', 'adam'],
-        'guess': 'nadam'
+        'guess': 'adam'
     },
     'step_optimizer.learning_rate': {
         'type': 'bounded',
         'vals': [0., 9.],
-        'guess': 4.5,
+        'guess': 3.,
         'hydrate': ten_to_the_neg
     },
-    'optimization_steps': 25, #{
-    #     'type': 'bounded',
-    #     'vals': [1, 50],  # want to try higher, but too slow to test
-    #     'guess': 25,
-    #     'pre': round
-    # },
-    'subsampling_fraction': .2, #{
-    #     'type': 'bounded',
-    #     'vals': [0., 1.],
-    #     'guess': .2
-    # },
+    'optimization_steps': {
+        'type': 'bounded',
+        'vals': [1, 50],
+        'guess': 50,
+        'pre': round
+    },
+    'subsampling_fraction': {
+        'type': 'bounded',
+        'vals': [0., 1.],
+        'guess': .1
+    },
 }
 
 hypers['ppo_agent'] = {  # vpg_agent, trpo_agent
@@ -381,22 +387,22 @@ hypers['custom'] = {
     'net.depth_mid': {
         'type': 'bounded',
         'vals': [1, 3],
-        'guess': 2,
+        'guess': 1,
         'pre': round
     },
     # Dense layers
     'net.depth_post': {
         'type': 'bounded',
         'vals': [0, 3],
-        'guess': 1,
+        'guess': .001,
         'pre': round
     },
     # Network depth, in broad-strokes of 2**x (2, 4, 8, 16, 32, 64, 128, 256, 512, ..) just so you get a feel for
     # small-vs-large. Later you'll want to fine-tune.
     'net.width': {
         'type': 'bounded',
-        'vals': [3, 9],
-        'guess': 6,
+        'vals': [3, 8],
+        'guess': 5,
         'pre': round,
         'hydrate': two_to_the
     },
@@ -404,7 +410,7 @@ hypers['custom'] = {
     # in the hidden layers, narrower again on hte outputs.
     'net.funnel': {
         'type': 'bool',
-        'guess': True
+        'guess': False
     },
     # tanh vs "the relu family" (relu, selu, crelu, elu, *lu). Broad-strokes here by just pitting tanh v relu; then,
     # if relu wins you can fine-tune "which type of relu" later.
@@ -417,13 +423,12 @@ hypers['custom'] = {
     # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
     # papers just role L2 (.001) and ignore the other two; but that hasn't jived for me. Below is the best combo I've
     # gotten so far, and I'll update as I go.
-    'net.dropout': None,  # FIXME not yet supported in tensorforce#memory (https://github.com/reinforceio/tensorforce/issues/317)
-    # {
-    #    'type': 'bounded',
-    #    'vals': [0., .2],
-    #    'guess': .001,
-    #    'hydrate': min_threshold(.1, None)
-    #},
+    'net.dropout': {
+       'type': 'bounded',
+       'vals': [0., .5],
+       'guess': .001,
+       'hydrate': min_threshold(.1, None)
+    },
     'net.l2': {
         'type': 'bounded',
         'vals': [0, 7],  # to disable, set to 7 (not 0)
@@ -447,7 +452,7 @@ hypers['custom'] = {
     # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
     # and calculate sharpe score at episode-terminal.
     # See 6fc4ed2 for handling Sharpe rewards
-    'reward_type': 'raw',  # {
+    'reward_type': 'sharpe',  # {
     #     'type': 'int',
     #     'vals': ['raw', 'advantage', 'sharpe'],
     #     'guess': 'sharpe'
@@ -459,15 +464,26 @@ hypers['lstm'] = {
     'net.depth_pre': {
         'type': 'bounded',
         'vals': [0, 3],
-        'guess': 0.,
+        'guess': 2,
         'pre': round
     },
 
     # Merge stationary in w/ series (so that the values are recorded through time)
-    'net.stationary_with_series': {
-        'type': 'bool',
-        'guess': True,
+    'net.stationary_with_series': True,
+        # 'type': 'bool',
+        # 'guess': True,
+    # },
+
+    'net.cell_clip': {
+        'type': 'bounded',
+        'vals': [0, 5],
+        'guess': 3.,
+        'hydrate': lambda x, _: None if x > 4 else x
     },
+    'net.use_peepholes': {
+        'type': 'bool',
+        'guess': False,
+    }
 }
 hypers['conv2d'] = {
     # 'net.bias': True,  # TODO valuable?
