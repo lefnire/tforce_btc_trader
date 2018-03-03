@@ -43,8 +43,8 @@ def calculate_score(advantages):
 
 def add_common_args(parser):
     # parser.add_argument('-g', '--gpu-split', type=float, default=1, help="Num ways we'll split the GPU (how many tabs you running?)")
-    parser.add_argument('-n', '--net-type', type=str, default='conv2d')
-    parser.add_argument('-t', '--n-tests', type=int, default=40, help="Number of times to split to training and run a test. This slows things down, so balance graph resolution w/ performance.")
+    parser.add_argument('-n', '--net-type', type=str, default='lstm')
+    parser.add_argument('-t', '--n-tests', type=int, default=30, help="Number of times to split to training and run a test. This slows things down, so balance graph resolution w/ performance.")
     parser.add_argument('-s', '--n-steps', type=int, default=80, help="Number of 1k timesteps total to train. (using 50 means 500,000)")
     parser.add_argument('--autoencode', action="store_true", default=False, help="If you're running out of GPU memory, try --autoencode which scales things down")
     parser.add_argument('--clear-scalers', action="store_true", default=False, help="Should we delete the saved reward/state scaler.pkl objects, start over?")
