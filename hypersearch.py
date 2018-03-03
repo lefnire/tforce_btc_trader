@@ -37,11 +37,12 @@ import utils
 from data import data
 
 
-def build_net_spec(hypers):
+def build_net_spec(hypers, baseline):
     """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
     different network hypers
     """
     net = hypers.net
+    isconv = net.type == 'conv2d'
 
     dense = {
         'type': 'dense',
@@ -60,19 +61,27 @@ def build_net_spec(hypers):
 
     arr = []
 
+    def add_dense(s):
+        arr.append({'size': s, **dense})
+        if net.dropout: arr.append({**dropout})
+
     # Pre-layer (TMK only makes sense for LSTM)
-    if 'depth_pre' in net:
-        for i in range(net.depth_pre):
-            size = int(net.width/(net.depth_pre-i+1)) if net.funnel else net.width
-            arr.append({'size': size, **dense})
-            if net.dropout: arr.append({**dropout})
+    for i in range(net.get('depth_pre', 0)):
+        size = int(net.width/(net.depth_pre-i+1)) if net.funnel else net.width
+        add_dense(size)
 
     # Mid-layer
-    if net.type == 'conv2d':
+    if isconv:
         steps_out = hypers.step_window
 
     for i in range(net.depth_mid):
-        if net.type == 'lstm':
+        if not isconv:
+            if baseline:
+                # TODO find out if/how to make LSTM layers work w/ baseline.
+                # >Assertion Error in tensorforce/core/baselines/network_baseline.py", line 43, in __init__
+                # >assert len(self.network.internals_spec()) == 0
+                add_dense(net.width)
+                continue
             # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
             arr.append({'size': net.width, **lstm})
             continue
@@ -103,23 +112,21 @@ def build_net_spec(hypers):
             'stride': (step_stride, 1),
             **conv2d
         })
-    if net.type == 'conv2d':
+    if isconv:
         arr.append({'type': 'flatten'})
 
     # Post Dense layers
-    for i in range(net.depth_post):
+    for i in range(net.get('depth_post', 0)):
         size = int(net.width / (i + 1)) if net.funnel else net.width
-        arr.append({'size': size, **dense})
-        if net.dropout: arr.append({**dropout})
+        add_dense(size)
 
-    if net.extra_stationary:
-        arr.append({'size': 9, **dense})  # TODO fiddle with size? Found 9 from a book, seems legit.
-        if net.dropout: arr.append({**dropout})
+    if isconv and net.extra_stationary:
+        add_dense(9)  # TODO fiddle with size? Found 9 from a book, seems legit.
 
     return arr
 
 
-def custom_net(hypers, print_net=False):
+def custom_net(hypers, print_net=False, baseline=False):
     """First builds up an array of dicts compatible with TForce's network spec. Then passes off to a custom neural
     network architecture, rather than using TForce's default LayeredNetwork. The only reason for this is so we can pipe
     in the "stationary" inputs after the LSTM/Conv2d layers. Think about it. LTSM/Conv2d are tracking time-series data
@@ -131,7 +138,8 @@ def custom_net(hypers, print_net=False):
     "the price is right, buy!" and then getting handed a note with "you have $0 USD". "Oh.. nevermind..."
     """
     hypers = Box(hypers)
-    layers_spec = build_net_spec(hypers)
+    layers_spec = build_net_spec(hypers, baseline=baseline)
+    conv = hypers.net.type == 'conv2d'
     if print_net: pprint(layers_spec)
 
     class CustomNet(LayeredNetwork):
@@ -146,7 +154,7 @@ def custom_net(hypers, print_net=False):
             stationary = x['stationary']
             x = series
 
-            if hypers.repeat_last_state:
+            if conv and hypers.repeat_last_state:
                 # stationary.shape=(?, 2), series.shape=(?, 400, 1, 6)
                 # full batch, last window-step, 1 (height), all features. tf.squeeze removes the 1(height) dim (note
                 # a dim was already removed via -1, hence axis=1)
@@ -157,20 +165,23 @@ def custom_net(hypers, print_net=False):
             # so apply it to the start
             apply_stationary_here = 0
             for i, layer in enumerate(self.layers):
-                if hypers.net.extra_stationary and isinstance(layer, TForceLayers.Dense):
+                if conv and hypers.net.extra_stationary and isinstance(layer, TForceLayers.Dense):
                     # Last Dense layer
                     apply_stationary_here = i
-                elif isinstance(layer, TForceLayers.InternalLstm) or isinstance(layer, TForceLayers.Flatten):
+                elif isinstance(layer, TForceLayers.Flatten) or isinstance(layer, TForceLayers.InternalLstm):
                     # Last LSTM layer, peg to the next layer (a Dense)
                     apply_stationary_here = i + 1
+            # But nevermind all that if combining stationary/series
+            if not conv and hypers.net.stationary_with_series:
+                apply_stationary_here = 0
 
             next_internals = dict()
             for i, layer in enumerate(self.layers):
                 if i == apply_stationary_here:
                     x = tf.concat([x, stationary], axis=1)
 
-                layer_internals = {name: internals['{}_{}'.format(layer.scope, name)] for name in
-                                   layer.internals_spec()}
+                layer_internals = {name: internals['{}_{}'.format(layer.scope, name)] for name in layer.internals_spec()}
+
                 if len(layer_internals) > 0:
                     x, layer_internals = layer.apply(x=x, update=update, **layer_internals)
                     for name, internal in layer_internals.items():
@@ -376,7 +387,7 @@ hypers['custom'] = {
     # Dense layers
     'net.depth_post': {
         'type': 'bounded',
-        'vals': [1, 3],
+        'vals': [0, 3],
         'guess': 1,
         'pre': round
     },
@@ -401,14 +412,6 @@ hypers['custom'] = {
         'type': 'int',
         'vals': ['tanh', 'relu'],
         'guess': 'relu'
-    },
-
-    # Whether to append one extra tiny layer at the network's end for merging in the stationary data. This would give
-    # stationary data extra oomph. Currently, stationary (which is 2-3 features) gets merged in after flatten (in conv)
-    # which takes 256+ neurons, so stationary can easily get ignored without this hyper.
-    'net.extra_stationary': {
-        'type': 'bool',
-        'guess': True
     },
 
     # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
@@ -456,8 +459,14 @@ hypers['lstm'] = {
     'net.depth_pre': {
         'type': 'bounded',
         'vals': [0, 3],
-        'guess': 2,
-        'pre': int
+        'guess': 0.,
+        'pre': round
+    },
+
+    # Merge stationary in w/ series (so that the values are recorded through time)
+    'net.stationary_with_series': {
+        'type': 'bool',
+        'guess': True,
     },
 }
 hypers['conv2d'] = {
@@ -487,7 +496,15 @@ hypers['conv2d'] = {
     'repeat_last_state': {
         'type': 'bool',
         'guess': False
-    }
+    },
+
+    # Whether to append one extra tiny layer at the network's end for merging in the stationary data. This would give
+    # stationary data extra oomph. Currently, stationary (which is 2-3 features) gets merged in after flatten (in conv)
+    # which takes 256+ neurons, so stationary can easily get ignored without this hyper.
+    'net.extra_stationary': {
+        'type': 'bool',
+        'guess': True
+    },
 }
 
 
@@ -569,7 +586,7 @@ class HSearchEnv(object):
         if flat['baseline_mode']:
             if type(self.hypers['baseline_mode']) == bool:
                 main.update(hydrate_baseline(self.hypers['baseline_mode'], flat))
-            main['baseline']['network'] = network
+            main['baseline']['network'] = custom_net(custom, print_net=True, baseline=True)
 
         # TODO remove this special-handling
         if main['gae_lambda']: main['gae_lambda'] = main['discount']
