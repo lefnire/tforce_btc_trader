@@ -43,33 +43,23 @@ def build_net_spec(hypers, baseline):
     """
     net = hypers.net
     isconv = net.type == 'conv2d'
-
-    dense = {
-        'type': 'dense',
-        'activation': net.activation,
-        'l2_regularization': net.l2,
-        'l1_regularization': net.l1
-    }
-    conv2d = {
-        'type': 'conv2d',
-        # 'bias': net.bias,
-        'l2_regularization': net.l2,
-        'l1_regularization': net.l1
-    }
-    lstm = {
-        'type': 'internal_lstm',
-        'dropout': net.dropout,
-        'cell_clip': net.cell_clip if not isconv else None,
-        'use_peepholes': net.use_peepholes if not isconv else None
-    }
-    dropout = {'type': 'dropout', 'rate': net.dropout}
-
+    batch_norm = {"type": "tf_layer", "layer": "batch_normalization"}
     arr = []
 
     def add_dense(s):
-        arr.append({'size': s, **dense})
+        dense = {
+            'size': s,
+            'l2_regularization': net.l2,
+            'l1_regularization': net.l1
+        }
+        if not net.batch_norm:
+            arr.append({'type': 'dense', 'activation': net.activation, **dense})
+            return
+        arr.append({'type': 'linear', **dense})
+        arr.append(batch_norm)
+        arr.append({'type': 'nonlinearity','name': net.activation})
         # FIXME dense dropout bug https://github.com/reinforceio/tensorforce/issues/317
-        # if net.dropout: arr.append({**dropout})
+        # if net.dropout: arr.append({'type': 'dropout', 'rate': net.dropout})
 
     # Pre-layer (TMK only makes sense for LSTM)
     for i in range(net.get('depth_pre', 0)):
@@ -89,7 +79,15 @@ def build_net_spec(hypers, baseline):
                 add_dense(net.width)
                 continue
             # arr.append({'size': net.width, 'return_final_state': (i == net.depth-1), **lstm})
-            arr.append({'size': net.width, **lstm})
+            arr.append({
+                'size': net.width,
+                'type': 'internal_lstm',
+                'dropout': net.dropout,
+                'cell_clip': net.cell_clip,
+                'use_peepholes': net.use_peepholes
+            })
+            # TODO figure out how to get layer-norm for LSTMs (https://github.com/tensorflow/tensorflow/pull/14106)
+            # if net.batch_norm: arr.append(batch_norm)
             continue
 
         # For each Conv2d layer, the window/stride is a function of the step-window size. So `net.window=1` means
@@ -116,7 +114,10 @@ def build_net_spec(hypers, baseline):
             'size': size,
             'window': (step_window, 1),
             'stride': (step_stride, 1),
-            **conv2d
+            'type': 'conv2d',
+            # 'bias': net.bias,
+            'l2_regularization': net.l2,
+            'l1_regularization': net.l1
         })
     if isconv:
         arr.append({'type': 'flatten'})
@@ -405,6 +406,10 @@ hypers['custom'] = {
         'guess': 5,
         'pre': round,
         'hydrate': two_to_the
+    },
+    'net.batch_norm': {
+        'type': 'bool',
+        'guess': True
     },
     # Whether to expand-in and shrink-out the nueral network. You know the look, narrower near the inputs, gets wider
     # in the hidden layers, narrower again on hte outputs.
@@ -719,13 +724,9 @@ def boost_optimization(model, loss_fn, bounds, x_list=[], y_list=[], n_pre_sampl
     # allowing for better exploration, and the later runs give boost a bigger selection to choose
     # from, allowing it to be more spot-on
     n_experiments = int(1e4 * len(y_list))
-    best_params, best_score = None, -1000
-    for params in np.random.uniform(bounds[:, 0], bounds[:, 1], (n_experiments, bounds.shape[0])):
-        prediction = model.predict([params])[0]
-        if prediction > best_score:
-            best_params = params
-            best_score = prediction
-    loss_fn(best_params)
+    randos = np.random.uniform(bounds[:, 0], bounds[:, 1], (n_experiments, bounds.shape[0]))
+    best = randos[model.predict(randos).argmax()]
+    loss_fn(best)
 
 
 def main():
