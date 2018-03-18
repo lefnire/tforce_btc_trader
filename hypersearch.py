@@ -31,6 +31,7 @@ from tensorforce.core.networks import layer as TForceLayers
 from tensorforce.core.networks.network import LayeredNetwork
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
+from xgboost import XGBRegressor
 
 from btc_env import BitcoinEnv
 import utils
@@ -691,16 +692,9 @@ class HSearchEnv(object):
 
 def print_feature_importances(X, Y, feat_names):
     if len(X) < 5: return
-    model = GradientBoostingRegressor()
-    model_hypers = {
-        'max_features': [None, 'sqrt', 'log2'],
-        'max_depth': [None, 10, 20],
-        'n_estimators': [100, 200, 300],
-    }
-    model = GridSearchCV(model, param_grid=model_hypers, cv=5, scoring='neg_mean_squared_error', n_jobs=-1)
+    model = XGBRegressor()
     model.fit(X, np.squeeze(Y))
-    feature_imp = sorted(zip(model.best_estimator_.feature_importances_, feat_names), key=lambda x: x[0],
-                         reverse=True)
+    feature_imp = sorted(zip(model.feature_importances_, feat_names), key=lambda x: x[0], reverse=True)
     print('\n\n--- Feature Importances ---\n')
     print('\n'.join([f'{x[1]}: {round(x[0],4)}' for x in feature_imp]))
     return model
@@ -725,7 +719,10 @@ def boost_optimization(model, loss_fn, bounds, x_list=[], y_list=[], n_pre_sampl
     # from, allowing it to be more spot-on
     n_experiments = int(1e4 * len(y_list))
     randos = np.random.uniform(bounds[:, 0], bounds[:, 1], (n_experiments, bounds.shape[0]))
-    best = randos[model.predict(randos).argmax()]
+    if len(y_list)%7 == 0:
+        best = randos[0]  # still grab-bag every so often
+    else:
+        best = randos[model.predict(randos).argmax()]
     loss_fn(best)
 
 

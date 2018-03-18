@@ -1,6 +1,8 @@
 import requests, time, json
 from sqlalchemy import text
-from data import conn
+from sqlalchemy import create_engine
+
+conn = create_engine('postgres://lefnire:lefnire@localhost/cryptowatch').connect()
 
 
 SLEEP = 10*60  # can probably be 500*60
