@@ -615,13 +615,11 @@ class HSearchEnv(object):
         if main['gae_lambda']: main['gae_lambda'] = main['discount']
 
         ## GPU split
-        ## FIXME add back to tensorforce#memory
-        # session_config = None
-        # gpu_split = self.cli_args.gpu_split
-        # if gpu_split != 1:
-        #     fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
-        #     session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
-        # main['session_config'] = session_config
+        gpu_split = self.cli_args.gpu_split
+        if gpu_split != 1:
+            fraction = .9 / gpu_split if gpu_split > 1 else gpu_split
+            session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=fraction))
+            main['execution'] = {'type': 'single', 'session_config': session_config}
 
         print('--- Flat ---')
         pprint(flat)
