@@ -451,11 +451,11 @@ hypers['custom'] = {
 
     # single = one action (-$x to +$x). multi = two actions: (buy|sell|hold) and (how much?). all_or_none = buy/sell
     # w/ all the cash or value owned
-    'action_type': {
-        'type': 'int',
-        'vals': ['single', 'multi'],
-        'guess': 'multi'
-    },
+    'action_type': 'single_discrete',  # {
+    #     'type': 'int',
+    #     'vals': ['single_discrete', 'single_continuous', 'multi'],
+    #     'guess': 'multi'
+    # },
     # Should rewards be as-is (PNL), or "how much better than holding" (advantage)? if `sharpe` then we discount 1.0
     # and calculate sharpe score at episode-terminal.
     # See 6fc4ed2 for handling Sharpe rewards

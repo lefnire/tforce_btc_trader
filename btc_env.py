@@ -78,11 +78,14 @@ class BitcoinEnv(Environment):
         self.all_prices_diff = self.diff(self.all_prices, True)
 
         # Action space
-        if h.action_type == 'single':
-            # In single_action we discard any vals b/w [-min_trade, +min_trade] and call it "hold" (in execute())
+        if h.action_type == 'single_discrete':
+            # In single_discrete, we allow buy2%, sell2%, hold (and nothing else)
+            self.actions_ = dict(type='int', shape=(), num_actions=3)
+        if h.action_type == 'single_continuous':
+            # In single_continuous we discard any vals b/w [-min_trade, +min_trade] and call it "hold" (in execute())
             self.actions_ = dict(type='float', shape=(), min_value=-1., max_value=1.)
         elif h.action_type == 'multi':
-            # In multi-modal, hold is an actual action (in which case we discard "amount")
+            # In multi, hold is an actual action (in which case we discard "amount")
             self.actions_ = dict(
                 action=dict(type='int', shape=(), num_actions=3),
                 amount=dict(type='float', shape=(), min_value=0., max_value=1.))
@@ -270,7 +273,13 @@ class BitcoinEnv(Environment):
         totals = step_acc.totals
         h = self.hypers
 
-        if h.action_type == 'single':
+        if h.action_type == 'single_discrete':
+            act_pct = {
+                0: -.02,
+                1: 0,
+                2: .02
+            }[actions]
+        if h.action_type == 'single_continuous':
             act_pct = actions
         elif h.action_type == 'multi':
             # Two actions: `action` (buy/sell/hold) and `amount` (how much)
