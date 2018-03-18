@@ -83,10 +83,12 @@ def build_net_spec(hypers, baseline):
                 'size': net.width,
                 'type': 'internal_lstm',
                 'dropout': net.dropout,
-                'cell_clip': net.cell_clip,
-                'use_peepholes': net.use_peepholes
+                'lstmcell_args': {
+                    'cell_clip': net.cell_clip,
+                    'use_peepholes': net.use_peepholes
+                }
             })
-            # TODO figure out how to get layer-norm for LSTMs (https://github.com/tensorflow/tensorflow/pull/14106)
+            # Figure out how to get layer-norm for LSTMs (https://github.com/tensorflow/tensorflow/pull/14106)
             # if net.batch_norm: arr.append(batch_norm)
             continue
 
