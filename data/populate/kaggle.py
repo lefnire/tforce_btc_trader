@@ -23,9 +23,9 @@ column_renames = {
 }
 
 filenames = {
-    'bitstamp': 'bitstampUSD_1-min_data_2012-01-01_to_2018-01-08',
-    'coinbase': 'coinbaseUSD_1-min_data_2014-12-01_to_2018-01-08',
-    'coincheck': 'coincheckJPY_1-min_data_2014-10-31_to_2018-01-08'
+    'bitstamp': 'bitstampUSD_1-min_data_2012-01-01_to_2018-03-27',
+    'coinbase': 'coinbaseUSD_1-min_data_2014-12-01_to_2018-03-27',
+    'coincheck': 'coincheckJPY_1-min_data_2014-10-31_to_2018-03-27'
 }
 
 for k in ['coinbase', 'coincheck', 'bitstamp']:
