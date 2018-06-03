@@ -125,7 +125,7 @@ def build_net_spec(hypers, baseline):
         arr.append({'type': 'flatten'})
 
     # Post Dense layers
-    for i in range(net.get('depth_post', 0)):
+    for i in range(int(net.get('depth_post', 0))):
         size = int(net.width / (i + 1)) if net.funnel else net.width
         add_dense(size)
 
