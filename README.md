@@ -22,10 +22,9 @@ Note: you'll wanna run this on a GPU rig with some RAM. I'm using a 1080ti and 1
 
 ### 2. Populate Data
 - Download [mczielinski/bitcoin-historical-data](https://www.kaggle.com/mczielinski/bitcoin-historical-data)
-- Extract to `data/populate/bitcoin-historical-data`
-- `python data/populate/kaggle.py`
-  - if you get `ModuleNotFoundError: No module named 'data.data'`, run `PYTHONPATH=. python data/populate/kaggle.py`
+- Extract to `data/bitcoin-historical-data`
 - `python -c 'from data.data import setup_runs_table;setup_runs_table()'`
+  - if you get `ModuleNotFoundError: No module named 'data.data'`, prefix commands with `PYTHONPATH=. python ...`
   - If you have trouble with that, just copy/paste the SQL from that file, execute against your `hyper_runs` DB from above.
 
 ### 3. Hypersearch
