@@ -268,7 +268,7 @@ class BitcoinEnv(Environment):
         stationary = [1., 1.]
         return self.get_next_state(0, stationary)
 
-    def execute(self, actions):
+    def execute(self, action):
         step_acc, ep_acc = self.acc.step, self.acc.episode
         totals = step_acc.totals
         h = self.hypers
@@ -278,16 +278,16 @@ class BitcoinEnv(Environment):
                 0: -.02,
                 1: 0,
                 2: .02
-            }[actions]
+            }[action]
         if h.action_type == 'single_continuous':
-            act_pct = actions
+            act_pct = action
         elif h.action_type == 'multi':
             # Two actions: `action` (buy/sell/hold) and `amount` (how much)
             act_pct = {
                 0: -1,  # make amount negative
                 1: 0,  # hold
                 2: 1  # make amount positive
-            }[actions['action']] * actions['amount']
+            }[action['action']] * action['amount']
             # multi-action min_trade accounted for in constructor
         act_btc = act_pct * (step_acc.cash if act_pct > 0 else step_acc.value)
 
