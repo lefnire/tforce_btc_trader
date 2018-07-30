@@ -23,7 +23,7 @@ engine_runs = create_engine(config_json['DB_RUNS'])
 class Exchange(Enum):
     GDAX = 'gdax'
     KRAKEN = 'kraken'
-EXCHANGE = Exchange.GDAX
+EXCHANGE = Exchange.KRAKEN
 
 # see {last_good_commit} for imputes (ffill, bfill, zero),
 # alex database
@@ -36,8 +36,9 @@ class Data(object):
         self.arbitrage = arbitrage
         self.indicators = indicators
 
-        # self.ep_stride = ep_len  # disjoint
-        self.ep_stride = ep_len  # 10  # overlap; shift each episode by x seconds
+        self.ep_stride = ep_len  # disjoint
+        # self.ep_stride = 100  # overlap; shift each episode by x seconds.
+        # TODO overlapping stride would cause test/train overlap. Tweak it so train can overlap data, but test gets silo'd
 
         col_renames = {
             'Timestamp': 'timestamp',
@@ -68,7 +69,7 @@ class Data(object):
             df_ = df_.set_index(ts)
             df = df_ if df is None else df.join(df_)
 
-        # too quiet before 2015, waste of time. copy() to avoid pandas errors
+        # too quiet before 2015, time waste. copy() to avoid pandas errors
         df = df.loc['2015':].copy()
 
         df['month'] = df.index.month
@@ -95,38 +96,35 @@ class Data(object):
         )
         df[self.target] = target
 
+        df['cash'], df['value'] = 0., 0.
+
         self.df = df
 
+    def offset(self, ep, step):
+        return ep * self.ep_stride + step
+
     def has_more(self, ep):
-        return ((ep + 1) * self.ep_stride + self.window) < self.df.shape[0]
+        return self.offset(ep + 2, 0) + self.window < self.df.shape[0]
+        # return (ep + 1) * self.ep_stride + self.window < self.df.shape[0]
 
     def get_data(self, ep, step):
-        offset = ep * self.ep_stride + step
+        offset = self.offset(ep, step)
         X = self.df.iloc[offset:offset+self.window]
         y = self.df.iloc[offset+self.window]
         return X, y
 
-    def get_prices(self):
-        return self.df.iloc[self.window:][self.target]
+    def get_prices(self, ep, step):
+        offset = self.offset(ep, step)
+        return self.df.iloc[offset + self.window:self.ep_len][self.target]
+
+    def reset_cash_val(self):
+        self.df['cash'] = 0.
+        self.df['value'] = 0.
+
+    def set_cash_val(self, ep, step, cash, value):
+        offset = self.offset(ep, step)
+        self.df.cash.iloc[offset] = cash
+        self.df.value.iloc[offset] = value
 
     def fetch_more(self):
         raise_refactor()
-
-
-def setup_runs_table():
-    """Run this function once during project setup (see README). Or just copy/paste the SQL into your runs database
-    """
-    with engine_runs.connect() as conn:
-        sql = """
-        create table if not exists runs
-        (
-            id varchar(64) not null,
-            hypers jsonb not null,
-            returns double precision[],
-            signals double precision[],
-            prices double precision[],
-            uniques double precision[],
-            flag varchar(16),
-        );
-        """
-        conn.execute(sql)

@@ -44,7 +44,7 @@ class BitcoinEnv(Environment):
         # cash/val start @ about $3.5k each. You should increase/decrease depending on how much you'll put into your
         # exchange accounts to trade with. Presumably the agent will learn to work with what you've got (cash/value
         # are state inputs); but starting capital does effect the learning process.
-        self.start_cash, self.start_value = .4, .4
+        self.start_cash, self.start_value = 5., 5.  # .4, .4
 
         # We have these "accumulator" objects, which collect values over steps, over episodes, etc. Easier to keep
         # same-named variables separate this way.
@@ -69,17 +69,12 @@ class BitcoinEnv(Environment):
         self.actions_ = dict(type='int', shape=(), num_actions=3)
 
         # Observation space
-        stationary_ct = 2
-        self.cols_ = self.data.df.shape[1]
-        self.states_ = dict(
-            series=dict(type='float', shape=self.cols_),  # all state values that are time-ish
-            stationary=dict(type='float', shape=stationary_ct)  # everything that doesn't care about time
-        )
-
         # width = step-window (150 time-steps)
         # height = nothing (1)
         # channels = features/inputs (price actions, OHCLV, etc).
-        self.states_['series']['shape'] = (h.custom.net.step_window, 1, self.cols_)
+        self.cols_ = self.data.df.shape[1]
+        shape = (h.custom.net.step_window, 1, self.cols_)
+        self.states_ = dict(type='float', shape=shape)
 
     def __str__(self): return 'BitcoinEnv'
 
@@ -106,14 +101,10 @@ class BitcoinEnv(Environment):
         # TODO here was autoencoder, talib indicators, price-anchoring
         raise_refactor()
 
-    def get_next_state(self, stationary):
-        # Take note of the +1 here. LSTM uses a single index [i], which grabs the list's end. Conv uses a window,
-        # [-something:i], which _excludes_ the list's end (due to Python indexing). Without this +1, conv would
-        # have a 1-step-behind delayed response.
+    def get_next_state(self):
         acc = self.acc[self.mode.value]
         X, _ = self.data.get_data(acc.ep.i, acc.step.i)
-        X = np.expand_dims(X, axis=1)
-        return dict(series=X, stationary=stationary)
+        return X.values[:, np.newaxis, :]  # height, width(nothing), depth
 
     def reset(self):
         acc = self.acc[self.mode.value]
@@ -130,25 +121,20 @@ class BitcoinEnv(Environment):
         elif self.mode == Mode.TRAIN:
             acc.ep.i += 1
 
-        # TODO replace stationary with populating timeseries during play
-        # df['cash'], df['value'], df['repeats'] = 0, 0, 0
-
-        stationary = [1., 1.]
-        return self.get_next_state(stationary)
+        self.data.reset_cash_val()
+        self.data.set_cash_val(acc.ep.i, acc.step.i, 0., 0.)
+        return self.get_next_state()
 
     def execute(self, action):
         acc = self.acc[self.mode.value]
         totals = acc.step.totals
         h = self.hypers
 
-        if h.custom.action_type == 'single_discrete':
-            act_pct = {
-                0: -.02,
-                1: 0,
-                2: .02
-            }[action]
-        else:
-            raise_refactor()
+        act_pct = {
+            0: -.02,
+            1: 0,
+            2: .02
+        }[action]
         act_btc = act_pct * (acc.step.cash if act_pct > 0 else acc.step.value)
 
         fee = {
@@ -176,7 +162,8 @@ class BitcoinEnv(Environment):
                 acc.step.cash += abs(act_btc) - abs(act_btc)*fee
             acc.step.value -= abs(act_btc)
 
-        acc.step.signals.append(float(act_btc))
+        acc.step.signals.append(float(act_btc))  # clipped signal
+        # acc.step.signals.append(np.sign(act_pct))  # indicates an attempted trade
 
         # next delta. [1,2,2].pct_change() == [NaN, 1, 0]
         # pct_change = self.prices_diff[acc.step.i + 1]
@@ -196,8 +183,12 @@ class BitcoinEnv(Environment):
 
         acc.step.i += 1
 
-        stationary = [acc.step.cash/self.start_cash, acc.step.value/self.start_value]
-        next_state = self.get_next_state(stationary)
+        self.data.set_cash_val(
+            acc.ep.i, acc.step.i,
+            acc.step.cash/self.start_cash,
+            acc.step.value/self.start_value
+        )
+        next_state = self.get_next_state()
 
         terminal = int(acc.step.i + 1 >= self.EPISODE_LEN)
         if acc.step.value < 0 or acc.step.cash < 0:
@@ -205,7 +196,9 @@ class BitcoinEnv(Environment):
         if terminal and self.mode in (Mode.TRAIN, Mode.TEST):
             # We're done.
             acc.step.signals.append(0)  # Add one last signal (to match length)
-            reward = self.cumm_return()
+            reward = self.get_return()
+            if np.unique(acc.step.signals).shape[0] == 1:
+                reward = -(self.start_cash + self.start_value)  # slam if you don't do anything
 
         if terminal and self.mode in (Mode.LIVE, Mode.TEST_LIVE):
             raise_refactor()
@@ -213,31 +206,35 @@ class BitcoinEnv(Environment):
         # if acc.step.value <= 0 or acc.step.cash <= 0: terminal = 1
         return next_state, terminal, reward
 
-    def cumm_return(self):
+    def get_return(self, adv=True):
         acc = self.acc[self.mode.value]
         totals = acc.step.totals
-        return (totals.trade[-1] / totals.trade[0] - 1) - (totals.hold[-1] / totals.hold[0] - 1)
+        trade = (totals.trade[-1] / totals.trade[0] - 1)
+        hold = (totals.hold[-1] / totals.hold[0] - 1)
+        return trade - hold if adv else trade
 
     def episode_finished(self, runner):
         if self.mode == Mode.TRAIN: return True
 
         acc = self.acc.test
-        signals = acc.step.signals
         totals = acc.step.totals
-        n_uniques = float(len(np.unique(signals)))
-        cumm_ret = self.cumm_return()
+        signals = np.array(acc.step.signals)
+        n_uniques = np.unique(signals).shape[0]
+        ret = self.get_return()
+        hold_ret = totals.hold[-1] / totals.hold[0] - 1
 
-        acc.ep.returns.append(float(cumm_ret))
+        acc.ep.returns.append(float(ret))
         acc.ep.uniques.append(n_uniques)
 
         # Print (limit to note-worthy)
-        lt_0 = len([s for s in signals if s < 0])
-        eq_0 = len([s for s in signals if s == 0])
-        gt_0 = len([s for s in signals if s > 0])
+        lt_0 = (signals < 0).sum()
+        eq_0 = (signals == 0).sum()
+        gt_0 = (signals > 0).sum()
         completion = int(acc.ep.i * self.data.ep_stride / self.data.df.shape[0] * 100)
         steps = f"\tSteps: {acc.step.i}"
-        hold_ret = totals.hold[-1] / totals.hold[0] - 1
-        print(f"{completion}%{steps}\tTrade: {'%.3f'%cumm_ret}\tHold: {'%.3f'%hold_ret}\tTrades:\t{lt_0}[<0]\t{eq_0}[=0]\t{gt_0}[>0]")
+
+        fm = '%.3f'
+        print(f"{completion}%{steps}\tTrade: {fm%ret}\tHold: {fm%hold_ret}\tTrades:\t{lt_0}[<0]\t{eq_0}[=0]\t{gt_0}[>0]")
         return True
 
     def run_deterministic(self, runner, print_results=True):
@@ -257,6 +254,9 @@ class BitcoinEnv(Environment):
                 runner.run(timesteps=train_steps)
                 self.mode = Mode.TEST
                 self.run_deterministic(runner, print_results=True)
+        except IndexError:
+            # FIXME data.has_more() issues
+            pass
         except KeyboardInterrupt:
             # Lets us kill training with Ctrl-C and skip straight to the final test. This is useful in case you're
             # keeping an eye on terminal and see "there! right there, stop you found it!" (where early_stop & n_steps

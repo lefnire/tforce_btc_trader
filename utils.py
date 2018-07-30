@@ -13,25 +13,25 @@ class ScoreMode(Enum):
     MIX = 6
 
 
-MODE = ScoreMode.MIX
+MODE = ScoreMode.MEAN
 
 
-def calculate_score(advantages):
-    for i, a in enumerate(advantages):
-        if a == 0.: advantages[i] = -1.
+def calculate_score(scores):
+    for i, a in enumerate(scores):
+        if a == 0.: scores[i] = -1.
     if MODE == ScoreMode.MEAN:
-        return np.mean(advantages)
+        return np.mean(scores)
     elif MODE == ScoreMode.LAST:
-        return advantages[-1]
+        return scores[-1]
     elif MODE == ScoreMode.MIX:
-        return np.mean(advantages[:-1]) + advantages[-1]
+        return np.mean(scores[:-1]) + scores[-1]
     elif MODE == ScoreMode.POS:
-        return sum(1 for x in advantages if x > 0)
+        return sum(1 for x in scores if x > 0)
     elif MODE == ScoreMode.TOTAL:
-        return sum(x for x in advantages)
+        return sum(x for x in scores)
     elif MODE == ScoreMode.CONSECUTIVE_POS:
         score, curr_consec = 0, 0
-        for i, adv in enumerate(advantages):
+        for i, adv in enumerate(scores):
             if adv > 0:
                 curr_consec += 1
                 continue
