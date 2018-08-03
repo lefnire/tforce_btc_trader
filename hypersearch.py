@@ -20,52 +20,51 @@ from data import data
 
 
 def network_spec(hypers):
-    """Builds an array of dicts that conform to TForce's network specification (see their docs) by mix-and-matching
-    different network hypers
-    """
-    net = Box(hypers['net'])
-    batch_norm = {"type": "tf_layer", "layer": "batch_normalization"}
-    arr = []
+    arch = hypers['net']['arch']
 
-    def add_dense(s):
-        dense = {
-            'size': s,
-            'l2_regularization': net.l2,
-            'l1_regularization': net.l1
-        }
-        if not net.batch_norm:
-            arr.append({'type': 'dense', 'activation': net.activation, **dense})
-            return
-        arr.append({'type': 'linear', **dense})
-        arr.append(batch_norm)
-        arr.append({'type': 'nonlinearity','name': net.activation})
-        # FIXME dense dropout bug https://github.com/reinforceio/tensorforce/issues/317
-        if net.dropout: arr.append({'type': 'dropout', 'rate': net.dropout})
-
-    # Mid-layer
-    for i in range(net.depth_mid):
-        arr.append({
-            'size': net.width,
-            'window': (net.kernel_size, 1),
-            'stride': (net.stride, 1),
-            'type': 'conv2d',
-            # 'bias': net.bias,
-            'l2_regularization': net.l2,
-            'l1_regularization': net.l1
-        })
-    arr.append({'type': 'flatten'})
-
-    # Post Dense layers
-    if net.flat_dim:
-        fc_dim = net.width * (net.step_window / (net.depth_mid * net.stride))
-    else:
-        fc_dim = net.width * 4
-    for i in range(net.depth_post):
-        size = fc_dim / (i + 1) if net.funnel else fc_dim
-        add_dense(int(size))
-
-    return arr
-
+    if arch == 1:
+        return [
+            *[{
+                "type": "conv2d",
+                "size": 64,
+                "window": 3,
+                "stride": 2
+            } for _ in range(4)],
+            {
+                "type": "flatten"
+            },
+            {
+                "type": "dense",
+                "size": 512
+            },
+            {
+                "type": "dense",
+                "size": 128
+            }
+        ]
+    if arch == 2:
+        return [
+            *[{
+                "type": "conv2d",
+                "size": 32,
+                "window": 3,
+                "stride": 2
+            } for _ in range(4)],
+            {
+                "type": "flatten"
+            },
+            {
+                "type": "dense",
+                "size": 128
+            }
+        ]
+    # if arch == 3:
+    #     return [
+    #         {
+    #             "type": "dense",
+    #             "size": size,
+    #         } for size in [300, 200, 100, 32]
+    #     ]
 
 @scope.define
 def two_to_the(x):
@@ -97,7 +96,7 @@ def post_process(hypers):
     o = agent['update_mode']
     o['frequency'] = math.ceil(o['batch_size'] / o['frequency'])
     # agent['memory']['capacity'] = BitcoinEnv.EPISODE_LEN * o['batch_size']
-    agent['memory']['capacity'] = BitcoinEnv.EPISODE_LEN * MAX_BATCH_SIZE + 1
+    #agent['memory']['capacity'] = BitcoinEnv.EPISODE_LEN * MAX_BATCH_SIZE + 1
 
     agent.update(agent['baseline_stuff'])
     del agent['baseline_stuff']
@@ -126,45 +125,48 @@ space['agent'] = {
     'discount': 1.,  # hp.uniform('discount', .9, .99),
 }
 
-MAX_BATCH_SIZE = 15
+BATCH_SIZE = 10
 space['memory_model'] = {
     'update_mode': {
         'unit': 'episodes',
-        'batch_size': scope.int(hp.quniform('batch_size', 1, MAX_BATCH_SIZE, 1)),  # 5 FIXME
+        'batch_size': BATCH_SIZE,  # scope.int(hp.quniform('batch_size', 1, MAX_BATCH_SIZE, 1)),  # 5 FIXME
         'frequency': scope.int(hp.quniform('frequency', 1, 3, 1)),  # t-shirt sizes, reverse order
     },
 
     'memory': {
         'type': 'latest',
         'include_next_states': False,
-        'capacity': None,  # 5000  # BitcoinEnv.EPISODE_LEN * MAX_BATCH_SIZE,  # hp.uniform('capacity', 2000, 20000, 500)
+        'capacity': BitcoinEnv.EPISODE_LEN * BATCH_SIZE,  # hp.uniform('capacity', 2000, 20000, 500)
     }
 }
 
 space['distribution_model'] = {
     # 'distributions': None,
-    'entropy_regularization': hp.choice('entropy_regularization', [None, .01]), # scope.min_ten_neg(hp.uniform('entropy_regularization', 0., 5.), 1e-4, .01),
+    'entropy_regularization': .01, # hp.choice('entropy_regularization', [None, .01]), # scope.min_ten_neg(hp.uniform('entropy_regularization', 0., 5.), 1e-4, .01),
     # 'variable_noise': TODO
 }
 
 space['pg_model'] = {
-    'baseline_stuff': hp.choice('baseline_stuff', [
-        {'baseline_mode': None},
-        {
-            'baseline': {'type': 'custom'},
+    # 'baseline_stuff': hp.choice('baseline_stuff', [
+        # {'baseline_mode': None},
+    'baseline_stuff': {
+            'baseline': {
+                'type': 'custom',
+                'network': None
+            },
             'baseline_mode': 'states',
             'baseline_optimizer': {
                 'type': 'multi_step',
                 # Consider having baseline_optimizer learning hypers independent of the main learning hypers.
                 # At least with PPO, it seems the step_optimizer learning hypers function quite diff0erently than
                 # expected; where baseline_optimizer's function more as-expected. TODO Investigate.
-                'num_steps': scope.int(hp.quniform('num_steps', 1, 20, 1)),  # 5 FIXME
-                'optimizer': {}  # see post_process()
+                'optimizer': {},  # see post_process()
+                'num_steps': 5,  # scope.int(hp.quniform('num_steps', 1, 20, 1)),  # 5 FIXME
             },
-            'gae_lambda': hp.choice('gae_lambda', [1., None]),
             # scope.min_threshold(hp.uniform('gae_lambda', .8, 1.), .9, None)
-        }
-    ])
+        },
+    # ])
+    'gae_lambda': hp.choice('gae_lambda', [1., None]),
 }
 space['pg_prob_ration_model'] = {
     'likelihood_ratio_clipping': .2,  # scope.min_threshold(hp.uniform('likelihood_ratio_clipping', 0., 1.), .05, None),
@@ -174,10 +176,10 @@ space['ppo_model'] = {
     # Doesn't seem to matter; consider removing
     'step_optimizer': {
         'type': 'adam',  # hp.choice('type', ['nadam', 'adam']),
-        'learning_rate': scope.ten_to_the_neg(hp.uniform('learning_rate', 2., 5.)),
+        'learning_rate': 1e-3,  # scope.ten_to_the_neg(hp.uniform('learning_rate', 2., 5.)),
     },
 
-    'optimization_steps': scope.int(hp.quniform('optimization_steps', 1, 50, 1)),  # 5 FIXME
+    'optimization_steps': hp.choice('optimization_steps', [25, 50]),
 
     'subsampling_fraction': .1,  # hp.uniform('subsampling_fraction', 0.,  1.),
 }
@@ -232,48 +234,8 @@ space['custom'] = {
 
 }
 space['custom']['net'] = {
-    # Conv / LSTM layers
-    'depth_mid': scope.int(hp.quniform('depth_mid', 1, 4, 1)),
+    'arch': hp.choice('arch', [1, 2]),
 
-    # Dense layers
-    'depth_post': scope.int(hp.quniform('depth_post', 1, 3, 1)),
-
-    # Network depth, in broad-strokes of 2**x (2, 4, 8, 16, 32, 64, 128, 256, 512, ..) just so you get a feel for
-    # small-vs-large. Later you'll want to fine-tune.
-    'width': scope.two_to_the(hp.quniform('width', 4, 6, 1)),
-
-    'batch_norm': hp.choice('batch_norm', [True, False]),
-
-    # Whether to expand-in and shrink-out the nueral network. You know the look, narrower near the inputs, gets wider
-    # in the hidden layers, narrower again on hte outputs.
-    'funnel': True,  # hp.choice('funnel', [True, False]),
-
-    # Is the first FC layer the same size as the last flattened-conv? Or is it something much smaller,
-    # like depth_mid*4?
-    'flat_dim': hp.choice('funnel', [True, False]),
-
-    # tanh vs "the relu family" (relu, selu, crelu, elu, *lu). Broad-strokes here by just pitting tanh v relu; then,
-    # if relu wins you can fine-tune "which type of relu" later.
-    'activation': hp.choice('activation', ['tanh', 'relu']),
-
-    # Regularization: Dropout, L1, L2. You'd be surprised (or not) how important is the proper combo of these. The RL
-    # papers just role L2 (.001) and ignore the other two; but that hasn't jived for me. Below is the best combo I've
-    # gotten so far, and I'll update as I go.
-    # 'dropout': scope.min_threshold(hp.uniform('dropout', 0., .5), .1, None),
-    # 'l2': scope.min_ten_neg(hp.uniform('l2', 0., 7.), 1e-6, 0.),
-    # 'l1': scope.min_ten_neg(hp.uniform('l1', 0., 7.), 1e-6, 0.),
-    'dropout': None,
-    'l2': 0.,
-    'l1': 0.,
-
-    # LSTM at {last_good_commit}
-
-    # T-shirt size window-sizes, smaller # = more destructive. See comments in build_net_spec()
-    'kernel_size': hp.choice('window', [3, 5]),
-
-    # How many ways to divide a window? 1=no-overlap, 2=half-overlap (smaller # = more destructive). See comments
-    # in build_net_spec()
-    'stride': 2,
 
     # Size of the window to look at w/ the CNN (ie, width of the image). Would like to have more than 400 "pixels" here,
     # but it causes memory issues the way PPO's MemoryModel batches things. This is made up for via indicators
