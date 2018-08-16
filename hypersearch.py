@@ -346,7 +346,7 @@ def main():
     # grab how many trials were previously run and add max_evals to it for the next run.
     # this allows the hyper parameter search to resume where it left off last.
     # TODO save trials to SQL table and restore from there instead of local pickle. 
-    max_evals = 1
+    max_evals = 20
     try:
         trialPickle = open('./trial.pickle','rb')
         trials = pickle.load(trialPickle)
