@@ -3,6 +3,7 @@ from pprint import pprint
 from box import Box
 import numpy as np
 import pandas as pd
+import pickle
 import tensorflow as tf
 from sqlalchemy.sql import text
 from tensorforce import TensorForceError
@@ -341,9 +342,22 @@ def main():
         # TODO restore fetching between runs so can pick up where left off, or
         # get updates from other servers
 
-    trials = Trials()
-    max_evals = 100
+    # set initial max_eval, attempt to load a saved trials object from pickle, if that fails start fresh.
+    # grab how many trials were previously run and add max_evals to it for the next run.
+    # this allows the hyper parameter search to resume where it left off last.
+    # TODO save trials to SQL table and restore from there instead of local pickle. 
+    max_evals = 1
+    try:
+        trialPickle = open('./trial.pickle','rb')
+        trials = pickle.load(trialPickle)
+        max_evals = len(trials.trials) + max_evals
+    except:
+        trials = Trials()
+
     best = fmin(loss_fn, space=space, algo=tpe.suggest, max_evals=max_evals, trials=trials)
+
+    with open('./trial.pickle', 'wb') as f:
+            pickle.dump(trials, f)
 
 
 if __name__ == '__main__':
