@@ -28,6 +28,21 @@ EXCHANGE = Exchange.KRAKEN
 # see {last_good_commit} for imputes (ffill, bfill, zero),
 # alex database
 
+def setup_runs_table():
+    """Run this function once during project setup (see README). Or just copy/paste the SQL into your runs database
+    """
+    conn_runs = engine_runs.connect()
+    conn_runs.execute("""
+        create table if not exists runs
+        (
+            id uuid not null,
+            hypers jsonb not null,
+            returns double precision[],
+            signals double precision[],
+            prices double precision[],
+            uniques double precision[]
+        );
+    """)
 
 class Data(object):
     def __init__(self, ep_len=5000, window=300, arbitrage=False, indicators={}):
